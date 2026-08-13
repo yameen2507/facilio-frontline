@@ -1,31 +1,36 @@
 /**
- * Stamps the saved theme on <html> before the page paints.
+ * Stamps the resolved theme on <html> before the page paints.
  *
- * This is a separate file loaded synchronously from <head> rather than an inline
- * <script>, on purpose: the app is served with a CSP whose `script-src` is not
- * documented to include `'unsafe-inline'` (llm.md only promises no CDN), and a
- * blocked inline script would fail silently on every load. A same-origin file is
- * the same guarantee as `app.js` already relies on.
+ * A separate file loaded synchronously from <head> rather than an inline
+ * <script>: the app is served with a CSP whose `script-src` is not documented to
+ * include `'unsafe-inline'`, and a blocked inline script would fail silently on
+ * every load. A same-origin file is the same guarantee `app.js` already relies on.
  *
- * It cannot be part of the bundle either: `app.js` is loaded at the end of
- * <body>, so the browser has already painted the light default by the time it
- * runs, and a user who chose dark would see a white flash on every navigation.
+ * It cannot be part of the bundle either — React mounts long after the first
+ * paint, so a dark-mode user would see a white flash on every load.
  *
- * Deliberately dependency-free and un-bundled — `scripts/build-web.mjs` copies
- * it verbatim. Keep it tiny; it blocks the parser.
+ * ALWAYS SETS AN EXPLICIT light/dark VALUE. The real DSM stylesheet defines its
+ * dark palette only under `:root[data-theme='dark']` and ships no
+ * `prefers-color-scheme` block, so an absent attribute pins light rather than
+ * following the OS. "System" therefore has to be resolved here too.
  *
- * The storage key is duplicated in `ui/theme.js`. Change both together.
+ * The storage key and this resolution are duplicated in `src/theme/ThemeProvider.tsx`.
+ * Change both together.
  */
 (function () {
+  var mode = "system";
   try {
     var saved = localStorage.getItem("frontline.theme");
-    // "system" (and anything unrecognised) leaves the attribute off, which is
-    // what hands control back to the prefers-color-scheme block in tokens.css.
-    if (saved === "dark" || saved === "light") {
-      document.documentElement.setAttribute("data-theme", saved);
-    }
+    if (saved === "dark" || saved === "light" || saved === "system") mode = saved;
   } catch (e) {
-    // Storage throws in some private-browsing modes. The system preference is
-    // still honoured, so there is nothing to recover from.
+    // Storage throws in some private-browsing modes; fall through to system.
   }
+
+  var resolved = mode;
+  if (mode === "system") {
+    resolved =
+      window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+
+  document.documentElement.setAttribute("data-theme", resolved);
 })();

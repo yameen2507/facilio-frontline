@@ -103,6 +103,7 @@ const GLYPHS = {
       <path d="M5.6 13.8h4.8M8 11.2v2.6" />
     </>
   ),
+  chevronDown: <path d="M4 6.4 8 10.4l4-4" />,
   arrowLeft: (
     <>
       <path d="M13 8H3" />

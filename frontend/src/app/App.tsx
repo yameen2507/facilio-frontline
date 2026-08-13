@@ -21,7 +21,8 @@
  * The shell imports one file per feature and knows nothing else about them.
  */
 
-import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
+import { HashRouter, Navigate, Outlet, Route, Routes } from "react-router-dom";
+import Layout from "../layout";
 import { AccountsRouter } from "../features/accounts";
 import { ChatRouter } from "../features/chat";
 import { LeadsRouter } from "../features/leads";
@@ -32,9 +33,22 @@ import { Empty } from "../ui/States";
 import { ToastProvider } from "../ui/Toast";
 import { AuthGate } from "./auth";
 import { CountsProvider } from "./counts";
-import { DEFAULT_ROUTE } from "./nav";
-import { AppShell } from "./shell/AppShell";
+import { DEFAULT_ROUTE } from "../layout/sidebar/nav-config";
 import { PageShell } from "./shell/PageShell";
+
+/**
+ * The ported layout takes `children`, while the router hands its nested routes to
+ * an `<Outlet />`. This adapter is the join, and it is what keeps the shell — and
+ * therefore the sidebar's scroll position and the rail's collapse animation —
+ * mounted across navigations instead of remounting per route.
+ */
+function Shell() {
+  return (
+    <Layout>
+      <Outlet />
+    </Layout>
+  )
+}
 
 function NotFound() {
   return (
@@ -58,7 +72,7 @@ export function App() {
               <Routes>
                 {/* A pathless layout route: the shell renders once and stays
                     mounted across navigations, so the sidebar never remounts. */}
-                <Route element={<AppShell />}>
+                <Route element={<Shell />}>
                   <Route index element={<Navigate to={DEFAULT_ROUTE} replace />} />
                   <Route path="leads/*" element={<LeadsRouter />} />
                   <Route path="accounts/*" element={<AccountsRouter />} />

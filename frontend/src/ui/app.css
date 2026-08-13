@@ -1,36 +1,27 @@
 /**
- * WHY THIS IS A STYLESHEET AND NOT INLINE STYLE OBJECTS. The shared UI guidance
- * says structure with plain divs and put every value in `style={{}}`. Its whole
- * justification is escaping shadow DOM — a design system shipped as custom
- * elements, where `flex: 1` and `height: 100%` die at the shadow host. There is
- * no shadow DOM here: no design-system components, only plain divs. What this
- * file holds is the part inline styles genuinely cannot express — `:hover`,
- * `:focus`, `:disabled`, keyframes, `@media`, and the `[data-collapsed]` rail
- * variants — plus base component styling that is already verified. Re-expressing
- * 1100 verified lines as style objects would buy nothing and risk regressions
- * everywhere. Components carry `className`; one-off layout stays inline.
- *
  * Frontline component styles.
  *
- * Moved out of index.html so the markup that uses these classes and the classes
- * themselves live in the same folder. Every value is a token from tokens.css —
- * the sweep is checkable: `grep -n 'px\|#[0-9a-f]' app.css` should only turn up
- * the handful of literals called out with a comment below.
+ * TOKENS COME FROM THE REAL DSM. `dsm-core.css` is imported first in main.tsx and
+ * defines every `--colors-*` / `--spacing-*` / `--text-*` value plus the
+ * `:root[data-theme='dark']` block. `tokens.css` beside this file adds only the
+ * three things DSM has no token for. So a `var()` here should resolve to DSM —
+ * if a name is not in dsm-core.css it silently resolves to nothing, which is why
+ * new names get checked against that file rather than guessed.
  *
- * Two house conventions that differ from the shared UI guidance, both because
- * the existing code already settled them and consistency beats correctness here:
+ * WHY THIS IS A STYLESHEET AND NOT INLINE STYLE OBJECTS. The shared UI guidance
+ * says structure with plain divs and put every value in `style={{}}`. Its whole
+ * justification is escaping shadow DOM. There is none here: the DSM component
+ * barrel was dropped (it cost 1.2MB gzipped for three components — see
+ * layout/primitives.tsx), so every surface is a plain div. What this file holds is
+ * the part inline styles cannot express — `:hover`, `:focus`, `:disabled`,
+ * keyframes, `@media` — plus base component styling. Components carry
+ * `className`; one-off layout stays inline.
  *
- *   - **Borders, not inset rings.** The guidance prefers
- *     `box-shadow: inset 0 0 0 1px …` so a ring can appear without shifting
- *     layout. That matters in a design system whose components you cannot
- *     restyle; here every surface is a plain div, `.card` has shipped with
- *     `border: 1px solid` from the start, and converting them all would move
- *     every card by a pixel for no gain. Left as borders on purpose.
- *   - **Classes, not inline styles.** The inline-style rule exists to escape
- *     shadow DOM, which this app has none of.
+ * The app shell is NOT here. `src/layout/` owns the top bar, the collapsible rail
+ * and the page container, and styles itself inline. This file covers the page
+ * bodies: cards, rows, chips, forms, the timeline, chat and the skeletons.
  *
  * Structural literals with no token, kept verbatim rather than re-derived:
- *   232px / 60px  sidebar width, expanded and collapsed
  *   44px 16px     empty-state pad — a deliberately large inset, no spacing step
  *   68vh / 420px  chat viewport cap
  *   620px         chat column max-width
@@ -82,41 +73,14 @@ fc-icon svg {
   display: block;
 }
 
-/* ── Shell ──────────────────────────────────────────────────────────────────
-   `.app` owns the viewport and hides its own overflow, which is what makes
-   `.content` the only scroll region: the sidebar and page header cannot scroll
-   away, and a long list moves under them. */
+/* ── Chrome bits still in use ────────────────────────────────────────────────
+   The old hand-built shell (.app grid, aside, .brand, nav rail, sidebar footer)
+   is gone — `src/layout/` replaces all of it. These four survive because the
+   ported TopBar and the theme control use them. */
 
-.app {
-  display: grid;
-  grid-template-columns: 232px 1fr;
-  height: 100vh;
-  overflow: hidden;
-}
-
-.app[data-collapsed="true"] {
-  grid-template-columns: 60px 1fr;
-}
-
-aside {
-  background: var(--colors-background-container);
-  border-right: 1px solid var(--colors-border-neutral-base-subtle);
-  padding: var(--spacing-container-xlarge) var(--spacing-container-large);
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-container-xxlarge);
-  overflow-y: auto;
-  min-width: 0;
-}
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-container-medium);
-  padding: 0 var(--numerical-nl-half);
-}
-
-.brand .mark {
+/* The square brand glyph. Was `.brand .mark`; the brand wrapper no longer
+   exists, so it stands alone now. */
+.mark {
   width: 26px;
   height: 26px;
   border-radius: var(--border-small);
@@ -128,23 +92,10 @@ aside {
   flex: none;
 }
 
-.brand b {
-  font: var(--text-heading-med-16);
-  letter-spacing: -0.01em;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.brand .icon-btn {
-  margin-left: auto;
-}
-
 .icon-btn {
   border: 0;
   background: none;
-  color: var(--colors-icon-neutral-main);
+  color: var(--colors-icon-neutral-medium);
   padding: var(--numerical-nl-01);
   border-radius: var(--border-small);
   display: inline-grid;
@@ -155,135 +106,7 @@ aside {
 
 .icon-btn:hover {
   background: var(--colors-background-midground-subtle);
-  color: var(--colors-icon-neutral-dark);
-}
-
-/* ── Sidebar navigation ───────────────────────────────────────────────────── */
-
-nav {
-  display: flex;
-  flex-direction: column;
-  gap: var(--numerical-nl-half);
-  min-width: 0;
-}
-
-.nav-label {
-  font: var(--text-caption-med-10);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--colors-text-caption);
-  padding: var(--spacing-container-medium) var(--numerical-nl-02) var(--numerical-nl-01);
-}
-
-nav a {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-container-medium);
-  padding: var(--spacing-container-small) var(--spacing-container-medium);
-  border-radius: var(--border-small);
-  color: var(--colors-text-description);
-  text-decoration: none;
-  font: var(--text-body-reg-14);
-  min-width: 0;
-}
-
-nav a .lbl {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-nav a:hover {
-  background: var(--colors-background-midground-subtle);
-  color: var(--colors-text-main);
-}
-
-nav a.on {
-  background: var(--colors-background-selection);
-  color: var(--colors-text-primary-default);
-  font: var(--text-heading-med-14);
-}
-
-nav a .ct {
-  margin-left: auto;
-  font: var(--text-caption-reg-12);
-  color: var(--colors-text-caption);
-  font-variant-numeric: tabular-nums;
-}
-
-nav a.on .ct {
-  color: var(--colors-text-primary-default);
-}
-
-/* Collapsed rail. The brand stacks so the mark and the toggle both fit, and a
-   section label becomes a divider rather than disappearing — otherwise the
-   groups run together with nothing between them. */
-
-.app[data-collapsed="true"] aside {
-  padding-left: var(--spacing-container-medium);
-  padding-right: var(--spacing-container-medium);
-}
-
-.app[data-collapsed="true"] .brand {
-  flex-direction: column;
-  gap: var(--spacing-container-small);
-  padding: 0;
-}
-
-.app[data-collapsed="true"] .brand .icon-btn {
-  margin-left: 0;
-}
-
-.app[data-collapsed="true"] .lbl,
-.app[data-collapsed="true"] nav a .ct,
-.app[data-collapsed="true"] #me {
-  display: none;
-}
-
-.app[data-collapsed="true"] nav a {
-  justify-content: center;
-}
-
-.app[data-collapsed="true"] .nav-label {
-  font-size: 0;
-  padding: 0;
-  margin: var(--spacing-container-small) var(--numerical-nl-02);
-  height: 1px;
-  background: var(--colors-border-neutral-base-subtler);
-  overflow: hidden;
-}
-
-.app[data-collapsed="true"] .foot-row {
-  flex-direction: column;
-  align-items: center;
-  gap: var(--spacing-container-medium);
-}
-
-.app[data-collapsed="true"] .theme-switch {
-  flex-direction: column;
-}
-
-/* ── Sidebar footer ───────────────────────────────────────────────────────── */
-
-aside .foot {
-  margin-top: auto;
-  font: var(--text-caption-reg-12);
-  color: var(--colors-text-caption);
-  padding: 0 var(--numerical-nl-02);
-}
-
-aside .foot #me b {
-  color: var(--colors-text-description);
-  font: var(--text-caption-med-ll-12);
-}
-
-.foot-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-container-small);
-  margin-top: var(--spacing-container-medium);
+  color: var(--colors-icon-neutral-main);
 }
 
 .theme-switch {
@@ -293,35 +116,62 @@ aside .foot #me b {
   border-radius: var(--border-small);
   background: var(--colors-background-midground-subtle);
   border: 1px solid var(--colors-border-neutral-base-subtler);
+  flex: none;
 }
 
 .theme-switch button {
   border: 0;
   background: none;
-  color: var(--colors-icon-neutral-main);
+  color: var(--colors-icon-neutral-medium);
   padding: var(--numerical-nl-01) var(--spacing-container-small);
   border-radius: var(--border-small);
   line-height: 0;
 }
 
 .theme-switch button:hover {
-  color: var(--colors-icon-neutral-dark);
+  color: var(--colors-icon-neutral-main);
 }
 
 .theme-switch button.on {
   background: var(--colors-background-container);
   color: var(--colors-text-primary-default);
-  box-shadow: var(--shadows-elevation1);
+  box-shadow: var(--elevation-low-01);
+}
+
+/* ── The overlay scroller ────────────────────────────────────────────────────
+   Used by PageShell for the page body and by the ported NavPanel for the nav
+   list. A thin, dimmed native bar: it keeps keyboard paging, trackpad momentum
+   and scrollIntoView, which a JS scrollbar would have to re-implement. */
+
+.overlay-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--colors-border-neutral-base-medium) transparent;
+}
+
+.overlay-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.overlay-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.overlay-scroll::-webkit-scrollbar-thumb {
+  background: var(--colors-border-neutral-base-medium);
+  border-radius: var(--border-round);
+  /* Transparent border + clipped background is the trick that insets the thumb
+     from the track edge without a wrapper element. */
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.overlay-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--colors-icon-neutral-medium);
+  background-clip: content-box;
 }
 
 /* ── Page shell ───────────────────────────────────────────────────────────── */
-
-main {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
 
 .top {
   display: flex;
@@ -364,10 +214,10 @@ main {
   padding: 0 var(--spacing-container-xxlarge);
 }
 
+/* Just the body inset now. The scroller moved out to OverlayScrollbar, which is
+   this element's parent — leaving `overflow-y: auto` here as well would nest two
+   scroll areas and produce a second, inner scrollbar. */
 .content {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
   padding: 0 var(--spacing-container-xxlarge) var(--numerical-nl-10);
   min-width: 0;
 }
@@ -475,7 +325,7 @@ main {
   align-items: center;
   gap: var(--numerical-nl-01);
   padding: var(--numerical-nl-half) var(--numerical-nl-02);
-  border-radius: var(--fl-radius-pill);
+  border-radius: var(--border-round);
   font: var(--text-caption-med-ll-12);
   white-space: nowrap;
   background: var(--colors-background-midground-subtle);
@@ -539,7 +389,7 @@ main {
   background: var(--colors-background-container);
   border: 1px solid var(--colors-border-neutral-base-subtle);
   border-radius: var(--border-medium);
-  box-shadow: var(--shadows-elevation1);
+  box-shadow: var(--elevation-low-01);
 }
 
 .card > header {
@@ -861,7 +711,7 @@ main {
   color: var(--colors-background-semantic-green-medium);
   background: var(--colors-background-semantic-green-subtle);
   padding: var(--spacing-container-small) var(--spacing-container-large);
-  border-radius: var(--fl-radius-pill);
+  border-radius: var(--border-round);
 }
 
 .chat {
@@ -956,7 +806,7 @@ main {
 
 .composer input {
   flex: 1;
-  border-radius: var(--fl-radius-pill);
+  border-radius: var(--border-round);
 }
 
 /* ── Forms ────────────────────────────────────────────────────────────────── */
@@ -1089,12 +939,12 @@ pre.raw {
   bottom: var(--numerical-nl-06);
   left: 50%;
   transform: translateX(-50%);
-  background: var(--fl-toast-background);
-  color: var(--fl-toast-text);
+  background: var(--colors-background-neutral-inverse-base-medium);
+  color: var(--colors-text-inverse-main);
   padding: var(--spacing-container-medium) var(--numerical-nl-04);
   border-radius: var(--numerical-nl-02);
   font: var(--text-body-reg-14);
-  box-shadow: var(--shadows-elevation1);
+  box-shadow: var(--elevation-low-01);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.2s;
@@ -1134,7 +984,7 @@ pre.raw {
 
 .shim-pill {
   height: 18px;
-  border-radius: var(--fl-radius-pill);
+  border-radius: var(--border-round);
 }
 
 @keyframes fl-shimmer {
@@ -1171,4 +1021,13 @@ pre.raw {
   background: var(--colors-background-midground-subtle);
   border: 1px solid var(--colors-border-neutral-base-subtler);
   color: inherit;
+}
+
+/* The open-lead count on the sidebar's inbox item. Tabular figures so the rail
+   doesn't shift width as the number changes. */
+.nav-count {
+  font: var(--text-caption-reg-12);
+  color: var(--colors-text-caption);
+  font-variant-numeric: tabular-nums;
+  flex: none;
 }

@@ -1,10 +1,14 @@
 /**
  * Entry point.
  *
- * The CSS import is what makes esbuild emit `dist/app.css` beside `app.js`;
- * index.html links it. Remove this line and the app ships unstyled.
+ * IMPORT ORDER MATTERS. `dsm-core.css` is the real design system — it defines
+ * every `--colors-*` / `--spacing-*` / `--text-*` token and the
+ * `:root[data-theme='dark']` block that themes them. It must land before
+ * `app.css`, so our own rules can override rather than be overridden. esbuild
+ * emits the bundled stylesheet in import order, so this order is the cascade.
  */
 
+import "@facilio/dsm-core/dist/dsm-core/dsm-core.css";
 import "./ui/app.css";
 
 import { StrictMode } from "react";
