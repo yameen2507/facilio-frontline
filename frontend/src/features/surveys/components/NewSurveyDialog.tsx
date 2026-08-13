@@ -25,6 +25,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { DateTimeField } from "../../../ui/DateField";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -183,25 +184,14 @@ export function NewSurveyDialog({
             <div className="flex flex-wrap gap-4">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="ns-start">First visit starts</Label>
-                <Input
-                  id="ns-start"
-                  type="datetime-local"
-                  value={start}
-                  onChange={(e) => setStart(e.target.value)}
-                />
+                <DateTimeField id="ns-start" value={start} onChange={setStart} />
                 <span className="text-muted-foreground text-xs">
                   Optional — without it the survey stays a draft.
                 </span>
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="ns-end">Ends</Label>
-                <Input
-                  id="ns-end"
-                  type="datetime-local"
-                  value={end}
-                  onChange={(e) => setEnd(e.target.value)}
-                  disabled={!start}
-                />
+                <DateTimeField id="ns-end" value={end} onChange={setEnd} disabled={!start} />
               </div>
             </div>
 

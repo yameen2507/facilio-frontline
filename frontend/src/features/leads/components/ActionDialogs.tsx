@@ -27,6 +27,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { DateField } from "../../../ui/DateField";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
@@ -195,13 +196,7 @@ function NurtureDialog({
     >
       <div className="grid gap-2">
         <Label htmlFor="nurture-until">Bring it back on</Label>
-        <Input
-          id="nurture-until"
-          type="date"
-          value={until}
-          onChange={(e) => setUntil(e.target.value)}
-          autoFocus
-        />
+        <DateField id="nurture-until" value={until} onChange={setUntil} autoFocus />
       </div>
     </ActionDialog>
   );

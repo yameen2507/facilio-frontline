@@ -35,6 +35,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { DateTimeField } from "../../../ui/DateField";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { assignSurveyors, getSurvey, scheduleVisit, setLead, transitionSurvey } from "../api/surveys-util";
@@ -442,22 +443,11 @@ function ScheduleVisitDialog({
             <div className="flex flex-wrap gap-4">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="sv-start">Starts</Label>
-                <Input
-                  id="sv-start"
-                  type="datetime-local"
-                  value={start}
-                  onChange={(e) => setStart(e.target.value)}
-                />
+                <DateTimeField id="sv-start" value={start} onChange={setStart} />
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="sv-end">Ends</Label>
-                <Input
-                  id="sv-end"
-                  type="datetime-local"
-                  value={end}
-                  onChange={(e) => setEnd(e.target.value)}
-                  disabled={!start}
-                />
+                <DateTimeField id="sv-end" value={end} onChange={setEnd} disabled={!start} />
               </div>
             </div>
             <div className="flex flex-col gap-1.5">
