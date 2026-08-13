@@ -17,19 +17,32 @@
 
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { Building2, Clock3, Handshake, Users } from "lucide-react";
 import { PageShell } from "../../../app/shell/PageShell";
 import { ago, plural } from "../../../lib/format";
 import { Chip } from "../../../ui/Chip";
 import { Bar, Card } from "../../../ui/Card";
 import { Input } from "@/components/ui/input";
-import { CountLine, Row, RowStat, RowTitle, TableHead } from "../../../ui/Row";
-import { SkeletonRows } from "../../../ui/Skeleton";
+import { TableCell } from "@/components/ui/table";
+import { CountLine } from "../../../ui/Row";
+import { ClickRow, ListTable, ListTableSkeleton, type Col } from "../../../ui/DataTable";
+import { CompanyLogo } from "../../../ui/CompanyLogo";
 import { Empty, ErrorState } from "../../../ui/States";
 import { LinkButton } from "../../../ui/Button";
 import { listAccounts } from "../api/accounts-util";
 import type { Account, AccountListResponse } from "../types/account";
 
-const COLUMNS = ["Company", "Leads", "Deals", "In Facilio"];
+// The counts hide on phones — a 390px row keeps the company and its sync
+// state, which is what triage needs. Each col's className must be repeated on
+// its body cells below; DataTable.tsx owns the rule.
+const NUM_COL = "max-sm:hidden w-24";
+const COLS: Col[] = [
+  { label: "Company", icon: Building2, skel: "entity" },
+  { label: "Leads", icon: Users, className: NUM_COL, skel: "num" },
+  { label: "Deals", icon: Handshake, className: NUM_COL, skel: "num" },
+  { label: "In Facilio", className: "w-44", skel: "chip" },
+  { label: "Created", icon: Clock3, className: "max-md:hidden w-28", skel: "text" },
+];
 
 /**
  * An account exists here before it exists in Facilio — the outbox writes it later —
@@ -44,6 +57,13 @@ export const SyncChip = ({ account }: { account: Pick<Account, "facilioClientId"
       not in Facilio yet
     </Chip>
   );
+
+/** A count cell: tabular so columns of numbers align digit-for-digit. */
+const NumCell = ({ value }: { value: number }) => (
+  <TableCell className="w-24 px-4 py-3 text-sm font-medium tabular-nums max-sm:hidden">
+    {value}
+  </TableCell>
+);
 
 export function AccountList() {
   const navigate = useNavigate();
@@ -85,13 +105,15 @@ export function AccountList() {
       title="Accounts"
       subtitle={total ? `${plural(total, "company", "companies")}${result?.truncated ? " · first page" : ""}` : undefined}
       strip={
-        <Bar className="pb-4">
+        // No tabs on this page, so the field is the whole strip and supplies
+        // the band's bottom padding itself.
+        <Bar className="w-full pb-5">
           <Input
             type="text"
             placeholder="Search name, email or domain"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="max-w-80"
+            className="w-full sm:w-80"
             aria-label="Search companies"
           />
         </Bar>
@@ -99,34 +121,37 @@ export function AccountList() {
     >
       <Card pad={false}>
         {loading ? (
-          <>
-            <TableHead columns={COLUMNS} />
-            <SkeletonRows count={5} />
-          </>
+          <ListTableSkeleton cols={COLS} rows={5} />
         ) : error ? (
           <ErrorState message={error} onRetry={() => setReloadKey((k) => k + 1)} />
         ) : rows.length ? (
           <>
-            <TableHead columns={COLUMNS} />
-            {rows.map((a) => (
-              <Row key={a.id} onClick={() => navigate(`/accounts/${a.id}`)}>
-                <RowTitle
-                  title={a.name ?? "Unnamed account"}
-                  meta={
-                    <>
-                      {a.websiteDomain ?? <em>no domain</em>}
-                      {a.email ? ` · ${a.email}` : ""}
-                    </>
-                  }
-                />
-                <RowStat value={a.leadCount} unit={a.leadCount === 1 ? "lead" : "leads"} />
-                <RowStat value={a.dealCount} unit={a.dealCount === 1 ? "deal" : "deals"} />
-                <div>
-                  <SyncChip account={a} />
-                  <div className="text-muted-foreground mt-px text-xs">{ago(a.createdAt)}</div>
-                </div>
-              </Row>
-            ))}
+            <ListTable cols={COLS}>
+              {rows.map((a) => (
+                <ClickRow key={a.id} onClick={() => navigate(`/accounts/${a.id}`)}>
+                  <TableCell className="px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <CompanyLogo name={a.name} domain={a.websiteDomain} email={a.email} />
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium">{a.name ?? "Unnamed account"}</div>
+                        <div className="text-muted-foreground truncate text-xs">
+                          {a.websiteDomain ?? <em>no domain</em>}
+                          {a.email ? ` · ${a.email}` : ""}
+                        </div>
+                      </div>
+                    </div>
+                  </TableCell>
+                  <NumCell value={a.leadCount} />
+                  <NumCell value={a.dealCount} />
+                  <TableCell className="px-4 py-3">
+                    <SyncChip account={a} />
+                  </TableCell>
+                  <TableCell className="text-muted-foreground w-28 px-4 py-3 text-xs max-md:hidden">
+                    {ago(a.createdAt)}
+                  </TableCell>
+                </ClickRow>
+              ))}
+            </ListTable>
             <CountLine>
               {result?.truncated
                 ? `Showing ${rows.length} of ${plural(total, "company", "companies")}`

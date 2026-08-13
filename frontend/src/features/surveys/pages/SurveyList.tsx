@@ -11,13 +11,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ClipboardList, Plus } from "lucide-react";
+import { ClipboardList, Clock3, Footprints, Plus } from "lucide-react";
 import { useCounts } from "../../../app/counts";
 import { PageShell } from "../../../app/shell/PageShell";
 import { ago } from "../../../lib/format";
 import { Bar, Card } from "../../../ui/Card";
-import { Row, RowStat, RowTitle, TableHead } from "../../../ui/Row";
-import { SkeletonRows } from "../../../ui/Skeleton";
+import { TableCell } from "@/components/ui/table";
+import { ClickRow, ListTable, ListTableSkeleton, type Col } from "../../../ui/DataTable";
+import { CompanyLogo } from "../../../ui/CompanyLogo";
 import { Empty, ErrorState } from "../../../ui/States";
 import { Tabs, type Tab } from "../../../ui/Tabs";
 import { Button } from "@/components/ui/button";
@@ -42,7 +43,12 @@ const TABS: Tab<Filter>[] = [
   { id: "completed", label: "Completed" },
 ];
 
-const COLUMNS = ["Survey", "Status", "Visits", "Created"];
+const COLS: Col[] = [
+  { label: "Survey", icon: ClipboardList, skel: "entity" },
+  { label: "Status", className: "w-36", skel: "chip" },
+  { label: "Visits", icon: Footprints, className: "max-sm:hidden w-24", skel: "num" },
+  { label: "Created", icon: Clock3, className: "max-md:hidden w-28", skel: "text" },
+];
 
 export function SurveyList() {
   const navigate = useNavigate();
@@ -119,14 +125,14 @@ export function SurveyList() {
         </Button>
       }
       strip={
-        <Bar className="justify-between pb-1">
+        <Bar className="w-full justify-between gap-x-6 pb-1">
           <Tabs items={tabs} active={filter} onChange={setFilter} />
           <Input
             type="text"
             placeholder="Search by number, account or site"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="max-w-72"
+            className="w-full sm:w-72"
             aria-label="Search surveys"
           />
         </Bar>
@@ -134,43 +140,44 @@ export function SurveyList() {
     >
       <Card pad={false}>
         {!loaded ? (
-          <>
-            <TableHead columns={COLUMNS} />
-            <SkeletonRows count={4} />
-          </>
+          <ListTableSkeleton cols={COLS} rows={4} />
         ) : error ? (
           <ErrorState message={error} onRetry={() => setReloadKey((k) => k + 1)} />
         ) : rows.length ? (
-          <>
-            <TableHead columns={COLUMNS} />
+          <ListTable cols={COLS}>
             {rows.map((s) => (
-              <Row key={s.id} onClick={() => navigate(`/surveys/${s.id}`)}>
-                <RowTitle
-                  title={
-                    <>
-                      <code className="mr-1.5 text-xs">{s.refNo}</code>
-                      {s.title ?? "Untitled survey"}
-                    </>
-                  }
-                  meta={
-                    <>
-                      {s.accountName ?? "No account"}
-                      {s.templateName ? ` · ${s.templateName}` : " · from scratch"}
-                      {" · "}
-                      {s.leadUserEmail ? s.leadUserEmail.split("@")[0] : <em>no lead yet</em>}
-                    </>
-                  }
-                />
-                <div>
+              <ClickRow key={s.id} onClick={() => navigate(`/surveys/${s.id}`)}>
+                <TableCell className="px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    {/* The account the survey is against — surveys carry no
+                        domain, so this is usually the tinted-initials tile. */}
+                    <CompanyLogo name={s.accountName ?? s.refNo} />
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium">
+                        <code className="mr-1.5 font-mono text-xs">{s.refNo}</code>
+                        {s.title ?? "Untitled survey"}
+                      </div>
+                      <div className="text-muted-foreground truncate text-xs">
+                        {s.accountName ?? "No account"}
+                        {s.templateName ? ` · ${s.templateName}` : " · from scratch"}
+                        {" · "}
+                        {s.leadUserEmail ? s.leadUserEmail.split("@")[0] : <em>no lead yet</em>}
+                      </div>
+                    </div>
+                  </div>
+                </TableCell>
+                <TableCell className="w-36 px-4 py-3">
                   <SurveyStatusChip status={s.status} />
-                </div>
-                <RowStat value={s.visitCount ?? 0} unit="visits" />
-                <div className="text-muted-foreground text-xs">
+                </TableCell>
+                <TableCell className="w-24 px-4 py-3 text-sm font-medium tabular-nums max-sm:hidden">
+                  {s.visitCount ?? 0}
+                </TableCell>
+                <TableCell className="text-muted-foreground w-28 px-4 py-3 text-xs max-md:hidden">
                   {s.createdAt ? ago(s.createdAt) : "—"}
-                </div>
-              </Row>
+                </TableCell>
+              </ClickRow>
             ))}
-          </>
+          </ListTable>
         ) : surveys.length ? (
           <Empty title="Nothing matches" body="No survey in this tab matches the search." />
         ) : (

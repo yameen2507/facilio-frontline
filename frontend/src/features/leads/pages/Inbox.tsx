@@ -8,13 +8,16 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { Building2, Gauge, Timer } from "lucide-react";
 import { useCounts } from "../../../app/counts";
 import { PageShell } from "../../../app/shell/PageShell";
 import { ago, plural } from "../../../lib/format";
 import { Button, LinkButton } from "../../../ui/Button";
 import { Card } from "../../../ui/Card";
-import { CountLine, Row, RowTitle, TableHead } from "../../../ui/Row";
-import { SkeletonRows } from "../../../ui/Skeleton";
+import { TableCell } from "@/components/ui/table";
+import { CountLine } from "../../../ui/Row";
+import { ClickRow, ListTable, ListTableSkeleton, type Col } from "../../../ui/DataTable";
+import { CompanyLogo } from "../../../ui/CompanyLogo";
 import { Empty, ErrorState } from "../../../ui/States";
 import { Tabs } from "../../../ui/Tabs";
 import { listLeads } from "../api/leads-util";
@@ -22,8 +25,14 @@ import { ScoreCell, SlaChip, StatusChip } from "../components/LeadChips";
 import { countBuckets, filterLeads, type TabId } from "../filters";
 import type { Lead } from "../types/lead";
 
-/** Every leads console labels its columns; this one used not to. */
-const COLUMNS = ["Company", "Status", "Score", "Response"];
+/** Every leads console labels its columns; this one used not to. Status and
+    score step aside on phones — company + response clock is the triage view. */
+const COLS: Col[] = [
+  { label: "Company", icon: Building2, skel: "entity" },
+  { label: "Status", className: "max-sm:hidden w-32", skel: "chip" },
+  { label: "Score", icon: Gauge, className: "max-sm:hidden w-24", skel: "num" },
+  { label: "Response", icon: Timer, className: "w-36", skel: "chip" },
+];
 
 export function Inbox() {
   const navigate = useNavigate();
@@ -87,42 +96,43 @@ export function Inbox() {
       <div className="mt-4">
         <Card pad={false}>
           {!loaded ? (
-            <>
-              {/* The heading renders for real while the rows shimmer — it is known
-                  before the request, and skeletonising it would make a fast load
-                  look broken. */}
-              <TableHead columns={COLUMNS} />
-              <SkeletonRows count={6} />
-            </>
+            <ListTableSkeleton cols={COLS} rows={6} />
           ) : error ? (
             <ErrorState message={error} onRetry={reload} />
           ) : rows.length ? (
             <>
-              <TableHead columns={COLUMNS} />
-              {rows.map((l) => (
-                <Row key={l.id} onClick={() => navigate(`/leads/${l.id}`)}>
-                  <RowTitle
-                    title={l.companyName}
-                    meta={
-                      <>
-                        {/* RowTitle's meta styles descendant <code> itself, so the ref needs no class. */}
-                        <code>{l.refNo}</code> · {l.source}
-                        {l.serviceType ? ` · ${l.serviceType}` : ""}
-                        {l.siteCity ? ` · ${l.siteCity}` : ""} ·{" "}
-                        {l.ownerEmail ? l.ownerEmail.split("@")[0] : <em>unclaimed</em>}
-                      </>
-                    }
-                  />
-                  <div>
-                    <StatusChip status={l.status} />
-                  </div>
-                  <ScoreCell lead={l} />
-                  <div>
-                    <SlaChip sla={l.sla} />
-                    <div className="text-muted-foreground mt-px text-xs">{ago(l.createdAt)}</div>
-                  </div>
-                </Row>
-              ))}
+              <ListTable cols={COLS}>
+                {rows.map((l) => (
+                  <ClickRow key={l.id} onClick={() => navigate(`/leads/${l.id}`)}>
+                    <TableCell className="px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        {/* Logo by the contact's email domain — free-mail
+                            addresses fall back to tinted initials. */}
+                        <CompanyLogo name={l.companyName} email={l.contactEmail} />
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium">{l.companyName}</div>
+                          <div className="text-muted-foreground truncate text-xs">
+                            <code className="font-mono">{l.refNo}</code> · {l.source}
+                            {l.serviceType ? ` · ${l.serviceType}` : ""}
+                            {l.siteCity ? ` · ${l.siteCity}` : ""} ·{" "}
+                            {l.ownerEmail ? l.ownerEmail.split("@")[0] : <em>unclaimed</em>}
+                          </div>
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell className="w-32 px-4 py-3 max-sm:hidden">
+                      <StatusChip status={l.status} />
+                    </TableCell>
+                    <TableCell className="w-24 px-4 py-3 max-sm:hidden">
+                      <ScoreCell lead={l} />
+                    </TableCell>
+                    <TableCell className="w-36 px-4 py-3">
+                      <SlaChip sla={l.sla} />
+                      <div className="text-muted-foreground mt-1 text-xs">{ago(l.createdAt)}</div>
+                    </TableCell>
+                  </ClickRow>
+                ))}
+              </ListTable>
               <CountLine>{`${plural(rows.length, "lead", "leads")} in this view`}</CountLine>
             </>
           ) : (

@@ -10,13 +10,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FilePlus2, Plus } from "lucide-react";
+import { Clock3, FilePlus2, FileText, ListChecks, Plus } from "lucide-react";
 import { PageShell } from "../../../app/shell/PageShell";
 import { ago } from "../../../lib/format";
 import { Bar, Card } from "../../../ui/Card";
 import { Chip, type Tone } from "../../../ui/Chip";
-import { Row, RowStat, RowTitle, TableHead } from "../../../ui/Row";
-import { SkeletonRows } from "../../../ui/Skeleton";
+import { TableCell, TableRow } from "@/components/ui/table";
+import { ListTable, ListTableSkeleton, type Col } from "../../../ui/DataTable";
 import { Empty, ErrorState } from "../../../ui/States";
 import { Tabs, type Tab } from "../../../ui/Tabs";
 import { Button } from "@/components/ui/button";
@@ -39,7 +39,12 @@ const STATUS_TONE: Record<TemplateStatus, Tone> = {
   archived: "neutral",
 };
 
-const COLUMNS = ["Template", "Status", "Questions", "Updated"];
+const COLS: Col[] = [
+  { label: "Template", icon: FileText, skel: "entity" },
+  { label: "Status", className: "w-32", skel: "chip" },
+  { label: "Questions", icon: ListChecks, className: "max-sm:hidden w-28", skel: "num" },
+  { label: "Updated", icon: Clock3, className: "max-md:hidden w-28", skel: "text" },
+];
 
 export function TemplateList() {
   const navigate = useNavigate();
@@ -98,14 +103,17 @@ export function TemplateList() {
         </Button>
       }
       strip={
-        <Bar className="justify-between pb-1">
+        // w-full so justify-between has a full line to work across; the field
+        // takes a fixed width beside the tabs and only goes full-width once it
+        // has wrapped under them on a phone.
+        <Bar className="w-full justify-between gap-x-6 pb-1">
           <Tabs items={tabs} active={filter} onChange={setFilter} />
           <Input
             type="text"
             placeholder="Search templates"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="max-w-72"
+            className="w-full sm:w-72"
             aria-label="Search templates"
           />
         </Bar>
@@ -113,38 +121,45 @@ export function TemplateList() {
     >
       <Card pad={false}>
         {!loaded ? (
-          <>
-            <TableHead columns={COLUMNS} />
-            <SkeletonRows count={4} />
-          </>
+          <ListTableSkeleton cols={COLS} rows={4} />
         ) : error ? (
           <ErrorState message={error} onRetry={() => setReloadKey((k) => k + 1)} />
         ) : rows.length ? (
-          <>
-            <TableHead columns={COLUMNS} />
+          <ListTable cols={COLS}>
             {rows.map((t) => (
-              <Row key={t.id}>
-                <RowTitle
-                  title={t.name}
-                  meta={
-                    <>
-                      v{t.versionNo}
-                      {t.category ? ` · ${t.category}` : ""}
-                      {` · ${t.sectionCount ?? 0} section${t.sectionCount === 1 ? "" : "s"}`}
-                      {t.usageCount ? ` · used by ${t.usageCount} survey${t.usageCount === 1 ? "" : "s"}` : ""}
-                    </>
-                  }
-                />
-                <div>
+              // Plain rows: a template is edited through the builder, and this
+              // list deliberately never navigated on click.
+              <TableRow key={t.id}>
+                <TableCell className="px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    {/* A document tile where entity rows carry a logo — same
+                        footprint, so all four lists lead with the same shape. */}
+                    <div className="bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-lg border">
+                      <FileText className="size-4" aria-hidden="true" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium">{t.name}</div>
+                      <div className="text-muted-foreground truncate text-xs">
+                        v{t.versionNo}
+                        {t.category ? ` · ${t.category}` : ""}
+                        {` · ${t.sectionCount ?? 0} section${t.sectionCount === 1 ? "" : "s"}`}
+                        {t.usageCount ? ` · used by ${t.usageCount} survey${t.usageCount === 1 ? "" : "s"}` : ""}
+                      </div>
+                    </div>
+                  </div>
+                </TableCell>
+                <TableCell className="w-32 px-4 py-3">
                   <Chip tone={STATUS_TONE[t.status]}>{t.status}</Chip>
-                </div>
-                <RowStat value={t.questionCount ?? 0} unit="questions" />
-                <div className="text-muted-foreground text-xs">
+                </TableCell>
+                <TableCell className="w-28 px-4 py-3 text-sm font-medium tabular-nums max-sm:hidden">
+                  {t.questionCount ?? 0}
+                </TableCell>
+                <TableCell className="text-muted-foreground w-28 px-4 py-3 text-xs max-md:hidden">
                   {t.updatedAt ? ago(t.updatedAt) : "—"}
-                </div>
-              </Row>
+                </TableCell>
+              </TableRow>
             ))}
-          </>
+          </ListTable>
         ) : templates.length ? (
           <Empty
             title="Nothing matches"

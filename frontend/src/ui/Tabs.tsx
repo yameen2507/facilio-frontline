@@ -18,9 +18,10 @@ import { Tabs as UITabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 export type Tab<Id extends string> = { id: Id; label: string; count?: number };
 
 const TRIGGER =
-  "text-muted-foreground hover:text-foreground data-[state=active]:text-foreground " +
+  // `group` so the count badge can read the trigger's active state.
+  "group text-muted-foreground hover:text-foreground data-[state=active]:text-foreground " +
   // Flat trigger: strip the pill chrome in both themes, keep only the bar.
-  "-mb-px h-auto flex-none rounded-none border-0 border-b-2 border-transparent bg-transparent px-2 pt-1 pb-2.5 shadow-none " +
+  "-mb-px h-auto flex-none rounded-none border-0 border-b-2 border-transparent bg-transparent px-3 pt-1 pb-3 shadow-none " +
   "data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none " +
   "dark:data-[state=active]:border-primary dark:data-[state=active]:bg-transparent";
 
@@ -34,7 +35,9 @@ export function Tabs<Id extends string>({
   onChange: (id: Id) => void;
 }) {
   return (
-    <UITabs value={active} onValueChange={(v) => onChange(v as Id)} className="gap-0">
+    // min-w-0: the strip lays tabs beside a search field, and without this the
+    // list's max-content width wins and pushes the field onto its own line.
+    <UITabs value={active} onValueChange={(v) => onChange(v as Id)} className="min-w-0 gap-0">
       {/* Scrolls sideways on a phone — the survey detail carries seven tabs,
           and wrapping them would double the fixed header band's height. */}
       <TabsList className="h-auto max-w-full justify-start gap-1 overflow-x-auto rounded-none bg-transparent p-0 [scrollbar-width:none]">
@@ -45,7 +48,11 @@ export function Tabs<Id extends string>({
                 filter tab ("Completed 0"), but a tab with no count concept —
                 Overview, Activity while loading — must not invent one. */}
             {typeof t.count === "number" ? (
-              <span className="bg-muted rounded-full px-1.5 py-px text-[10px] font-normal tabular-nums">
+              // The badge carries the active state too, so the selected tab is
+              // marked twice — underline and a lit pill — instead of once.
+              <span
+                className="bg-muted text-muted-foreground group-data-[state=active]:bg-foreground/10 group-data-[state=active]:text-foreground rounded-full px-1.5 py-px text-[10px] font-normal tabular-nums transition-colors"
+              >
                 {t.count}
               </span>
             ) : null}

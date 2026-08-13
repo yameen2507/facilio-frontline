@@ -11,6 +11,7 @@
  * group, so the shell keeps needing no feature imports.
  */
 
+import { Fragment, useId } from "react";
 import { PanelLeftOpen } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import { useCounts } from "@/app/counts";
@@ -32,7 +33,6 @@ import {
 } from "@/components/ui/sidebar";
 import { NavUser } from "./NavUser";
 import {
-  DEFAULT_ROUTE,
   NAV_TOP,
   SETTINGS_NAV,
   type NavItemEntry,
@@ -50,13 +50,9 @@ function toGroups(): Group[] {
   return groups.filter((g) => g.items.length > 0);
 }
 
-/* The tile is the brand dark (#0f1115) in BOTH themes, not bg-primary — the
-   lime mark is drawn for that ground, and it keeps the sidebar mark identical
-   to the home-screen icon. text-white is for the swapped-in expand glyph. */
-const BRAND_MARK =
-  "relative flex aspect-square size-8 shrink-0 items-center justify-center rounded-lg bg-[#0f1115] text-white";
-
-/** The Frontline pinwheel, inlined so it needs no asset fetch. */
+/** The Frontline pinwheel, inlined so it needs no asset fetch. Drawn bare —
+    no tile behind it — at 20px: a shade larger than the 16px nav icons so the
+    brand row reads as the heading, but on the same left edge as the column. */
 function BrandMark({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 32 32" fill="none" aria-hidden="true" className={className}>
@@ -91,8 +87,8 @@ function BrandHeader() {
         aria-label="Expand sidebar"
         className="group/brand"
       >
-        <div className={BRAND_MARK}>
-          <BrandMark className="size-[18px] transition-opacity group-hover/brand:opacity-0" />
+        <div className="relative flex size-5 shrink-0 items-center justify-center">
+          <BrandMark className="size-5 transition-opacity group-hover/brand:opacity-0" />
           <PanelLeftOpen className="absolute size-4 opacity-0 transition-opacity group-hover/brand:opacity-100" />
         </div>
       </SidebarMenuButton>
@@ -101,16 +97,37 @@ function BrandHeader() {
 
   return (
     <div className="flex items-center gap-1">
-      <SidebarMenuButton size="lg" asChild className="min-w-0 flex-1">
-        <Link to={DEFAULT_ROUTE}>
-          <div className={BRAND_MARK}>
-            <BrandMark className="size-[18px]" />
-          </div>
-          <span className="flex-1 truncate text-left text-sm font-semibold">Frontline</span>
-        </Link>
-      </SidebarMenuButton>
+      {/* A plain row, not a button: the name is a heading, and wrapping it in
+          menu-button chrome offered a hover state for a target that had
+          nothing to do. The only control on the row is the trigger. */}
+      <div className="flex h-12 min-w-0 flex-1 items-center gap-2 px-2">
+        <BrandMark className="size-5 shrink-0" />
+        <span className="truncate text-sm font-semibold">Frontline</span>
+      </div>
       {isMobile ? null : <SidebarTrigger className="shrink-0" />}
     </div>
+  );
+}
+
+/**
+ * The section divider: a zigzag rather than a rule, the one playful stroke in
+ * an otherwise flat rail. Drawn as an SVG pattern so the peaks stay equilateral
+ * at any rail width — it simply shows more or fewer of them — and inked with
+ * the sidebar's own border token so it reads as structure, not decoration.
+ * It stays in the collapsed rail too, where it does the labels' job while
+ * they're hidden.
+ */
+function ZigZag() {
+  const id = useId();
+  return (
+    <svg className="text-sidebar-border mx-2 h-1.5 shrink-0" aria-hidden="true">
+      <defs>
+        <pattern id={id} width="8" height="6" patternUnits="userSpaceOnUse">
+          <path d="M0 5 L4 1 L8 5" fill="none" stroke="currentColor" strokeWidth="1" />
+        </pattern>
+      </defs>
+      <rect width="100%" height="100%" fill={`url(#${id})`} />
+    </svg>
   );
 }
 
@@ -154,23 +171,28 @@ export default function AppSidebar() {
         </SidebarMenu>
       </SidebarHeader>
 
-      <SidebarContent>
+      {/* gap-0: the zigzag is the divider now, and the default gap on top of
+          each group's padding was reading as dead space between sections. */}
+      <SidebarContent className="gap-0">
         {toGroups().map((group, i) => (
-          <SidebarGroup key={group.label ?? i}>
-            {group.label ? <SidebarGroupLabel>{group.label}</SidebarGroupLabel> : null}
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {group.items.map((item) => (
-                  <NavButton
-                    key={item.to}
-                    item={item}
-                    active={at(item.to)}
-                    badge={badgeFor(item)}
-                  />
-                ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
+          <Fragment key={group.label ?? i}>
+            {i > 0 ? <ZigZag /> : null}
+            <SidebarGroup className="py-1.5">
+              {group.label ? <SidebarGroupLabel>{group.label}</SidebarGroupLabel> : null}
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {group.items.map((item) => (
+                    <NavButton
+                      key={item.to}
+                      item={item}
+                      active={at(item.to)}
+                      badge={badgeFor(item)}
+                    />
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          </Fragment>
         ))}
       </SidebarContent>
 
