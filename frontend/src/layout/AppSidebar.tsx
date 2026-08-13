@@ -134,7 +134,10 @@ function WaveDivider() {
   const id = useId();
   return (
     <svg
-      className="text-sidebar-foreground/35 mx-2 h-[5px] shrink-0 [mask-image:linear-gradient(to_right,black,transparent)]"
+      // my-3: the wave needs air on both sides to read as a section break. The
+      // groups' own py-1.5 alone left it crowded against the item above and the
+      // section label below, so the three ran together as one list.
+      className="text-sidebar-foreground/35 mx-2 my-3 h-[5px] shrink-0 [mask-image:linear-gradient(to_right,black,transparent)]"
       aria-hidden="true"
     >
       <defs>
