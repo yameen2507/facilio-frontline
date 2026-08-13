@@ -20,7 +20,8 @@ import { useNavigate } from "react-router-dom";
 import { PageShell } from "../../../app/shell/PageShell";
 import { ago, plural } from "../../../lib/format";
 import { Chip } from "../../../ui/Chip";
-import { Card } from "../../../ui/Card";
+import { Bar, Card } from "../../../ui/Card";
+import { Input } from "@/components/ui/input";
 import { CountLine, Row, RowStat, RowTitle, TableHead } from "../../../ui/Row";
 import { SkeletonRows } from "../../../ui/Skeleton";
 import { Empty, ErrorState } from "../../../ui/States";
@@ -84,16 +85,16 @@ export function AccountList() {
       title="Accounts"
       subtitle={total ? `${plural(total, "company", "companies")}${result?.truncated ? " · first page" : ""}` : undefined}
       strip={
-        <div className="bar" style={{ paddingBottom: "var(--spacing-container-large)" }}>
-          <input
+        <Bar className="pb-4">
+          <Input
             type="text"
             placeholder="Search name, email or domain"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            style={{ maxWidth: 320 }}
+            className="max-w-80"
             aria-label="Search companies"
           />
-        </div>
+        </Bar>
       }
     >
       <Card pad={false}>
@@ -122,7 +123,7 @@ export function AccountList() {
                 <RowStat value={a.dealCount} unit={a.dealCount === 1 ? "deal" : "deals"} />
                 <div>
                   <SyncChip account={a} />
-                  <div className="meta">{ago(a.createdAt)}</div>
+                  <div className="text-muted-foreground mt-px text-xs">{ago(a.createdAt)}</div>
                 </div>
               </Row>
             ))}

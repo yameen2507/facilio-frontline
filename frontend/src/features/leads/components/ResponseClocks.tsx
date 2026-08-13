@@ -11,6 +11,9 @@ import { when } from "../../../lib/format";
 import { isTerminal } from "../actions";
 import type { Lead } from "../types/lead";
 
+/** Every cell carries the divider; the table strips it from the last row. */
+const TD = "border-b border-dashed py-1";
+
 export function ResponseClocks({ lead }: { lead: Lead }) {
   const terminal = isTerminal(lead.status);
 
@@ -21,15 +24,15 @@ export function ResponseClocks({ lead }: { lead: Lead }) {
   ];
 
   return (
-    <table className="clocks">
+    <table className="w-full border-collapse text-sm [&_tr:last-child_td]:border-b-0">
       <tbody>
         {clocks.map(([label, due, met]) => {
           const late = !met && !terminal && due && Date.parse(due) < Date.now();
           return (
             <tr key={label}>
-              <td>{label}</td>
-              <td className="due">{due ? when(due) : "—"}</td>
-              <td className="right">
+              <td className={TD}>{label}</td>
+              <td className={`${TD} text-muted-foreground text-xs tabular-nums`}>{due ? when(due) : "—"}</td>
+              <td className={`${TD} text-right`}>
                 {met ? (
                   <Chip tone="green">met</Chip>
                 ) : terminal ? (

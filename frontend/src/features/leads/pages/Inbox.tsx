@@ -85,7 +85,7 @@ export function Inbox() {
         />
       }
     >
-      <div style={{ marginTop: "var(--spacing-container-large)" }}>
+      <div className="mt-4">
         <Card pad={false}>
           {!loaded ? (
             <>
@@ -106,7 +106,8 @@ export function Inbox() {
                     title={l.companyName}
                     meta={
                       <>
-                        <code className="mono">{l.refNo}</code> · {l.source}
+                        {/* RowTitle's meta styles descendant <code> itself, so the ref needs no class. */}
+                        <code>{l.refNo}</code> · {l.source}
                         {l.serviceType ? ` · ${l.serviceType}` : ""}
                         {l.siteCity ? ` · ${l.siteCity}` : ""} ·{" "}
                         {l.ownerEmail ? l.ownerEmail.split("@")[0] : <em>unclaimed</em>}
@@ -119,7 +120,7 @@ export function Inbox() {
                   <ScoreCell lead={l} />
                   <div>
                     <SlaChip sla={l.sla} />
-                    <div className="meta">{ago(l.createdAt)}</div>
+                    <div className="text-muted-foreground mt-px text-xs">{ago(l.createdAt)}</div>
                   </div>
                 </Row>
               ))}

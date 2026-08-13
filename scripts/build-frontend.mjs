@@ -17,9 +17,27 @@
 import { build } from "esbuild";
 import { copyFileSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 
 const OUT = join(process.cwd(), "dist");
 mkdirSync(OUT, { recursive: true });
+
+// The stylesheet is compiled by Tailwind, not bundled by esbuild: globals.css
+// is directives (@import "tailwindcss", @theme, @source) that only Tailwind's
+// compiler can expand, and the utility classes it emits come from scanning
+// frontend/ — a scan esbuild has no notion of. main.tsx therefore imports no
+// CSS at all; index.html links this output directly.
+const tailwind = spawnSync(
+  process.execPath,
+  [
+    join("node_modules", "@tailwindcss", "cli", "dist", "index.mjs"),
+    "-i", "frontend/src/globals.css",
+    "-o", join(OUT, "app.css"),
+    "--minify",
+  ],
+  { stdio: "inherit" }
+);
+if (tailwind.status !== 0) process.exit(tailwind.status ?? 1);
 
 await build({
   entryPoints: ["frontend/src/main.tsx"],

@@ -1,24 +1,30 @@
 /**
  * The top-right avatar and its menu.
  *
- * This replaces printing `name · org 2944` as raw text in the bar with a
- * three-segment theme toggle beside it. Every console this was compared against —
- * Framer, Uxcel, Remote, Midday, Magnific — puts identity in a top-right avatar
- * with a menu behind it, and none of them expose a theme control directly in the
- * bar. Midday specifically keeps Theme as a row inside this menu, which is where
- * it has gone.
+ * Identity lives in a top-right avatar with the account menu behind it, and the
+ * theme control is a row inside that menu rather than a bar control — the
+ * arrangement every console this was compared against (Framer, Uxcel, Remote,
+ * Midday, Magnific) settled on.
  *
- * No design-system Popover: the DSM component barrel costs 1.2MB gzipped (see
- * layout/primitives.tsx), and this is a single anchored panel. Closing on outside
- * click and on Escape is the whole behaviour.
+ * The hand-rolled anchored panel (outside-click and Escape handling included)
+ * became shadcn's DropdownMenu, which also brings the keyboard model the old
+ * panel never had.
  */
 
-import { useEffect, useRef, useState } from 'react'
-import { useUser } from '../../app/auth'
-import { vibe } from '../../lib/vibe'
-import { ThemeSwitcher } from '../../theme/ThemeSwitcher'
-import { Icon } from '../../ui/Icon'
-import { HorizontalDivider } from '../primitives'
+import { LogOut } from 'lucide-react'
+import { useUser } from '@/app/auth'
+import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { vibe } from '@/lib/vibe'
+import { ThemeSwitcher } from '@/theme/ThemeSwitcher'
 
 /** "Mohamed Yameen" → "MY"; falls back to the email's first letter. */
 function initials(name: string | undefined, email: string | undefined): string {
@@ -32,117 +38,53 @@ function initials(name: string | undefined, email: string | undefined): string {
 
 export default function ProfileMenu() {
   const me = useUser()
-  const [open, setOpen] = useState(false)
-  const wrapRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    if (!open) return
-
-    const onPointerDown = (e: PointerEvent) => {
-      // `composedPath` rather than `contains`: the theme control inside the panel
-      // is a real child, but this keeps working if any part of the menu is ever
-      // moved into a portal.
-      if (!wrapRef.current) return
-      if (!e.composedPath().includes(wrapRef.current)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
-    }
-
-    document.addEventListener('pointerdown', onPointerDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open])
-
   const name = me.user?.name
   const email = me.user?.email
 
   return (
-    <div ref={wrapRef} style={{ position: 'relative', flexShrink: 0 }}>
-      <button
-        type="button"
-        className="avatar-btn"
-        onClick={() => setOpen((v) => !v)}
-        title={name ?? email ?? 'Account'}
-        aria-label="Account menu"
-        aria-haspopup="menu"
-        aria-expanded={open}
-      >
-        {initials(name, email)}
-      </button>
-
-      {open ? (
-        <div
-          role="menu"
-          style={{
-            position: 'absolute',
-            top: 'calc(100% + var(--spacing-container-small))',
-            right: 0,
-            width: '248px',
-            zIndex: 60,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 'var(--spacing-container-medium)',
-            padding: 'var(--spacing-container-large)',
-            borderRadius: 'var(--border-medium)',
-            backgroundColor: 'var(--colors-background-container)',
-            boxShadow: 'var(--elevation-light-high)',
-            // Inset ring, not a border: the panel is positioned to the pixel and a
-            // border would shift its contents by one.
-            outline: '1px solid var(--colors-border-neutral-base-subtle)',
-            outlineOffset: '-1px',
-          }}
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          className="size-8 rounded-full p-0"
+          title={name ?? email ?? 'Account'}
+          aria-label="Account menu"
         >
-          <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-            <span
-              style={{
-                font: 'var(--text-heading-med-14)',
-                color: 'var(--colors-text-main)',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {name ?? email ?? '…'}
-            </span>
+          <Avatar className="size-8">
+            <AvatarFallback className="text-xs font-medium">{initials(name, email)}</AvatarFallback>
+          </Avatar>
+        </Button>
+      </DropdownMenuTrigger>
+
+      <DropdownMenuContent align="end" className="w-60">
+        <DropdownMenuLabel className="font-normal">
+          <div className="grid min-w-0 leading-snug">
+            <span className="truncate text-sm font-medium">{name ?? email ?? '…'}</span>
             {email && name ? (
-              <span
-                style={{
-                  font: 'var(--text-caption-reg-12)',
-                  color: 'var(--colors-text-caption)',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {email}
-              </span>
+              <span className="text-muted-foreground truncate text-xs">{email}</span>
             ) : null}
             {me.org?.orgId ? (
-              <span style={{ font: 'var(--text-caption-reg-12)', color: 'var(--colors-text-caption)' }}>
-                Org {String(me.org.orgId)}
-              </span>
+              <span className="text-muted-foreground text-xs">Org {String(me.org.orgId)}</span>
             ) : null}
           </div>
+        </DropdownMenuLabel>
 
-          <HorizontalDivider />
+        <DropdownMenuSeparator />
 
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--spacing-container-medium)' }}>
-            <span style={{ font: 'var(--text-body-reg-14)', color: 'var(--colors-text-description)' }}>Theme</span>
-            <ThemeSwitcher />
-          </div>
-
-          <HorizontalDivider />
-
-          <button type="button" className="menu-row" role="menuitem" onClick={() => vibe.logout()}>
-            <Icon name="logOut" size={15} />
-            <span>Sign out</span>
-          </button>
+        {/* A control row, not a menu item: choosing a theme must not close the
+            menu, so it stays a plain div outside the item system. */}
+        <div className="flex items-center justify-between gap-2 px-2 py-1.5">
+          <span className="text-sm">Theme</span>
+          <ThemeSwitcher />
         </div>
-      ) : null}
-    </div>
+
+        <DropdownMenuSeparator />
+
+        <DropdownMenuItem onSelect={() => vibe.logout()}>
+          <LogOut />
+          Sign out
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }

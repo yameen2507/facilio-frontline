@@ -71,11 +71,11 @@ export function AccountDetail() {
       title={account.name ?? "Account"}
       subtitle={`${plural(leads.length, "lead", "leads")} · ${plural(deals.length, "deal", "deals")}`}
     >
-      <Bar style={{ marginBottom: "var(--spacing-container-large)" }}>
+      <Bar className="mb-4">
         <LinkButton to="/accounts" glyph="arrowLeft">
           Accounts
         </LinkButton>
-        <span className="grow" />
+        <span className="flex-1" />
         <SyncChip account={account} />
       </Bar>
 
@@ -93,7 +93,7 @@ export function AccountDetail() {
                     <Chip tone={l.status === "converted" ? "green" : "neutral"}>{l.status.replace(/_/g, " ")}</Chip>
                   </div>
                   <RowStat value={l.score ?? null} unit="score" />
-                  <div className="meta">{ago(l.createdAt)}</div>
+                  <div className="text-muted-foreground mt-px text-xs">{ago(l.createdAt)}</div>
                 </Row>
               ))
             ) : (
@@ -103,19 +103,21 @@ export function AccountDetail() {
 
           <Card title="Deals">
             {deals.length ? (
-              <table className="clocks">
+              <table className="w-full border-collapse text-sm [&_tr:last-child_td]:border-b-0">
                 <tbody>
                   {deals.map((d) => (
                     <tr key={d.refNo}>
-                      <td>
+                      <td className="border-b border-dashed py-1">
                         <b>{d.title ?? "Untitled deal"}</b>
-                        <div className="due">
-                          <code className="mono">{d.refNo}</code>
+                        <div className="text-muted-foreground text-xs tabular-nums">
+                          <code className="font-mono">{d.refNo}</code>
                           {d.salesOwnerEmail ? ` · ${d.salesOwnerEmail}` : ""}
                         </div>
                       </td>
-                      <td className="due right nowrap">{money(d.estimatedValue, d.currency ?? "AED")}</td>
-                      <td className="right">
+                      <td className="text-muted-foreground border-b border-dashed py-1 text-xs tabular-nums text-right whitespace-nowrap">
+                        {money(d.estimatedValue, d.currency ?? "AED")}
+                      </td>
+                      <td className="border-b border-dashed py-1 text-right">
                         <Chip tone={STAGE_TONE[d.stage] ?? "neutral"}>{d.stage}</Chip>
                       </td>
                     </tr>
@@ -147,7 +149,7 @@ export function AccountDetail() {
                 { label: "Location", value: place || "—" },
                 {
                   label: "Facilio client",
-                  value: account.facilioClientId ? <code className="mono">{account.facilioClientId}</code> : "queued",
+                  value: account.facilioClientId ? <code className="font-mono">{account.facilioClientId}</code> : "queued",
                 },
                 { label: "Customer since", value: String(account.createdAt ?? "").slice(0, 10) || "—" },
               ]}
@@ -156,16 +158,16 @@ export function AccountDetail() {
 
           <Card title="Contacts">
             {contacts.length ? (
-              <table className="clocks">
+              <table className="w-full border-collapse text-sm [&_tr:last-child_td]:border-b-0">
                 <tbody>
                   {contacts.map((c, i) => (
                     <tr key={c.email ?? i}>
-                      <td>
+                      <td className="border-b border-dashed py-1">
                         <b>{c.name ?? "—"}</b>
                         {/* The flag is the STRING "true" — there is no boolean
                             column type, so comparing to `true` never matches. */}
                         {String(c.isPrimary) === "true" ? <> <Chip>primary</Chip></> : null}
-                        <div className="due">
+                        <div className="text-muted-foreground text-xs tabular-nums">
                           {c.email ?? ""}
                           {c.phone ? ` · ${c.phone}` : ""}
                         </div>

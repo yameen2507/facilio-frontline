@@ -9,7 +9,7 @@
  * the content.
  *
  * Deliberately native `overflow-y: auto` plus a styled thin scrollbar (see
- * `.overlay-scroll` in app.css) rather than a scrollbar library. A JS scrollbar
+ * `.overlay-scroll` in globals.css) rather than a scrollbar library. A JS scrollbar
  * is a lot of moving parts for a nav rail, and native scrolling keeps keyboard
  * paging, trackpad momentum and `scrollIntoView` working for free.
  */

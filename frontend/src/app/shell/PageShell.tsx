@@ -10,12 +10,10 @@
  *   │ ░░ body — the only thing that scrolls│
  *   └──────────────────────────────────────┘
  *
- * This now sits inside the ported `MainContent`, which is `height: 100%` with
- * `overflow: hidden` and deliberately keeps no scroller of its own — the comment
- * in that file is explicit that the real scroll region belongs one layer deeper,
- * in each page. So this is a full-height flex column that owns its scroller,
- * rather than the fragment it used to be when it was a direct flex child of the
- * old `<main>`.
+ * This sits inside the shell's content slot (Layout), which is `overflow:
+ * hidden` and deliberately keeps no scroller of its own — the real scroll
+ * region belongs one layer deeper, in each page. So this is a full-height flex
+ * column that owns its scroller.
  *
  * Scrolling goes through OverlayScrollbar so the bar floats over the content and
  * the body width doesn't jump when a short page becomes a long one.
@@ -39,28 +37,21 @@ export function PageShell({
   children: ReactNode;
 }) {
   return (
-    <div
-      style={{
-        height: "100%",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-        boxSizing: "border-box",
-      }}
-    >
-      <div className="top">
-        <div className="top-text">
-          <h1>{title}</h1>
-          {subtitle ? <span className="sub">{subtitle}</span> : null}
+    <div className="flex h-full flex-col overflow-hidden">
+      <div className="flex shrink-0 flex-wrap items-baseline gap-4 px-6 pt-5 pb-4">
+        <div className="flex min-w-0 flex-wrap items-baseline gap-4">
+          <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
+          {subtitle ? <span className="text-muted-foreground text-sm">{subtitle}</span> : null}
         </div>
-        <span className="grow" />
+        <span className="flex-1" />
         {actions}
       </div>
 
-      {strip ? <div className="page-tabs">{strip}</div> : null}
+      {/* Empty when a page has no tabs, so it contributes no height. */}
+      {strip ? <div className="shrink-0 px-6 pb-3">{strip}</div> : null}
 
       <OverlayScrollbar style={{ flex: 1 }}>
-        <div className="content">{children}</div>
+        <div className="min-w-0 px-6 pb-10">{children}</div>
       </OverlayScrollbar>
     </div>
   );

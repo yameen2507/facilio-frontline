@@ -5,9 +5,13 @@
   // only, on purpose: pulling src/ in would surface a backlog of backend errors
   // that has nothing to do with the UI. Run it with `npm run typecheck:frontend`.
   //
-  // `baseUrl` is NOT set: TypeScript 7 removed it (error TS5102). Use `paths` if
-  // aliases are ever needed.
+  // `baseUrl` is NOT set: TypeScript 7 removed it (error TS5102). `paths` alone
+  // resolves relative to this file, which esbuild honours too — the "@/*" alias
+  // below is what shadcn-generated components import through.
   "compilerOptions": {
+    "paths": {
+      "@/*": ["./src/*"]
+    },
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",

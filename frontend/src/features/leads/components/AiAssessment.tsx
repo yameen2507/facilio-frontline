@@ -14,12 +14,12 @@ import type { Analysis, Lead } from "../types/lead";
 
 const scoreColour = (score: number | null | undefined): string =>
   score === null || score === undefined
-    ? "var(--colors-text-description)"
+    ? "text-muted-foreground"
     : score >= 75
-      ? "var(--colors-background-semantic-red-medium)"
+      ? "text-red-600 dark:text-red-400"
       : score >= 50
-        ? "var(--colors-background-semantic-orange-medium)"
-        : "var(--colors-text-description)";
+        ? "text-orange-600 dark:text-orange-400"
+        : "text-muted-foreground";
 
 export function AiAssessment({
   lead,
@@ -55,18 +55,18 @@ export function AiAssessment({
 
   return (
     <>
-      <div className="verdict">
+      <div className="mb-4 flex items-center gap-4">
         <div>
-          <div className="big" style={{ color: scoreColour(lead.score) }}>
+          <div
+            className={`text-[32px] leading-none font-medium tracking-tight tabular-nums ${scoreColour(lead.score)}`}
+          >
             {lead.score}
           </div>
-          <div className="of">of 100 · {band ?? ""}</div>
+          <div className="text-muted-foreground text-xs">of 100 · {band ?? ""}</div>
         </div>
         <div>
           <Chip tone={lead.verdict === "relevant" ? "green" : "red"}>{humanise(String(lead.verdict))}</Chip>
-          <div className="of" style={{ marginTop: "var(--numerical-nl-01)" }}>
-            assessed {ago(lead.analysedAt)}
-          </div>
+          <div className="text-muted-foreground mt-1 text-xs">assessed {ago(lead.analysedAt)}</div>
         </div>
       </div>
 
@@ -80,7 +80,7 @@ export function AiAssessment({
       {reasons.length ? (
         <>
           <SectionTitle>Why</SectionTitle>
-          <ul className="reasons">
+          <ul className="list-disc space-y-1 pl-4 text-sm text-foreground/90">
             {reasons.slice(0, 6).map((r, i) => (
               <li key={i}>{r}</li>
             ))}
@@ -91,7 +91,7 @@ export function AiAssessment({
       {missing.length ? (
         <>
           <SectionTitle>Ask before quoting</SectionTitle>
-          <ul className="reasons">
+          <ul className="list-disc space-y-1 pl-4 text-sm text-foreground/90">
             {missing.slice(0, 5).map((r, i) => (
               <li key={i}>{r}</li>
             ))}

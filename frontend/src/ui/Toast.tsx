@@ -7,6 +7,7 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { cn } from "@/lib/utils";
 
 const HOLD_MS = 3200;
 
@@ -41,7 +42,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastContext.Provider value={show}>
       {children}
       <div
-        className={`toast${visible ? " on" : ""}${message.bad ? " bad" : ""}`}
+        className={cn(
+          "pointer-events-none fixed bottom-6 left-1/2 z-20 -translate-x-1/2 rounded-md px-4 py-2.5 text-sm shadow-md transition-opacity duration-200",
+          message.bad ? "bg-destructive text-white" : "bg-foreground text-background",
+          visible ? "opacity-100" : "opacity-0",
+        )}
         role="status"
         aria-live="polite"
       >

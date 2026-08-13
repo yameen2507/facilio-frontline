@@ -1,21 +1,27 @@
 /**
- * Activity and ownership — two lists over the same `.tl` shape.
+ * Activity and ownership — two lists over the same row shape, shared as class
+ * strings so the two cannot drift apart.
  */
 
 import type { Assignment, TimelineEvent } from "../types/lead";
 
+const ITEM = "flex gap-2.5 border-b border-dashed py-2.5 last:border-b-0";
+const WHEN = "text-muted-foreground pt-px text-xs tabular-nums whitespace-nowrap";
+const KIND = "font-mono text-[11px] font-medium";
+const BODY = "text-sm text-foreground/90";
+
 export const Timeline = ({ events }: { events: TimelineEvent[] }) => (
-  <ul className="tl">
+  <ul className="list-none">
     {events.map((e, i) => (
       // Events carry no id and two can share a timestamp, so the index is the only
       // stable key available. The list is append-only and never reordered, which is
       // what makes that safe here.
-      <li key={i}>
-        <span className="when">{(e.occurredAt ?? "").slice(11, 16)}</span>
-        <span className="what">
-          <span className="kind">{e.kind}</span>
-          {e.actor ? <span className="muted"> {e.actor.split("@")[0]}</span> : null}
-          <div className="body">{e.body ?? ""}</div>
+      <li key={i} className={ITEM}>
+        <span className={WHEN}>{(e.occurredAt ?? "").slice(11, 16)}</span>
+        <span className="min-w-0">
+          <span className={KIND}>{e.kind}</span>
+          {e.actor ? <span className="text-muted-foreground text-xs"> {e.actor.split("@")[0]}</span> : null}
+          <div className={BODY}>{e.body ?? ""}</div>
         </span>
       </li>
     ))}
@@ -23,14 +29,14 @@ export const Timeline = ({ events }: { events: TimelineEvent[] }) => (
 );
 
 export const Ownership = ({ assignments }: { assignments: Assignment[] }) => (
-  <ul className="tl">
+  <ul className="list-none">
     {assignments.length ? (
       assignments.map((a, i) => (
-        <li key={i}>
-          <span className="when">{(a.createdAt ?? "").slice(5, 10)}</span>
-          <span className="what">
-            <span className="kind">{a.role}</span>
-            <div className="body">
+        <li key={i} className={ITEM}>
+          <span className={WHEN}>{(a.createdAt ?? "").slice(5, 10)}</span>
+          <span className="min-w-0">
+            <span className={KIND}>{a.role}</span>
+            <div className={BODY}>
               {a.toUser}
               {a.reason ? ` — ${a.reason}` : ""}
             </div>
@@ -38,7 +44,7 @@ export const Ownership = ({ assignments }: { assignments: Assignment[] }) => (
         </li>
       ))
     ) : (
-      <li className="muted">Not assigned yet.</li>
+      <li className={`${ITEM} text-muted-foreground text-xs`}>Not assigned yet.</li>
     )}
   </ul>
 );

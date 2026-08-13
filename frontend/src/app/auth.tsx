@@ -46,15 +46,15 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   if (me === undefined) {
     return (
-      <div style={{ height: "100vh", display: "grid", placeItems: "center" }}>
-        <span className="of">Checking your session…</span>
+      <div className="grid h-svh place-items-center">
+        <span className="text-muted-foreground text-xs">Checking your session…</span>
       </div>
     );
   }
 
   if (me === null) {
     return (
-      <div style={{ height: "100vh", display: "grid", placeItems: "center" }}>
+      <div className="grid h-svh place-items-center">
         <Empty
           title="You need to sign in"
           body="Frontline uses your Facilio account."

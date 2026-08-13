@@ -11,8 +11,10 @@
 import { useEffect, useState } from "react";
 import { PageShell } from "../../../app/shell/PageShell";
 import { Button } from "../../../ui/Button";
-import { Card } from "../../../ui/Card";
+import { Bar, Card, Split } from "../../../ui/Card";
 import { Chip } from "../../../ui/Chip";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Row, RowTitle } from "../../../ui/Row";
 import { SettingsSkeleton } from "../../../ui/Skeleton";
 import { Empty, ErrorState } from "../../../ui/States";
@@ -149,7 +151,7 @@ export function Settings() {
 
   return (
     <PageShell title="Settings" subtitle="What we do, where, and how fast we respond">
-      <div className="split">
+      <Split>
         <Card title="Service coverage" pad={false}>
           {settings.areas.length ? (
             <>
@@ -164,19 +166,19 @@ export function Settings() {
                     <div>
                       {served.length ? (
                         served.map((l) => (
-                          <span key={l.id} style={{ marginRight: "var(--numerical-nl-01)" }}>
+                          <span key={l.id} className="mr-1">
                             <Chip tone="blue">{`${l.code} · ${l.name}`}</Chip>
                           </span>
                         ))
                       ) : (
-                        <span className="meta">nothing enabled</span>
+                        <span className="text-muted-foreground mt-px text-xs">nothing enabled</span>
                       )}
                     </div>
                   </Row>
                 );
               })}
-              <div className="in" style={{ borderTop: "1px solid var(--colors-border-neutral-base-subtler)" }}>
-                <span className="of">
+              <div className="border-t p-4">
+                <span className="text-muted-foreground text-xs">
                   This is what the AI checks a lead against. A service outside these areas is scored{" "}
                   <Chip>outside region</Chip> automatically.
                 </span>
@@ -188,40 +190,40 @@ export function Settings() {
         </Card>
 
         <Card title="Response targets">
-          <label className="f">First response (minutes)</label>
-          <input
+          <label className="text-muted-foreground mt-4 mb-1 block text-xs">First response (minutes)</label>
+          <Input
             type="number"
             value={draft.firstResponseMins}
             onChange={(e) => set("firstResponseMins", e.target.value)}
           />
-          <label className="f">Qualification (minutes)</label>
-          <input
+          <label className="text-muted-foreground mt-4 mb-1 block text-xs">Qualification (minutes)</label>
+          <Input
             type="number"
             value={draft.qualificationMins}
             onChange={(e) => set("qualificationMins", e.target.value)}
           />
-          <label className="f">Hand to sales (minutes)</label>
-          <input type="number" value={draft.assignmentMins} onChange={(e) => set("assignmentMins", e.target.value)} />
-          <div className="bar" style={{ marginTop: "var(--spacing-container-large)" }}>
+          <label className="text-muted-foreground mt-4 mb-1 block text-xs">Hand to sales (minutes)</label>
+          <Input type="number" value={draft.assignmentMins} onChange={(e) => set("assignmentMins", e.target.value)} />
+          <Bar className="mt-4">
             <Button variant="primary" onClick={() => void saveSla()} disabled={saving}>
               Save targets
             </Button>
-          </div>
-          <div className="of" style={{ marginTop: "var(--spacing-container-medium)" }}>
+          </Bar>
+          <div className="text-muted-foreground mt-3 text-xs">
             Overdue is worked out when the list loads, so a change here shows immediately — set the first target to 1
             minute to watch the inbox turn red.
           </div>
         </Card>
-      </div>
+      </Split>
 
-      <div style={{ marginTop: "var(--spacing-container-large)" }}>
+      <div className="mt-4">
         <Card title="Lead analyst agent" meta="provider, model and schema are CLI-managed">
-          <div className="split">
+          <Split>
             <div>
-              <label className="f" style={{ marginTop: 0 }}>
+              <label className="text-muted-foreground mt-0 mb-1 block text-xs">
                 Name the browser resolves
               </label>
-              <input
+              <Input
                 type="text"
                 value={draft.analystAgent}
                 placeholder="lead-analyst"
@@ -229,58 +231,64 @@ export function Settings() {
               />
             </div>
             <div>
-              <label className="f" style={{ marginTop: 0 }}>
+              <label className="text-muted-foreground mt-0 mb-1 block text-xs">
                 Flow-AI link name (server path)
               </label>
-              <input
+              <Input
                 type="text"
                 value={draft.analystAgentLink}
                 placeholder="lead-analyst_&lt;appuuid&gt;"
                 onChange={(e) => set("analystAgentLink", e.target.value)}
               />
             </div>
-          </div>
+          </Split>
 
-          <div className="of" style={{ marginTop: "var(--spacing-container-small)" }}>
+          <div className="text-muted-foreground mt-2 text-xs">
             Both point at an agent created with the CLI — copy them from{" "}
-            <span className="mono">facilio vibe agent get lead-analyst</span>. They are two different identifiers:
+            <span className="font-mono">facilio vibe agent get lead-analyst</span>. They are two different identifiers:
             passing one where the other belongs returns <i>agent not found</i>. A blank field leaves the saved value
             unchanged.
             {settings.agent?.linkConfigured ? null : (
-              <div className="err" style={{ marginTop: "var(--numerical-nl-01)" }}>
+              <div className="text-destructive mt-1">
                 The link name is not set, so server-side assessment will fail. Assessing from this console still works.
               </div>
             )}
           </div>
 
-          <label className="f">Scope notes — appended to the generated service brief</label>
-          <textarea
+          <label className="text-muted-foreground mt-4 mb-1 block text-xs">
+            Scope notes — appended to the generated service brief
+          </label>
+          <Textarea
             rows={3}
             value={draft.scopeNotes}
             placeholder="e.g. No high-rise façade work. Minimum job value AED 2,000."
             onChange={(e) => set("scopeNotes", e.target.value)}
           />
 
-          <label className="f">Task instruction — the closing line the analyst gets for every lead</label>
-          <textarea rows={2} value={draft.analystTask} onChange={(e) => set("analystTask", e.target.value)} />
+          <label className="text-muted-foreground mt-4 mb-1 block text-xs">
+            Task instruction — the closing line the analyst gets for every lead
+          </label>
+          <Textarea rows={2} value={draft.analystTask} onChange={(e) => set("analystTask", e.target.value)} />
 
-          <div className="bar" style={{ marginTop: "var(--spacing-container-large)" }}>
+          <Bar className="mt-4">
             <Button variant="primary" onClick={() => void savePrompt()} disabled={saving}>
               Save agent settings
             </Button>
             <Button onClick={() => void restoreTask()} disabled={saving}>
               Restore default task
             </Button>
-          </div>
+          </Bar>
 
-          <div className="of" style={{ marginTop: "var(--spacing-container-medium)" }}>
+          <div className="text-muted-foreground mt-3 text-xs">
             Applies to the next assessment; stored verdicts keep the prompt version that produced them. The agent's own
             instructions, provider, model and output schema are fixed when the agent is created — change those with{" "}
-            <span className="mono">facilio vibe agent update</span>.
+            <span className="font-mono">facilio vibe agent update</span>.
           </div>
 
-          <label className="f">What the analyst receives</label>
-          <pre className="raw">{promptPreview}</pre>
+          <label className="text-muted-foreground mt-4 mb-1 block text-xs">What the analyst receives</label>
+          <pre className="bg-muted text-muted-foreground mt-1 max-h-60 overflow-auto rounded-md p-3 font-mono text-[11px] whitespace-pre-wrap">
+            {promptPreview}
+          </pre>
         </Card>
       </div>
     </PageShell>

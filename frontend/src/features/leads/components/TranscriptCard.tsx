@@ -11,6 +11,8 @@
  */
 
 import { useEffect, useState } from "react";
+import { cn } from "@/lib/utils";
+import { MSG_AGENT, MSG_VISITOR, MSGS } from "../../../ui/bubbles";
 import { Card } from "../../../ui/Card";
 import { TranscriptSkeleton } from "../../../ui/Skeleton";
 import { getTranscript } from "../api/leads-util";
@@ -48,12 +50,11 @@ export function TranscriptCard({ token }: { token: string }) {
 
   return (
     <Card title="Website conversation" meta={`${messages.length} messages`}>
-      <div
-        className="msgs"
-        style={{ padding: 0, gap: "var(--spacing-container-medium)", maxHeight: 340, overflowY: "auto" }}
-      >
+      {/* The card body already pads, so the column drops its own gutter — MSGS
+          carries the chat page's — and caps its height instead of filling one. */}
+      <div className={cn(MSGS, "max-h-[340px] overflow-y-auto p-0")}>
         {messages.map((m, i) => (
-          <div className={`msg ${m.role === "agent" ? "a" : "v"}`} key={i}>
+          <div className={m.role === "agent" ? MSG_AGENT : MSG_VISITOR} key={i}>
             {m.content}
           </div>
         ))}

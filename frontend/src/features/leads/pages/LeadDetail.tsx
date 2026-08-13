@@ -253,7 +253,7 @@ export function LeadDetail() {
         </Button>
       }
     >
-      <Bar style={{ marginBottom: "var(--spacing-container-large)" }}>
+      <Bar className="mb-4">
         {actions.map((a) => (
           <Button
             key={a}
@@ -264,19 +264,19 @@ export function LeadDetail() {
             {a === "reassess" && assessing ? "Assessing…" : HANDLERS[a].label}
           </Button>
         ))}
-        <span className="grow" />
+        <span className="flex-1" />
         <StatusChip status={lead.status} />
         <SlaChip sla={detail.sla} />
       </Bar>
 
-      <Card style={{ marginBottom: "var(--spacing-container-large)" }}>
+      <Card className="mb-4">
         <LifecycleSteps lead={lead} />
       </Card>
 
       <Split>
         <Stack>
           <Card title="Enquiry">
-            <div style={{ marginBottom: "var(--spacing-container-large)" }}>
+            <div className="mb-4">
               {lead.description ?? "No description captured."}
             </div>
             <Facts
@@ -305,12 +305,12 @@ export function LeadDetail() {
               ]}
             />
             {lead.dispositionReason ? (
-              <div style={{ marginTop: "var(--spacing-container-medium)" }}>
+              <div className="mt-3">
                 <Chip tone="red">{`closed: ${lead.dispositionReason}`}</Chip>
               </div>
             ) : null}
             {detail.duplicates.length ? (
-              <div style={{ marginTop: "var(--spacing-container-medium)" }}>
+              <div className="mt-3">
                 <Chip tone="orange">
                   {`${detail.duplicates.length} duplicate ${
                     detail.duplicates.length === 1 ? "enquiry" : "enquiries"

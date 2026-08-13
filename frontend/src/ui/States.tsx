@@ -7,6 +7,7 @@
  */
 
 import type { ReactNode } from "react";
+import { cn } from "@/lib/utils";
 import { Button } from "./Button";
 
 export function Empty({
@@ -36,10 +37,10 @@ export function Empty({
   tight?: boolean;
 }) {
   return (
-    <div className={`empty${tight ? " tight" : ""}`}>
-      <div className="empty-title">{title}</div>
-      {body ? <div className="empty-body">{body}</div> : null}
-      {action ? <div className="empty-action">{action}</div> : null}
+    <div className={cn("text-muted-foreground text-center", tight ? "px-4 py-6" : "px-4 py-11")}>
+      <div className="text-foreground text-sm font-medium">{title}</div>
+      {body ? <div className="mt-1 text-sm">{body}</div> : null}
+      {action ? <div className="mt-4">{action}</div> : null}
     </div>
   );
 }
@@ -60,11 +61,11 @@ export function ErrorState({
   tight?: boolean;
 }) {
   return (
-    <div className={`empty${tight ? " tight" : ""}`}>
-      <div className="empty-title err">Could not load this</div>
-      <div className="err-msg">{message}</div>
+    <div className={cn("text-muted-foreground text-center", tight ? "px-4 py-6" : "px-4 py-11")}>
+      <div className="text-destructive text-sm font-medium">Could not load this</div>
+      <div className="text-destructive mt-1 text-sm">{message}</div>
       {onRetry ? (
-        <div className="empty-action">
+        <div className="mt-4">
           <Button onClick={onRetry}>Try again</Button>
         </div>
       ) : null}

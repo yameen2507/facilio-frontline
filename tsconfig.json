@@ -1,0 +1,17 @@
+{
+  // Exists for the shadcn CLI, which resolves the "@/*" alias in components.json
+  // through the tsconfig at the repo root. The real typecheck lives in
+  // frontend/tsconfig.json (`npm run typecheck:frontend`), which declares the
+  // same alias — change both together.
+  //
+  // `include` is one ambient declaration file on purpose: `npm run typecheck`
+  // at the root has always been a no-op, and pulling src/ in here would
+  // surface a backlog of backend errors that has nothing to do with the UI.
+  "compilerOptions": {
+    "noEmit": true,
+    "paths": {
+      "@/*": ["./frontend/src/*"]
+    }
+  },
+  "include": ["frontend/src/css.d.ts"]
+}

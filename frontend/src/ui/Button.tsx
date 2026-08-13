@@ -1,5 +1,8 @@
 /**
- * Buttons, and the link that looks like one.
+ * Buttons, and the link that looks like one — thin adapters over shadcn's
+ * Button so the app's call sites keep their two-variant vocabulary
+ * ("default" outline, "primary" filled) while the styling comes from the
+ * design system.
  *
  * Two exports rather than one component with an optional `href`: a button that
  * may or may not be an anchor needs a union of two different event and attribute
@@ -9,12 +12,13 @@
 
 import type { CSSProperties, ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { Button as UIButton } from "@/components/ui/button";
 import { Icon, type IconName } from "./Icon";
 
 type Variant = "default" | "primary";
 
-const classFor = (variant: Variant, small: boolean) =>
-  `btn${variant === "primary" ? " pri" : ""}${small ? " sm" : ""}`;
+const uiVariant = (variant: Variant): "default" | "outline" =>
+  variant === "primary" ? "default" : "outline";
 
 export function Button({
   children,
@@ -36,10 +40,11 @@ export function Button({
   glyph?: IconName;
   style?: CSSProperties;
 }) {
-  return (
-    <button
+  const button = (
+    <UIButton
       type="button"
-      className={classFor(variant, small)}
+      variant={uiVariant(variant)}
+      size={small ? "sm" : "default"}
       onClick={onClick}
       disabled={disabled}
       title={title}
@@ -47,22 +52,24 @@ export function Button({
     >
       {glyph ? <Icon name={glyph} size={13} /> : null}
       {children}
-    </button>
+    </UIButton>
   );
+
+  // shadcn's disabled state sets pointer-events-none, which also swallows the
+  // title tooltip — the one explanation a disabled control can give. The inert
+  // wrapper takes over hover duty only in that state.
+  return disabled && title ? <span title={title}>{button}</span> : button;
 }
 
 /**
  * A route link that looks like a button.
  *
- * Wraps the router's `Link` rather than a bare `<a href="#/…">`. A raw hash anchor
- * does navigate — HashRouter observes `location.hash` — but it goes around the
- * router, and it makes every call site spell out a route as a string with a `#`
- * prefix. Those literals are the one kind of route reference that would keep
- * compiling while silently breaking if the router ever changed.
- *
- * This is the design system's only dependency on the router. Accepted because the
- * alternative — a `Button` with `useNavigate` — gives up middle-click, right-click
- * and open-in-new-tab, which a link should never lose.
+ * Wraps the router's `Link` (via asChild) rather than a bare `<a href="#/…">`:
+ * a raw hash anchor navigates around the router, and it makes every call site
+ * spell out a route as a string with a `#` prefix — the one kind of route
+ * reference that keeps compiling while silently breaking if the router changed.
+ * A `Button` with `useNavigate` would give up middle-click, right-click and
+ * open-in-new-tab, which a link should never lose.
  */
 export function LinkButton({
   children,
@@ -79,9 +86,11 @@ export function LinkButton({
   glyph?: IconName;
 }) {
   return (
-    <Link className={classFor(variant, small)} to={to}>
-      {glyph ? <Icon name={glyph} size={13} /> : null}
-      {children}
-    </Link>
+    <UIButton asChild variant={uiVariant(variant)} size={small ? "sm" : "default"}>
+      <Link to={to}>
+        {glyph ? <Icon name={glyph} size={13} /> : null}
+        {children}
+      </Link>
+    </UIButton>
   );
 }

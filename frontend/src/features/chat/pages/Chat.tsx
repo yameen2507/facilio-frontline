@@ -17,7 +17,10 @@ import { useEffect, useRef, useState } from "react";
 import { PageShell } from "../../../app/shell/PageShell";
 import { errMessage } from "../../../lib/request";
 import { vibe } from "../../../lib/vibe";
+import { Input } from "@/components/ui/input";
+import { MSGS, MSG_AGENT, MSG_VISITOR } from "../../../ui/bubbles";
 import { Button } from "../../../ui/Button";
+import { Card } from "../../../ui/Card";
 import { Chip } from "../../../ui/Chip";
 import { ChatSkeleton } from "../../../ui/Skeleton";
 import { useToast } from "../../../ui/Toast";
@@ -149,31 +152,34 @@ export function Chat() {
 
   return (
     <PageShell title="Website chat" subtitle="What a visitor sees on the company site">
-      <div className="chat-shell">
-        <div className="card chat">
-          <div className="site">
+      <div className="mx-auto max-w-[620px]">
+        <Card pad={false} className="flex h-[68vh] min-h-[420px] flex-col">
+          <div className="text-muted-foreground flex items-center gap-2 border-b px-4 py-2.5 text-xs">
             <Chip tone="blue">albaytgrill.ae</Chip>
             <span>Chat with us — commercial kitchen extract cleaning</span>
           </div>
 
           {session ? (
-            <div className="msgs" ref={scroller}>
+            <div className={MSGS} ref={scroller}>
               {session.messages.map((m, i) =>
                 m.role === "system" ? (
-                  <div className="sys" key={i}>
+                  <div
+                    className="self-center rounded-full bg-green-100 px-4 py-1.5 text-center text-xs text-green-700 dark:bg-green-950 dark:text-green-400"
+                    key={i}
+                  >
                     {m.content}
                   </div>
                 ) : (
-                  <div className={`msg ${m.role === "agent" ? "a" : "v"}`} key={i}>
+                  <div className={m.role === "agent" ? MSG_AGENT : MSG_VISITOR} key={i}>
                     {m.content}
                   </div>
                 )
               )}
               {thinking ? (
-                <div className="typing">
-                  <i />
-                  <i />
-                  <i />
+                <div className="flex gap-1 self-start px-4 py-2.5">
+                  <span className="bg-muted-foreground size-1.5 animate-bounce rounded-full" />
+                  <span className="bg-muted-foreground size-1.5 animate-bounce rounded-full [animation-delay:150ms]" />
+                  <span className="bg-muted-foreground size-1.5 animate-bounce rounded-full [animation-delay:300ms]" />
                 </div>
               ) : null}
             </div>
@@ -183,9 +189,10 @@ export function Chat() {
             <ChatSkeleton />
           )}
 
-          <div className="composer">
-            <input
+          <div className="flex gap-2 border-t p-4">
+            <Input
               type="text"
+              className="flex-1 rounded-full"
               placeholder="Type your message…"
               autoComplete="off"
               value={draft}
@@ -200,9 +207,9 @@ export function Chat() {
               Send
             </Button>
           </div>
-        </div>
+        </Card>
 
-        <div className="chat-foot">
+        <div className="text-muted-foreground mt-3 flex items-center justify-between gap-4 text-xs">
           <span>The assistant never quotes a price — a surveyor confirms that on site.</span>
           <Button small onClick={() => void start()}>
             Start a new conversation
