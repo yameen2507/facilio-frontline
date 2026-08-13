@@ -1,18 +1,51 @@
 /**
- * Inline SVG icons.
+ * Icons — Facilio's own set where it has one, hand-drawn SVG where it doesn't.
  *
- * Inline, not a webfont or a sprite URL: `script-src` has no CDN, and an icon
- * library that resolves glyphs by name over the network fails *silently* when a
- * name is wrong — you get a blank, not an error. Inlining turns a bad name into a
- * compile error instead, because `IconName` is a union of the keys below.
+ * `<fc-icon>` from `@facilio/icons` fetches each SVG from icons.facilio.com at
+ * render time. Everything below follows from that one fact:
  *
- * Written as JSX elements rather than path strings so there is no
- * `dangerouslySetInnerHTML` in the design system. All on a 16 grid, stroked with
- * `currentColor`, so an icon takes its colour from the element around it and
- * needs no theme handling of its own.
+ * HOW TO USE IT AT ALL. The import is `@facilio/icons/dist/bundle.js`, not
+ * `@facilio/icons` and not `@facilio/icons/dist/loader`. The published version
+ * (1.8.0-beta-lit-1.0) is a Lit rewrite whose tarball contains only `bundle.js`,
+ * while its package.json still advertises a `main`, `types` and Stencil-era
+ * `loader` that were never published — all three of those import paths fail to
+ * resolve. The bundle self-registers `fc-icon` at module scope, so there is no
+ * `defineCustomElements(window)` step.
+ *
+ * WHY NAMES LIVE IN A MAP HERE. A wrong group/name fetches a URL that 403s, and
+ * the component swallows the error and renders nothing — an absent icon, no
+ * warning. Every pair below was verified against the CDN with a real request
+ * before being written down; none were guessed. The CDN has no listing endpoint,
+ * so this map IS the index.
+ *
+ * WHY FIVE ARE STILL INLINE. The Facilio set has no equivalent — probed, not
+ * assumed. There is a single `default/theme` glyph, but the theme control needs
+ * three DISTINCT icons for light / dark / follow-system, and one glyph cannot
+ * distinguish three states. Sidebar-collapse and back-arrow have no match at all.
+ *
+ * WHY EVERY INLINE GLYPH IS KEPT even where a Facilio icon is used: emptying
+ * `FACILIO` below reverts the whole app to inline SVGs with no other edit. If the
+ * app's CSP turns out to block `connect-src` to icons.facilio.com, every fc-icon
+ * goes blank — and that one-line revert is the fix.
+ *
+ * `color="currentColor"` is what makes these behave like the inline ones: the
+ * component injects it as `fill` on the fetched SVG, so an icon inherits its
+ * parent's colour and an active nav item recolours its icon for free.
  */
 
+import "@facilio/icons/dist/bundle.js";
+
 import type { ReactElement } from "react";
+
+/** group/name pairs, each confirmed to return 200 from the CDN. */
+const FACILIO: Partial<Record<IconName, { group: string; name: string }>> = {
+  inbox: { group: "default", name: "workorder" },
+  building: { group: "default", name: "building" },
+  sliders: { group: "default", name: "settings" },
+  chat: { group: "default", name: "comment" },
+  logOut: { group: "action", name: "sign-out" },
+  refresh: { group: "action", name: "refresh" },
+};
 
 const GLYPHS = {
   inbox: (
@@ -81,6 +114,28 @@ const GLYPHS = {
 export type IconName = keyof typeof GLYPHS;
 
 export function Icon({ name, size = 15 }: { name: IconName; size?: number }) {
+  const facilio = FACILIO[name];
+
+  if (facilio) {
+    return (
+      // No className: the `fc-icon` element selector in app.css already carries
+      // the layout the `.ic` class provides for the inline SVGs.
+      <fc-icon
+        group={facilio.group}
+        // A bare number: the component interpolates it into `${size}px`, so
+        // passing "15px" would produce "15pxpx" and size nothing.
+        size={String(size)}
+        name={facilio.name}
+        color="currentColor"
+        // Reserves the box before the fetch resolves. Without it the host is
+        // zero-width until the SVG arrives, and every row holding an icon
+        // visibly reflows a moment after paint.
+        style={{ width: size, height: size }}
+        aria-hidden="true"
+      />
+    );
+  }
+
   return (
     <svg
       className="ic"

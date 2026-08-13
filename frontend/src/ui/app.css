@@ -65,6 +65,23 @@ button {
   flex: none;
 }
 
+/* `<fc-icon>` from @facilio/icons. A custom element defaults to `display: inline`
+   with no intrinsic size, and it renders into the LIGHT DOM (its Lit
+   `createRenderRoot` returns the host), so the fetched SVG is an ordinary child
+   here and needs centring like any other. `line-height: 0` stops the inline box
+   adding a descender gap below the glyph. */
+fc-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  line-height: 0;
+}
+
+fc-icon svg {
+  display: block;
+}
+
 /* ── Shell ──────────────────────────────────────────────────────────────────
    `.app` owns the viewport and hides its own overflow, which is what makes
    `.content` the only scroll region: the sidebar and page header cannot scroll
