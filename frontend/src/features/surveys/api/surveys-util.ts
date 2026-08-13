@@ -146,9 +146,9 @@ export const transitionSurvey = (
 export const scheduleVisit = (surveyId: string, body: Record<string, unknown>) =>
   call<{ visit: Visit }>("schedule", { surveyId, ...payload(body) });
 
-/** [SEAM] `survey.visit-transition` — `no_show` and `cancelled` require a reason. */
-export const transitionVisit = (visitId: string, toStatus: string, reason: string) =>
-  call<{ visit: Visit }>("visit-transition", { visitId, toStatus, reason });
+/** `survey.visit-transition` — no_show/cancelled need a reason; a no-show NEVER advances the survey. */
+export const transitionVisit = (visitId: string, toStatus: string, reason: string, actorEmail: string) =>
+  call<{ visit: Visit }>("visit-transition", { visitId, toStatus, reason, actorEmail });
 
 /** `survey.assign` — multi-select, one idempotent multi-row insert. */
 export const assignSurveyors = (

@@ -151,6 +151,17 @@ export type SurveyListResponse = {
   truncated?: boolean;
 };
 
+/** One row of the audit trail — fl_event, which every survey action writes. */
+export type SurveyEvent = {
+  id: string;
+  entityType: string;
+  kind: string;
+  actor?: string | null;
+  body?: string | null;
+  meta?: Record<string, unknown> | null;
+  occurredAt: string;
+};
+
 export type SurveyDetailResponse = {
   survey: Survey;
   visits: Visit[];
@@ -158,6 +169,12 @@ export type SurveyDetailResponse = {
   nodes: ProspectNode[];
   reconciliation: ReconciliationItem[];
   qualifications: Qualification[];
+  /** Newest first. */
+  events?: SurveyEvent[];
+  /** Evidence at the desk — every photo on this survey's entities. */
+  photos?: WalkPhoto[];
+  /** id → label, for captioning photos by the room they evidence. */
+  entryLabels?: { id: string; entryLabel: string }[];
   /** How much of the template the T2 snapshot copied — the walk's size. */
   snapshot?: { sections: number; questions: number };
 };
@@ -235,8 +252,18 @@ export type WalkPhoto = {
   } | null;
 };
 
+/** The org's capture rules, read from fl_setting — config, never hardcoded. */
+export type WalkSettings = {
+  conditionScaleLabels?: Record<string, string> | null;
+  /** D-e: 1_is_worst (5 = excellent) or 5_is_worst (5 = filthy). Feeds pricing. */
+  conditionScaleDirection?: string;
+  requirePhotoBelowCondition?: number;
+  geotagCapture?: string;
+};
+
 export type WalkState = {
   survey: Pick<Survey, "id" | "refNo" | "title" | "status" | "leadUserEmail" | "templateId">;
+  settings?: WalkSettings;
   visit: Pick<
     Visit,
     "id" | "visitNumber" | "sequenceNo" | "status" | "scheduledStart" | "scheduledEnd" | "timezone"

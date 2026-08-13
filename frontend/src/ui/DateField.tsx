@@ -17,17 +17,22 @@
  * converts to UTC on the way out. Neither appears here.
  */
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CalendarIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 
 /** Where a date-only pick lands when the field also carries a time. */
 const DEFAULT_TIME = "09:00";
+
+/** Quarter-hours, 00:00–23:45. Granularity for booking a site visit. */
+const TIME_SLOTS: string[] = Array.from({ length: 24 * 4 }, (_, i) => {
+  const h = Math.floor(i / 4);
+  const m = (i % 4) * 15;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+});
 
 const pad = (n: number): string => String(n).padStart(2, "0");
 
@@ -183,8 +188,28 @@ export function DateField({ id, value, onChange, disabled, autoFocus, className 
  */
 export function DateTimeField({ id, value, onChange, disabled, autoFocus, className }: FieldProps) {
   const [open, setOpen] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
   const selected = parseDatePart(value);
   const time = parseTimePart(value);
+  const activeTime = time || DEFAULT_TIME;
+
+  /**
+   * A time already on the record that is not a quarter-hour still has to be
+   * selectable, or opening the picker would silently round it.
+   */
+  const slots = useMemo(
+    () =>
+      TIME_SLOTS.includes(activeTime) ? TIME_SLOTS : [...TIME_SLOTS, activeTime].sort(),
+    [activeTime]
+  );
+
+  // Open the column at the chosen time rather than at midnight.
+  useEffect(() => {
+    if (!open) return;
+    listRef.current?.querySelector<HTMLElement>('[data-active="true"]')?.scrollIntoView({
+      block: "center",
+    });
+  }, [open]);
 
   const commit = (date: Date | null, nextTime: string) => {
     if (!date) return onChange("");
@@ -202,29 +227,43 @@ export function DateTimeField({ id, value, onChange, disabled, autoFocus, classN
         className={className}
       />
       <PopoverContent align="start" className="w-auto p-0">
-        <Calendar
-          mode="single"
-          selected={selected ?? undefined}
-          defaultMonth={selected ?? undefined}
-          onSelect={(d) => commit(d ?? null, time)}
-        />
-        <div className="flex items-center gap-2 border-t p-3">
-          <Label htmlFor={`${id ?? "dt"}-time`} className="text-muted-foreground text-xs">
-            Time
-          </Label>
-          <Input
-            id={`${id ?? "dt"}-time`}
-            type="time"
-            value={time || DEFAULT_TIME}
-            disabled={!selected}
-            onChange={(e) => commit(selected, e.target.value)}
-            className="h-8 w-[7.5rem]"
+        <div className="flex">
+          <Calendar
+            mode="single"
+            selected={selected ?? undefined}
+            defaultMonth={selected ?? undefined}
+            onSelect={(d) => commit(d ?? null, time)}
           />
+          {/* The time column is buttons in a scroller, NOT `<input type="time">`.
+              A native time input opens the browser's own spinner — a white
+              OS panel that ignores the theme, and whose picker indicator is an
+              unstyleable glyph. That is the same thing the calendar replaced,
+              so it has no business reappearing inside this popover. */}
+          <div className="flex w-[7.5rem] flex-col border-l">
+            <div className="text-muted-foreground border-b px-3 py-2 text-xs">Time</div>
+            <div ref={listRef} className="flex flex-col gap-1 overflow-y-auto p-2 [max-height:15rem]">
+              {slots.map((t) => (
+                <Button
+                  key={t}
+                  type="button"
+                  size="sm"
+                  variant={t === activeTime && selected ? "default" : "ghost"}
+                  data-active={t === activeTime ? "true" : undefined}
+                  disabled={!selected}
+                  className="shrink-0 justify-center font-normal tabular-nums"
+                  onClick={() => commit(selected, t)}
+                >
+                  {displayTime(t)}
+                </Button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="flex justify-end border-t p-2">
           <Button
             type="button"
             variant="ghost"
             size="sm"
-            className="ml-auto"
             disabled={!selected}
             onClick={() => {
               onChange("");
