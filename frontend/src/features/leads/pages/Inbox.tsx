@@ -65,7 +65,6 @@ export function Inbox() {
   return (
     <PageShell
       title="Inbox"
-      subtitle={`${counts.open} open · ${counts.overdue} overdue`}
       actions={
         <Button small glyph="refresh" onClick={reload}>
           Refresh
