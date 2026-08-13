@@ -211,7 +211,7 @@ Enum-likes are plain `text`, validated in `domain/` — never Postgres `ENUM`. N
 | `fl_lead_analysis` | versioned AI verdict — lead_id, version, verdict, score, understanding_json, reasons_json, model_name, created_at |
 | `fl_lead_assignment` | ownership history — lead_id, from_user, to_user, role, reason, at |
 | `fl_deal` | lead_id, account_id, contact_id, ref_no, title, stage, estimated_value, currency, sales_owner, source |
-| `fl_account` | lead_id, name, email, phone, address_json, **facilio_client_id**, sync_status |
+| `fl_account` | lead_id *(the lead that first created it)*, name, email, phone, website_domain, address_json, **facilio_client_id**, sync_status |
 | `fl_account_contact` | account_id, name, email, phone, is_primary, **facilio_contact_id**, sync_status |
 | `fl_service_area` | name, emirate/region, country, active |
 | `fl_service_line` | code, name, active |
@@ -251,6 +251,8 @@ Normalised dedup keys (`email_norm`, `phone_norm`, `domain_norm`) are stored alo
 | `nurture` | real but not now; `nurture_until` returns it to the queue | — |
 | `converted` | Account + Contact + Deal created — **terminal, success** | — |
 | `closed` | not proceeding — **terminal**, requires a reason | — |
+
+**Neither terminal state is a dedup target.** A repeat enquiry from a converted customer is their next job, not a duplicate of their last one, so it comes in as a real lead; `convert` then finds the company's existing account and opens a second deal on it. Accounts are per company, deals are per lead.
 
 ### `disposition_reason` — only when `closed`
 
@@ -307,7 +309,9 @@ closed     → (terminal; reopening creates a new lead linked to the old)
 | `assign` | assign/reassign actioner or sales owner; writes `fl_lead_assignment` |
 | `log-activity` | call, email, note, attachment → `fl_event` |
 | `analyse` | run `lead-analyst`, store a new `fl_lead_analysis` version |
-| `convert` | qualified → Account + Contact + Deal; enqueues Facilio client + contact writes |
+| `convert` | qualified → Account + Contact + Deal; resolves the company's existing account before creating one; enqueues Facilio client + contact writes |
+| `account-list` | companies with their lead and deal counts |
+| `account-get` | account + contacts + deals + every lead that resolved to it. Read-only: editing needs an `update_client` outbox action first |
 | `settings-get` / `settings-put` | service areas, service lines, coverage, SLA targets |
 
 ### `portal` (public, added with the widget)
@@ -376,6 +380,8 @@ Consequences to respect:
 - **Never** add a handler that waits on a model. The same limit applies to any slow third-party API.
 - The browser (or CLI) owns the agent call; `buildAnalystInput` is exported so the caller can construct the same prompt the server would have.
 - A scheduled job cannot analyse leads either — same timeout — so batch analysis needs the same client-driven shape.
+
+**What "agent configuration in the UI" can and cannot mean.** An agent's provider, model, output schema and its own `--instructions` are set by `facilio vibe agent create/update` and the browser SDK exposes only `executeAgent` — there is no runtime path to any of them. So the Settings screen edits the one thing this app controls: the text it *sends*. Two settings hold it — `agent.scope_notes`, appended to the generated coverage brief, and `agent.analyst_task`, the closing instruction in `buildAnalystInput`. Coverage data stays the source of truth for relevance; the note only carries nuance a matrix cannot express. Anything the UI cannot change is shown read-only rather than as an input that silently does nothing, and each stored verdict records whether the prompt was edited (`prompt_version`).
 
 ---
 

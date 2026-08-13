@@ -1,43 +1,27 @@
 /**
  * The single database boundary. Nothing in `modules/` may talk to StudioDatabase
- * directly, because two platform quirks have to be neutralised in exactly one
- * place (see ARCHITECTURE.md §3a):
+ * directly — the wire-format corrections in shared/row-map.ts have to be applied
+ * in exactly one place (see ARCHITECTURE.md §3a).
  *
- *  1. `numeric`, `bigint` and `count(*)` come back as JavaScript STRINGS, while
- *     `int` comes back as a number. Silent and inconsistent — a subtotal built
- *     from raw rows concatenates instead of adding.
- *  2. Columns are snake_case; the API contract is camelCase.
+ * PERFORMANCE NOTE — read before adding a query.
  *
- * Also parses each row's `data_json` overflow column into `data`, since that is
- * where any field we do not filter on lives.
+ * Every `query()` call costs ~194ms of fixed overhead on the deployed app,
+ * whatever the query does. Measured against `frontline`: a handler running no
+ * queries takes 1.10s, one running 18 trivial `count(*)`s takes 4.59s — a clean
+ * straight line at 194ms per call, with query complexity making no difference.
+ * That is bridge/connection cost, not execution time, and the DB role cannot
+ * create indexes anyway (see functions/migrate).
+ *
+ * So the only lever is FEWER CALLS. A read wanting several result sets should ask
+ * for them as `row_to_json` / `json_agg` subqueries in one statement, aliased
+ * `_obj` / `_arr` — row-map.ts unpacks those back into nested camelCase. Adding
+ * a query to a hot handler costs the user a fifth of a second.
  */
 
 import { StudioDatabase } from "@facilio/studio-functions";
+import { mapRow, type Row } from "./row-map";
 
-/**
- * Columns created as `numeric` by the CSV import (scripts/db-import.mjs).
- * Coercion is by column NAME rather than by sniffing values: a text column that
- * happens to hold "42" — a Facilio id, say — must stay a string.
- */
-const NUMERIC_COLUMNS = new Set([
-  "estimated_value",
-  "score",
-  "current_value",
-  "attempts",
-  "version",
-  "turn_count",
-  "turn_index",
-  "size_bytes",
-  "vibe_file_id",
-]);
-
-const snakeToCamel = (s: string): string => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
-
-/** Bare column name from an aliased select, e.g. `l.score` -> `score`. */
-const bare = (col: string): string => {
-  const dot = col.lastIndexOf(".");
-  return dot === -1 ? col : col.slice(dot + 1);
-};
+export type { Row } from "./row-map";
 
 let cached: StudioDatabase | null = null;
 
@@ -62,48 +46,6 @@ export function db(): StudioDatabase {
 
   cached = new StudioDatabase({ userName, password, schema });
   return cached;
-}
-
-export type Row = Record<string, unknown>;
-
-function mapRow(row: Row): Row {
-  const out: Row = {};
-
-  for (const key of Object.keys(row)) {
-    const col = bare(key);
-    const value = row[key];
-
-    if (col === "data_json") {
-      out.data = parseJson(value, {});
-      continue;
-    }
-
-    // Any *_json column is stored as text; hand back parsed structure.
-    if (col.endsWith("_json")) {
-      out[snakeToCamel(col.slice(0, -5))] = parseJson(value, null);
-      continue;
-    }
-
-    if (NUMERIC_COLUMNS.has(col) && typeof value === "string" && value !== "") {
-      const n = Number(value);
-      out[snakeToCamel(col)] = Number.isNaN(n) ? value : n;
-      continue;
-    }
-
-    out[snakeToCamel(col)] = value;
-  }
-
-  return out;
-}
-
-function parseJson<T>(value: unknown, fallback: T): T {
-  if (value === null || value === undefined || value === "") return fallback;
-  if (typeof value !== "string") return value as T;
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return fallback;
-  }
 }
 
 /** Rows mapped to camelCase with numerics coerced. Always pass a LIMIT in `sql`. */

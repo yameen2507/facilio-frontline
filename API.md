@@ -96,6 +96,8 @@ The app is also a Facilio **connection** — slug `frontline`, id 876, base URL 
 | `frontline.log-lead-activity` | log-activity | WRITE |
 | `frontline.analyse-lead` | analyse | WRITE |
 | `frontline.convert-lead` | convert | WRITE |
+| `frontline.list-accounts` | account-list | READ |
+| `frontline.get-account` | account-get | READ |
 | `frontline.drain-lead-sync` | sync-drain | WRITE |
 | `frontline.lead-sync-status` | sync-status | READ |
 | `frontline.retry-lead-sync` | sync-retry | WRITE |
@@ -145,14 +147,27 @@ Fetch them at runtime with `reference` rather than hardcoding.
 ## Settings
 
 ### `settings-get`
-No payload. Returns areas, service lines, coverage and SLA targets.
+No payload. Returns areas, service lines, coverage, SLA targets, the editable analyst `prompt`, the composed scope `brief`, and the analyst `agent` identity:
+
+```json
+{
+  "prompt": { "scopeNotes": "No high-rise façade work.", "analystTask": "Assess this lead…" },
+  "brief": "SERVICE SCOPE — we only serve these service/area combinations:\n- Dubai: …",
+  "agent": { "name": "lead-analyst", "link": "lead-analyst_df9b…", "linkConfigured": true }
+}
+```
+
+`brief` is what the analyst actually receives — the coverage matrix rendered as text, with `scopeNotes` appended. Provider, model, output schema and the agent's own `--instructions` are **not** here: they are fixed by `facilio vibe agent create/update` and there is no runtime path to them.
 
 ### `settings-put`
 Upserts by natural key (area `name`, service line `code`), so it is safe to re-run.
 
 ```json
 {
-  "analystAgent": "lead-analyst_df9b21f7a4a14901b15edabb254ca5a8",
+  "analystAgent": "lead-analyst",
+  "analystAgentLink": "lead-analyst_df9b21f7a4a14901b15edabb254ca5a8",
+  "scopeNotes": "No high-rise façade work. Minimum job value AED 2,000.",
+  "analystTask": "Assess this lead against the service scope above. Reply as JSON matching your output schema.",
   "areas": [
     { "name": "Dubai", "region": "Dubai", "country": "AE" },
     { "name": "Abu Dhabi", "region": "Abu Dhabi", "country": "AE" }
@@ -170,6 +185,10 @@ Upserts by natural key (area `name`, service line `code`), so it is safe to re-r
 ```
 
 Coverage references areas and service lines by human name/code — callers never handle ids. **Set these before using `analyse`**: the analyst judges relevance against this data, not against its prompt.
+
+`analystAgent` and `analystAgentLink` are two different identifiers and are not interchangeable — the logical name is what `vibe.executeAgent` resolves in the browser, the app-suffixed link name is what the server-side ai-studio actions address. Passing one where the other belongs returns `agent not found`.
+
+`scopeNotes` and `analystTask` are the only prompt text editable at runtime, and they must be sent **inside the `payload` envelope**: an empty string clears `scopeNotes`, and blank flat fields are dropped as unresolved connection-action templates. An empty `analystTask` restores the shipped default rather than sending the analyst a lead with no instruction. Verdicts stored while either is edited are stamped `prompt_version = "v1-edited"`, so a shift in scores stays distinguishable from model drift.
 
 ---
 
@@ -342,12 +361,66 @@ Requires status `qualified`. Creates `fl_account` + `fl_account_contact` + `fl_d
 
 ```json
 { "ok": true,
-  "data": { "leadId": "…", "accountId": "…", "contactId": "…",
+  "data": { "leadId": "…", "accountId": "…", "accountCreated": true, "contactId": "…",
             "dealId": "…", "dealRefNo": "DEAL-0001",
             "queued": ["account:…:create_client", "contact:…:create_client_contact"] } }
 ```
 
 **Idempotent** — re-running reuses the existing ids and queues nothing new.
+
+**Existing customers.** The account is looked up by company before one is created — matched on the originating lead's `domain_norm`, then `email_norm`. A repeat enquiry from a company we already converted therefore gets a **new deal on the existing account**, not a second account, and `accountCreated` comes back `false` with `queued` empty (the Facilio client already exists). A different person at that company becomes an additional non-primary contact; the same person is reused. Deals are always per lead.
+
+---
+
+## Accounts
+
+An account is the **company**, not the enquiry. It is created by `convert` and is
+read-only here: the row mirrors a Facilio client, so editing it needs an
+`update_client` outbox action that does not exist yet.
+
+### `account-list`
+```json
+{ "search": "manzil", "syncStatus": "synced", "limit": 50, "offset": 0 }
+```
+
+```json
+{ "ok": true,
+  "data": { "accounts": [ { "id": "…", "name": "Al Manzil Restaurant",
+                            "email": "…", "phone": "…", "websiteDomain": "almanzil.ae",
+                            "facilioClientId": "30248", "syncStatus": "synced",
+                            "leadCount": 2, "dealCount": 2, "createdAt": "…" } ],
+            "total": 1, "truncated": false } }
+```
+
+`leadCount` and `dealCount` are per account — two of each means one company that
+came back and got a second deal. All filters are optional; newest first.
+
+### `account-get`
+```json
+{ "accountId": "…" }
+```
+
+Returns the company and everything hanging off it — one batched query, not four.
+
+```json
+{ "ok": true,
+  "data": { "account": { "id": "…", "name": "…", "address": { "street": "…", "city": "…", "state": "…" },
+                         "facilioClientId": "30248", "syncStatus": "synced" },
+            "contacts": [ { "id": "…", "name": "Ahmed Khalil", "email": "…", "isPrimary": "true",
+                            "facilioContactId": null, "syncStatus": "synced" } ],
+            "deals":    [ { "id": "…", "refNo": "DEAL-0002", "leadId": "…", "stage": "open",
+                            "estimatedValue": 12000, "currency": "AED" } ],
+            "leads":    [ { "id": "…", "refNo": "LEAD-0004", "status": "converted",
+                            "source": "widget", "score": 82, "dealId": "…" } ] } }
+```
+
+`leads` is every lead that resolved to this company, so a repeat customer's
+history reads in one call. Contacts come primary-first, deals and leads newest-first;
+both are capped at 100.
+
+**`facilioContactId` is null even when `syncStatus` is `synced`** — the Facilio
+`create-client-contact` action returns no id we can extract (ARCHITECTURE.md §8a).
+Nothing consumes it yet; do not build on it.
 
 ---
 

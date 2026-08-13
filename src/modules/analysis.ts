@@ -15,7 +15,15 @@ import { mutate, nowIso, one } from "../shared/db";
 import { appendEvent } from "../shared/events";
 import { executeAction } from "../shared/facilio";
 import { parseAnalystReply, type AnalystResult } from "../domain/scoring";
-import { coverageBrief, getSetting } from "./settings";
+import {
+  type ConfigData,
+  configData,
+  coverageBrief,
+  DEFAULT_ANALYST_TASK,
+  getSetting,
+  promptConfig,
+  promptEdited,
+} from "./settings";
 import { getLead } from "./lead";
 
 /**
@@ -36,7 +44,11 @@ export const ANALYST_LINK_SETTING = "lead.analyst_agent_link";
  *
  * Passing the link name to the browser SDK returns 404 "agent not found".
  */
-export function analystAgentName(): string {
+export function analystAgentName(data?: ConfigData): string {
+  if (data) {
+    const v = data.settings[ANALYST_AGENT_SETTING];
+    return typeof v === "string" && v ? v : "lead-analyst";
+  }
   return getSetting<string>(ANALYST_AGENT_SETTING, "lead-analyst");
 }
 
@@ -49,6 +61,31 @@ export function analystAgentLink(): string {
     );
   }
   return configured;
+}
+
+export interface AnalystIdentity {
+  name: string;
+  link: string;
+  /** Blank `link` is a normal state, not an error — only the server path needs it. */
+  linkConfigured: boolean;
+}
+
+/**
+ * Who the analyst is, for display. Deliberately does NOT throw on a missing
+ * link name: the settings screen has to be able to show that it is unset, which
+ * is exactly the state `analystAgentLink()` refuses to return.
+ */
+export function analystIdentity(data?: ConfigData): AnalystIdentity {
+  // Two settings reads, or none when the caller already fetched the config.
+  const link = data
+    ? data.settings[ANALYST_LINK_SETTING] ?? ""
+    : getSetting<string>(ANALYST_LINK_SETTING, "");
+
+  return {
+    name: analystAgentName(data),
+    link: typeof link === "string" ? link : "",
+    linkConfigured: typeof link === "string" && link.trim() !== "",
+  };
 }
 
 /** Everything the analyst needs, as plain text. */
@@ -66,12 +103,12 @@ export function buildAnalystInput(lead: {
   estimatedValue: number | null;
   currency: string | null;
   source: string;
-}): string {
+}, data: ConfigData = configData()): string {
   const field = (label: string, value: unknown) =>
     value === null || value === undefined || value === "" ? null : `${label}: ${String(value)}`;
 
   const lines = [
-    coverageBrief(),
+    coverageBrief(data),
     "",
     "LEAD:",
     field("Company", lead.companyName),
@@ -87,7 +124,9 @@ export function buildAnalystInput(lead: {
     field("Channel", lead.source),
     field("Enquiry", lead.description),
     "",
-    "Assess this lead against the service scope above. Reply as JSON matching your output schema.",
+    // Editable from Settings. The agent's own instructions cannot be changed at
+    // runtime, so this closing line is where an operator retunes the task.
+    promptConfig(data).analystTask.trim() || DEFAULT_ANALYST_TASK,
   ].filter((l): l is string => l !== null);
 
   return lines.join("\n");
@@ -281,7 +320,10 @@ export async function analyseLead(input: {
   const result = parseAnalystReply(raw);
   const { version } = storeAnalysis(input.leadId, result, {
     modelName: source === "agent" ? analystAgentName() : "supplied",
-    promptVersion: "v1",
+    // Now that the prompt is editable, a stored verdict has to say whether it
+    // came from the shipped wording — otherwise a shift in scores after someone
+    // retunes Settings is indistinguishable from model drift.
+    promptVersion: promptEdited() ? "v1-edited" : "v1",
     raw,
   });
 

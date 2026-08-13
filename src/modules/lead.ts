@@ -114,8 +114,13 @@ export interface DuplicateMatch {
  * Find an existing lead that looks like the same enquiry. Ordered by confidence:
  * an email match is stronger evidence than a shared company domain.
  *
- * Closed duplicates are excluded as match targets so a company that was rejected
- * months ago can enquire again and be treated as a fresh lead.
+ * Both terminal states are excluded as match targets, for different reasons:
+ *   - `closed` — a company rejected months ago can enquire again and deserves a
+ *     fresh lead.
+ *   - `converted` — an existing customer's next job is a second enquiry, not a
+ *     duplicate of the first. Auto-closing it would leave the repeat business
+ *     with nowhere to go. `convert` attaches that lead to the account we already
+ *     have, so this produces a new deal rather than a second account.
  */
 export function findDuplicate(keys: {
   emailNorm: string | null;
@@ -132,7 +137,7 @@ export function findDuplicate(keys: {
       `select id, ref_no, company_name, status
          from fl_lead
         where ${attempt.column} = $1
-          and status <> 'closed'
+          and status not in ('closed', 'converted')
         order by created_at
         limit 1`,
       [attempt.value]
@@ -368,43 +373,82 @@ export interface LeadDetail {
   duplicates: Array<{ id: string; refNo: string; createdAt: string }>;
 }
 
+/**
+ * The whole lead view in ONE database call.
+ *
+ * This used to be five calls — lead, analysis, assignments, duplicates, timeline
+ * — which read naturally but cost five times the only thing that actually costs
+ * anything here. A `query()` call carries ~194ms of fixed bridge overhead on the
+ * deployed app regardless of what it asks for (see shared/db.ts), so five
+ * trivial lookups cost ~970ms while one compound lookup costs ~194ms.
+ *
+ * Each result set is a `row_to_json` / `json_agg` subquery aliased `_obj` / `_arr`,
+ * which shared/row-map.ts unpacks back into nested camelCase. `json_agg` is given
+ * an explicit ORDER BY as well as the inner `order by ... limit`: the inner one
+ * picks WHICH rows, the outer one guarantees the order they arrive in.
+ *
+ * The top-level select has no FROM, so it always returns exactly one row — a
+ * missing lead shows up as a null `lead_obj`, not as an empty result.
+ */
 export function leadDetail(id: string): LeadDetail {
-  const lead = requireLead(id);
-  const now = nowIso();
+  const row = one<{
+    lead: Lead | null;
+    analysis: Record<string, unknown> | null;
+    assignments: Array<Record<string, unknown>>;
+    duplicates: Array<{ id: string; refNo: string; createdAt: string }>;
+    timeline: ReturnType<typeof timeline>;
+  }>(
+    `select
+       (select row_to_json(x) from (
+          select ${COLUMNS} from fl_lead where id = $1
+        ) x) as lead_obj,
 
-  const analysis = one<Record<string, unknown>>(
-    `select id, version, verdict, score, understanding_json, relevance_json,
-            reasons_json, recommendation_json, model_name, created_at
-       from fl_lead_analysis
-      where lead_id = $1
-      order by version desc
-      limit 1`,
+       (select row_to_json(x) from (
+          select id, version, verdict, score, understanding_json, relevance_json,
+                 reasons_json, recommendation_json, model_name, created_at
+            from fl_lead_analysis
+           where lead_id = $1
+           order by version desc
+           limit 1
+        ) x) as analysis_obj,
+
+       (select coalesce(json_agg(x order by x.created_at desc), '[]'::json) from (
+          select id, from_user, to_user, role, reason, actor, created_at
+            from fl_lead_assignment
+           where lead_id = $1
+           order by created_at desc
+           limit 50
+        ) x) as assignments_arr,
+
+       (select coalesce(json_agg(x order by x.created_at desc), '[]'::json) from (
+          select id, ref_no, created_at
+            from fl_lead
+           where duplicate_of_lead_id = $1
+           order by created_at desc
+           limit 50
+        ) x) as duplicates_arr,
+
+       (select coalesce(json_agg(x order by x.occurred_at desc), '[]'::json) from (
+          select id, kind, actor, body, meta_json, occurred_at
+            from fl_event
+           where entity_type = 'lead' and entity_id = $1
+           order by occurred_at desc
+           limit 100
+        ) x) as timeline_arr`,
     [id]
   );
 
-  const assignments = many<Record<string, unknown>>(
-    `select id, from_user, to_user, role, reason, actor, created_at
-       from fl_lead_assignment
-      where lead_id = $1
-      order by created_at desc
-      limit 50`,
-    [id]
-  );
-
-  const duplicates = many<{ id: string; refNo: string; createdAt: string }>(
-    `select id, ref_no, created_at from fl_lead
-      where duplicate_of_lead_id = $1 order by created_at desc limit 50`,
-    [id]
-  );
+  const lead = row?.lead;
+  if (!lead) throw new Error(`lead ${id} not found`);
 
   return {
     lead,
-    sla: slaSnapshot(lead, now),
+    sla: slaSnapshot(lead, nowIso()),
     band: scoreBand(lead.score ?? 0),
-    analysis,
-    timeline: timeline("lead", id),
-    assignments,
-    duplicates,
+    analysis: row.analysis,
+    timeline: row.timeline,
+    assignments: row.assignments,
+    duplicates: row.duplicates,
   };
 }
 
@@ -468,9 +512,24 @@ export interface TransitionInput {
   actor?: string | null;
 }
 
-/** The only path that changes status. */
-export function transitionLead(input: TransitionInput): Lead {
-  const lead = requireLead(input.leadId);
+/** snake_case column -> camelCase field, for reflecting an UPDATE back onto a Lead. */
+const camel = (s: string): string => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
+
+/**
+ * The only path that changes status.
+ *
+ * `preloaded` lets a caller that already holds the lead skip the read, and the
+ * returned lead is COMPUTED from the update rather than re-read. Both matter
+ * because a `query()` call costs ~194ms of fixed overhead (see shared/db.ts) and
+ * this used to spend four of them — read, update, event, read again — to change
+ * one column.
+ *
+ * Computing the result is safe because the UPDATE is fully determined: the three
+ * always-set columns are known, and the stamp uses `coalesce`, which is exactly
+ * "keep the existing value if there is one".
+ */
+export function transitionLead(input: TransitionInput, preloaded?: Lead): Lead {
+  const lead = preloaded ?? requireLead(input.leadId);
 
   const { from, to, reason } = validateTransition({
     from: lead.status,
@@ -488,7 +547,10 @@ export function transitionLead(input: TransitionInput): Lead {
     sets.push(`${stamp} = coalesce(${stamp}, $${params.length})`);
   }
 
-  mutate(`update fl_lead set ${sets.join(", ")} where id = $1`, params);
+  const changed = mutate(`update fl_lead set ${sets.join(", ")} where id = $1`, params);
+  // A preloaded lead was read by the caller, possibly a moment ago; if it has
+  // since been deleted, say so rather than returning a lead that no longer is.
+  if (!changed) throw new Error(`lead ${input.leadId} not found`);
 
   appendEvent({
     entityType: "lead",
@@ -499,7 +561,22 @@ export function transitionLead(input: TransitionInput): Lead {
     meta: { from, to, reason },
   });
 
-  return requireLead(input.leadId);
+  // Mirror the UPDATE onto the lead already in hand. The stamp is written through
+  // an index view of the row because the column is chosen at runtime; `coalesce`
+  // in the SQL means "only if unset", which is what the `if` reproduces.
+  const next: Record<string, unknown> = {
+    ...lead,
+    status: to,
+    dispositionReason: reason,
+    updatedAt: now,
+  };
+
+  if (stamp) {
+    const key = camel(stamp);
+    if (!next[key]) next[key] = now;
+  }
+
+  return next as unknown as Lead;
 }
 
 /** Take an unclaimed lead off the shared pile. */
@@ -533,12 +610,20 @@ export function claimLead(leadId: string, actor: string): Lead {
     meta: {},
   });
 
-  // Claiming implies review has begun; new leads move on automatically.
+  // What the UPDATE above did, reflected onto the lead we already hold, so the
+  // return costs no further read.
+  const claimed = { ...lead, ownerEmail: actor, reviewedAt: lead.reviewedAt ?? now, updatedAt: now };
+
+  // Claiming implies review has begun; new leads move on automatically. Passing
+  // the lead we already hold saves the transition its own read.
   if (lead.status === "new") {
-    return transitionLead({ leadId, toStatus: "in_review", actor, note: `Claimed by ${actor}` });
+    return transitionLead(
+      { leadId, toStatus: "in_review", actor, note: `Claimed by ${actor}` },
+      claimed
+    );
   }
 
-  return requireLead(leadId);
+  return claimed;
 }
 
 export interface AssignInput {
@@ -582,7 +667,16 @@ export function assignLead(input: AssignInput): Lead {
     meta: { role: input.role, from, to: input.toUser, reason: input.reason ?? null },
   });
 
-  return requireLead(input.leadId);
+  // The two columns the UPDATE touched, reflected onto the lead already in hand.
+  const next = { ...lead, updatedAt: now };
+  if (input.role === "sales") {
+    next.salesOwnerEmail = input.toUser;
+    next.assignedAt = lead.assignedAt ?? now;
+  } else {
+    next.ownerEmail = input.toUser;
+  }
+
+  return next;
 }
 
 export interface ActivityInput {
@@ -625,12 +719,15 @@ export function logActivity(input: ActivityInput): { lead: Lead; contacted: bool
 
   if (isContact && canAdvance) {
     return {
-      lead: transitionLead({
-        leadId: input.leadId,
-        toStatus: "contacted",
-        actor: input.actor,
-        note: `First contact logged: ${input.kind}`,
-      }),
+      lead: transitionLead(
+        {
+          leadId: input.leadId,
+          toStatus: "contacted",
+          actor: input.actor,
+          note: `First contact logged: ${input.kind}`,
+        },
+        lead
+      ),
       contacted: true,
     };
   }
@@ -642,7 +739,9 @@ export function logActivity(input: ActivityInput): { lead: Lead; contacted: bool
       input.leadId,
       now,
     ]);
+    return { lead: { ...lead, firstContactAt: now, updatedAt: now }, contacted: false };
   }
 
-  return { lead: requireLead(input.leadId), contacted: false };
+  // Nothing on fl_lead changed — a note or an attachment only appends an event.
+  return { lead, contacted: false };
 }

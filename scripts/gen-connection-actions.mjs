@@ -37,7 +37,18 @@ const out = (dataProps) =>
   });
 
 const LEAD_ID = str("Lead id (uuid)");
+const ACCOUNT_ID = str("Account id (uuid)");
 const ACTOR = str("Email of the user performing this action");
+
+const ACCOUNT_SUMMARY = {
+  id: str("Account id"),
+  name: str("Company name"),
+  email: str("Primary email"),
+  phone: str("Primary phone"),
+  websiteDomain: str("Company domain"),
+  facilioClientId: str("Facilio client id once synced"),
+  syncStatus: str("pending | synced"),
+};
 
 const LEAD_SUMMARY = {
   id: str("Lead id"),
@@ -278,10 +289,48 @@ const actions = [
     ),
     output: out({
       accountId: str("Account id"),
+      accountCreated: {
+        type: "boolean",
+        description: "False when the lead joined a company we already had an account for",
+      },
       contactId: str("Contact id"),
       dealId: str("Deal id"),
       dealRefNo: str("Deal reference, e.g. DEAL-0001"),
       queued: { type: "array", description: "Idempotency keys of the queued Facilio writes" },
+    }),
+  },
+  {
+    slug: "list-accounts",
+    name: "List Accounts",
+    handler: "account-list",
+    type: "read",
+    description:
+      "List the companies behind converted leads, each with how many leads resolved to it and how many deals came out of them.",
+    input: obj({
+      search: str("Substring match on name, email or website domain"),
+      syncStatus: str("Filter by Facilio sync state: pending or synced"),
+      limit: num("Page size, default 50, max 200"),
+      offset: num("Page offset"),
+    }),
+    output: out({
+      accounts: { type: "array", description: "Newest first" },
+      total: num("Matching accounts, ignoring the page"),
+      truncated: { type: "boolean", description: "True when the platform capped the rows" },
+    }),
+  },
+  {
+    slug: "get-account",
+    name: "Get Account",
+    handler: "account-get",
+    type: "read",
+    description:
+      "One account with its contacts, its deals, and every lead that resolved to this company — repeat enquiries included.",
+    input: obj({ accountId: ACCOUNT_ID }, ["accountId"]),
+    output: out({
+      account: obj(ACCOUNT_SUMMARY),
+      contacts: { type: "array", description: "Primary contact first" },
+      deals: { type: "array", description: "Newest first" },
+      leads: { type: "array", description: "Every lead that resolved to this account" },
     }),
   },
   {

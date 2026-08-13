@@ -706,6 +706,10 @@
     state.counts = c;
     $("ctInbox").textContent = c.open || "";
   }
+  function refreshCounts() {
+    loadLeads().catch(() => {
+    });
+  }
   var filtered = () => {
     const l = state.leads;
     if (state.tab === "unclaimed") return l.filter((x) => !x.ownerEmail && x.status !== "converted" && x.status !== "closed");
@@ -757,10 +761,13 @@
       };
     }
   }
-  async function renderLead(id) {
+  async function renderLead(id, prefetched) {
     state.selected = id;
-    view().innerHTML = `<div class="empty">Loading\u2026</div>`;
-    const d = await call("get", { leadId: id });
+    let d = prefetched;
+    if (!d) {
+      view().innerHTML = `<div class="empty">Loading\u2026</div>`;
+      d = await call("get", { leadId: id });
+    }
     if (!d) return;
     const l = d.lead;
     $("title").textContent = l.companyName;
@@ -912,43 +919,35 @@
         </div>`;
       });
     }
-    const reload = () => renderLead(id);
+    const settled = (result, message) => {
+      if (!result) return false;
+      toast(message);
+      refreshCounts();
+      renderLead(id, result.detail);
+      return true;
+    };
     const claim = $("aClaim");
     if (claim)
-      claim.onclick = async () => {
-        if (await call("claim", { leadId: id, actorEmail: state.actor })) {
-          toast("Claimed \u2014 it's yours");
-          await loadLeads();
-          reload();
-        }
-      };
+      claim.onclick = async () => settled(await call("claim", { leadId: id, actorEmail: state.actor }), "Claimed \u2014 it's yours");
     $("aCall").onclick = async () => {
       const body = prompt("What happened on the call?");
       if (!body) return;
-      if (await call("log-activity", { leadId: id, kind: "call", body, actorEmail: state.actor })) {
-        toast("Call logged");
-        await loadLeads();
-        reload();
-      }
+      settled(
+        await call("log-activity", { leadId: id, kind: "call", body, actorEmail: state.actor }),
+        "Call logged"
+      );
     };
     const qual = $("aQual");
     if (qual)
-      qual.onclick = async () => {
-        if (await call("transition", { leadId: id, toStatus: "qualified", actorEmail: state.actor })) {
-          toast("Qualified");
-          await loadLeads();
-          reload();
-        }
-      };
+      qual.onclick = async () => settled(
+        await call("transition", { leadId: id, toStatus: "qualified", actorEmail: state.actor }),
+        "Qualified"
+      );
     const conv = $("aConv");
     if (conv)
       conv.onclick = async () => {
         const r = await call("convert", { leadId: id, actorEmail: state.actor });
-        if (r) {
-          toast(`${r.dealRefNo} created \xB7 ${r.queued.length} Facilio writes queued`);
-          await loadLeads();
-          reload();
-        }
+        if (r) settled(r, `${r.dealRefNo} created \xB7 ${r.queued.length} Facilio writes queued`);
       };
     const nurture = $("aNurture");
     if (nurture)
@@ -956,10 +955,10 @@
         const until = prompt("Bring this back on which date? (YYYY-MM-DD)", new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10));
         if (!until) return;
         if (await call("transition", { leadId: id, toStatus: "nurture", note: `Nurturing until ${until}`, actorEmail: state.actor })) {
-          await call("update", { leadId: id, nurtureUntil: until, actorEmail: state.actor });
-          toast(`Parked until ${until}`);
-          await loadLeads();
-          reload();
+          settled(
+            await call("update", { leadId: id, nurtureUntil: until, actorEmail: state.actor }),
+            `Parked until ${until}`
+          );
         }
       };
     const assign = $("aAssign");
@@ -968,11 +967,10 @@
         const who = prompt("Assign to which email?", state.actor);
         if (!who) return;
         const role = confirm("OK = hand to SALES owner\nCancel = reassign the ACTIONER") ? "sales" : "actioner";
-        if (await call("assign", { leadId: id, toUser: who, role, reason: "assigned from the lead view", actorEmail: state.actor })) {
-          toast(`${role === "sales" ? "Sales owner" : "Actioner"} set to ${who}`);
-          await loadLeads();
-          reload();
-        }
+        settled(
+          await call("assign", { leadId: id, toUser: who, role, reason: "assigned from the lead view", actorEmail: state.actor }),
+          `${role === "sales" ? "Sales owner" : "Actioner"} set to ${who}`
+        );
       };
     const close = $("aClose");
     if (close)
@@ -982,11 +980,10 @@
           "not_interested"
         );
         if (!reason) return;
-        if (await call("transition", { leadId: id, toStatus: "closed", dispositionReason: reason, actorEmail: state.actor })) {
-          toast("Closed");
-          await loadLeads();
-          reload();
-        }
+        settled(
+          await call("transition", { leadId: id, toStatus: "closed", dispositionReason: reason, actorEmail: state.actor }),
+          "Closed"
+        );
       };
     for (const btn of [$("doAnalyse"), $("doAnalyse2")]) {
       if (btn) btn.onclick = () => assess(id, btn);
@@ -1008,8 +1005,8 @@
       const stored = await call("analyse", { leadId: id, replyJson: content });
       if (stored) {
         toast(`${stored.verdict.replace("_", " ")} \xB7 score ${stored.score}`);
-        await loadLeads();
-        await renderLead(id);
+        refreshCounts();
+        await renderLead(id, stored.detail);
       }
     } catch (err) {
       toast(err?.message ?? String(err), true);
@@ -1120,7 +1117,7 @@ Reply to the visitor's last message.`
             content: `Your enquiry is with our team \u2014 reference ${r.refNo}.`
           });
           renderChat();
-          await loadLeads();
+          refreshCounts();
         }
       }
     } catch (err) {
@@ -1133,6 +1130,16 @@ Reply to the visitor's last message.`
     $("subtitle").textContent = "What we do, where, and how fast we respond";
     const s = await call("settings-get");
     if (!s) return;
+    const agent = s.agent ?? { name: "lead-analyst", link: "", linkConfigured: false };
+    const prompt2 = s.prompt ?? { scopeNotes: "", analystTask: "" };
+    const promptPreview = [
+      s.brief ?? "",
+      "",
+      "LEAD:",
+      "Company: \u2026   City: \u2026   Service asked for: \u2026   Enquiry: \u2026",
+      "",
+      prompt2.analystTask
+    ].join("\n");
     const lineById = Object.fromEntries(s.serviceLines.map((l) => [l.id, l]));
     const rows = s.areas.map((a) => {
       const served = s.coverage.filter((c) => c.areaId === a.id && c.active === "true").map((c) => lineById[c.serviceLineId]).filter(Boolean);
@@ -1169,6 +1176,55 @@ Reply to the visitor's last message.`
           </div>
         </div>
       </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <header>
+        <h3>Lead analyst agent</h3>
+        <div class="grow"></div>
+        <span style="font-size:11.5px;color:var(--ink-3)">provider, model and schema are CLI-managed</span>
+      </header>
+      <div class="in">
+        <div class="split" style="gap:14px">
+          <div>
+            <label class="f" style="margin-top:0">Name the browser resolves</label>
+            <input type="text" id="agentName" value="${esc(agent.name)}" placeholder="lead-analyst" />
+          </div>
+          <div>
+            <label class="f" style="margin-top:0">Flow-AI link name (server path)</label>
+            <input type="text" id="agentLink" value="${esc(agent.link)}" placeholder="lead-analyst_&lt;appuuid&gt;" />
+          </div>
+        </div>
+        <div style="margin-top:7px;font-size:12.5px;color:var(--ink-2)">
+          Both point at an agent created with the CLI \u2014 copy them from
+          <span style="font-family:var(--mono)">facilio vibe agent get lead-analyst</span>. They are two
+          different identifiers: passing one where the other belongs returns <i>agent not found</i>.
+          A blank field leaves the saved value unchanged.
+          ${agent.linkConfigured ? "" : `<div class="err" style="margin-top:5px">The link name is not set, so server-side assessment will fail. Assessing from this console still works.</div>`}
+        </div>
+
+        <label class="f">Scope notes \u2014 appended to the generated service brief</label>
+        <textarea id="scopeNotes" rows="3"
+          placeholder="e.g. No high-rise fa\xE7ade work. Minimum job value AED 2,000.">${esc(prompt2.scopeNotes)}</textarea>
+
+        <label class="f">Task instruction \u2014 the closing line the analyst gets for every lead</label>
+        <textarea id="analystTask" rows="2">${esc(prompt2.analystTask)}</textarea>
+
+        <div class="bar" style="margin-top:13px">
+          <button class="btn pri" id="promptSave">Save agent settings</button>
+          <button class="btn" id="promptReset">Restore default task</button>
+        </div>
+
+        <div style="margin-top:11px;font-size:12.5px;color:var(--ink-2)">
+          Applies to the next assessment; stored verdicts keep the prompt version that produced
+          them. The agent's own instructions, provider, model and output schema are fixed when the
+          agent is created \u2014 change those with
+          <span style="font-family:var(--mono)">facilio vibe agent update</span>.
+        </div>
+
+        <label class="f">What the analyst receives</label>
+        <pre class="raw">${esc(promptPreview)}</pre>
+      </div>
     </div>`;
     $("slaSave").onclick = async () => {
       const r = await call("settings-put", {
@@ -1178,7 +1234,30 @@ Reply to the visitor's last message.`
       });
       if (r) {
         toast("Targets saved");
-        await loadLeads();
+        refreshCounts();
+      }
+    };
+    $("promptSave").onclick = async () => {
+      const r = await call("settings-put", {
+        payload: JSON.stringify({
+          // The two identifiers go through optStr server-side, so a blank one is
+          // "leave it alone" — the prompt fields below are the ones "" clears.
+          analystAgent: $("agentName").value,
+          analystAgentLink: $("agentLink").value,
+          scopeNotes: $("scopeNotes").value,
+          analystTask: $("analystTask").value
+        })
+      });
+      if (r) {
+        toast("Prompt saved");
+        await renderSettings();
+      }
+    };
+    $("promptReset").onclick = async () => {
+      const r = await call("settings-put", { payload: JSON.stringify({ analystTask: "" }) });
+      if (r) {
+        toast("Default task restored");
+        await renderSettings();
       }
     };
   }
@@ -1212,7 +1291,10 @@ Reply to the visitor's last message.`
     state.me = me;
     state.actor = me.user?.email ?? "";
     $("me").innerHTML = `<b>${esc(me.user?.name ?? state.actor)}</b><br>org ${esc(String(me.org?.orgId ?? ""))}`;
-    await loadLeads();
+    const leads = loadLeads().catch(() => {
+    });
+    const page = (location.hash || "#inbox").replace(/^#/, "").split("/")[0];
+    if (page === "inbox" || page === "") await leads;
     await route();
   })();
 })();

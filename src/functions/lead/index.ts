@@ -36,6 +36,7 @@ import {
   claimLead,
   createLead,
   getLead,
+  type LeadDetail,
   leadDetail,
   listLeads,
   LEAD_SOURCES,
@@ -43,15 +44,27 @@ import {
   transitionLead,
   updateLead,
 } from "../../modules/lead";
-import { analyseLead, analystAgentName, buildAnalystInput } from "../../modules/analysis";
+import {
+  analyseLead,
+  analystAgentName,
+  analystIdentity,
+  ANALYST_AGENT_SETTING,
+  ANALYST_LINK_SETTING,
+  buildAnalystInput,
+} from "../../modules/analysis";
 import { recordTurn, startSession, submitSession, transcript } from "../../modules/intake";
+import { accountDetail, listAccounts } from "../../modules/account";
 import { convertLead } from "../../modules/convert";
 import { drain, retry, syncStatus } from "../../modules/sync";
 import {
+  ANALYST_TASK_SETTING,
+  configData,
   coverageView,
+  DEFAULT_ANALYST_TASK,
   saveArea,
   saveCoverage,
   saveServiceLine,
+  SCOPE_NOTES_SETTING,
   setSetting,
 } from "../../modules/settings";
 import { LEAD_STATUSES, DISPOSITION_REASONS } from "../../domain/lead-state";
@@ -67,13 +80,40 @@ const ACTOR = S("Email of the user performing this action");
 
 const server = new StudioFunctions({ name: "lead" });
 
+/**
+ * A mutation's response with the whole refreshed lead view attached.
+ *
+ * The browser used to follow every mutation with a separate `get`, and a round
+ * trip costs ~1.1s of fixed platform overhead before any work happens (see
+ * shared/db.ts). Attaching the view costs ONE extra batched query here — about
+ * 194ms — and saves the client that entire second trip.
+ *
+ * The mutation's own result stays spread at the top level, so existing callers
+ * (connection actions, the CLI, anything reading `.status` or `.ownerEmail`) see
+ * exactly what they saw before; `detail` is purely additive.
+ */
+const withDetail = <T extends object>(result: T, leadId: string): T & { detail: LeadDetail } => ({
+  ...result,
+  detail: leadDetail(leadId),
+});
+
 // --- settings ---------------------------------------------------------------
 
 server.addHandler({
   name: "settings-get",
-  description: "Service areas, service lines, coverage matrix and SLA targets",
+  description:
+    "Service areas, service lines, coverage matrix, SLA targets, the editable analyst prompt and the analyst agent's identity",
   parameters: {},
-  execute: async () => handle(() => coverageView()),
+  // `agent` is assembled here rather than in coverageView() because the settings
+  // module must not import analysis — analysis already imports settings.
+  //
+  // The config is fetched ONCE and handed to both: coverageView() would otherwise
+  // read it again, and each read is ~194ms of fixed overhead (see shared/db.ts).
+  execute: async () =>
+    handle(() => {
+      const data = configData();
+      return { ...coverageView(data), agent: analystIdentity(data) };
+    }),
 });
 
 server.addHandler({
@@ -82,7 +122,10 @@ server.addHandler({
     "Upsert service areas, service lines, coverage and SLA targets. Nested lists require the payload envelope.",
   parameters: {
     ...ENV,
-    analystAgent: S("Flow-AI link name of the analyst agent"),
+    analystAgent: S("Logical name of the analyst agent, e.g. lead-analyst"),
+    analystAgentLink: S("Flow-AI link name of the analyst agent, e.g. lead-analyst_<appuuid>"),
+    scopeNotes: S("Extra scope wording appended to the generated service brief"),
+    analystTask: S("The closing instruction the analyst is given for every lead"),
     firstResponseMins: N("SLA: minutes from arrival to first response"),
     qualificationMins: N("SLA: minutes from arrival to qualification"),
     assignmentMins: N("SLA: minutes from arrival to sales assignment"),
@@ -90,7 +133,7 @@ server.addHandler({
   execute: async (args) =>
     handle(() => {
       const p = parsePayload(args);
-      const created = { areas: 0, serviceLines: 0, coverage: 0, sla: 0 };
+      const created = { areas: 0, serviceLines: 0, coverage: 0, sla: 0, prompt: 0 };
 
       const areaIdsByName = new Map<string, string>();
       for (const raw of optArray(p, "areas") ?? []) {
@@ -120,12 +163,14 @@ server.addHandler({
         created.serviceLines++;
       }
 
-      // Coverage is expressed by human names so a caller never handles ids.
-      const view = coverageView();
+      // Coverage is expressed by human names so a caller never handles ids. One
+      // batched read for both name lists — coverageView() would also compose the
+      // scope brief, which re-reads every coverage row for nothing.
+      const known = configData();
       const areaId = (name: string) =>
-        areaIdsByName.get(name) ?? view.areas.find((a) => a.name === name)?.id;
+        areaIdsByName.get(name) ?? known.areas.find((a) => a.name === name)?.id;
       const lineId = (code: string) =>
-        lineIdsByCode.get(code) ?? view.serviceLines.find((l) => l.code === code)?.id;
+        lineIdsByCode.get(code) ?? known.serviceLines.find((l) => l.code === code)?.id;
 
       for (const raw of optArray(p, "coverage") ?? []) {
         const c = raw as Record<string, unknown>;
@@ -137,9 +182,31 @@ server.addHandler({
         created.coverage++;
       }
 
-      // The analyst's flow-ai link name is app-suffixed, so it is config not code.
+      // An agent has two identifiers and they are not interchangeable: the
+      // logical name is what the browser resolves, the app-suffixed link name is
+      // what the server-side ai-studio actions address. Both are config, not
+      // code, so a re-created agent is a settings change and not a rebuild.
       const analystAgent = optStr(p, "analystAgent");
-      if (analystAgent) setSetting("lead.analyst_agent", analystAgent);
+      if (analystAgent) setSetting(ANALYST_AGENT_SETTING, analystAgent);
+
+      const analystAgentLink = optStr(p, "analystAgentLink");
+      if (analystAgentLink) setSetting(ANALYST_LINK_SETTING, analystAgentLink);
+
+      // Prompt text uses `in` rather than optStr so that "" CLEARS a note
+      // instead of being read as "leave it alone". Only the payload envelope can
+      // express that — a connection action's blank fields are dropped upstream.
+      if ("scopeNotes" in p) {
+        setSetting(SCOPE_NOTES_SETTING, String(p.scopeNotes ?? "").trim());
+        created.prompt++;
+      }
+
+      if ("analystTask" in p) {
+        const task = String(p.analystTask ?? "").trim();
+        // A blank task would send the analyst a lead with no instruction at all,
+        // so an empty value restores the shipped wording rather than erasing it.
+        setSetting(ANALYST_TASK_SETTING, task || DEFAULT_ANALYST_TASK);
+        created.prompt++;
+      }
 
       // SLA targets accept either the nested `sla` object or flat minutes.
       const sla = (p.sla as Record<string, unknown> | undefined) ?? {};
@@ -157,7 +224,12 @@ server.addHandler({
         created.sla++;
       }
 
-      return { applied: created, settings: coverageView() };
+      // Re-read once, after the writes, and share it between both views.
+      const fresh = configData();
+      return {
+        applied: created,
+        settings: { ...coverageView(fresh), agent: analystIdentity(fresh) },
+      };
     }),
 });
 
@@ -302,7 +374,8 @@ server.addHandler({
         throw new Error(`no editable fields supplied (one of: ${EDITABLE_KEYS.join(", ")})`);
       }
 
-      return updateLead(str(p, "leadId"), fields, optStr(p, "actorEmail"));
+      const leadId = str(p, "leadId");
+      return withDetail(updateLead(leadId, fields, optStr(p, "actorEmail")), leadId);
     }),
 });
 
@@ -322,13 +395,17 @@ server.addHandler({
   execute: async (args) =>
     handle(() => {
       const p = parsePayload(args);
-      return transitionLead({
-        leadId: str(p, "leadId"),
-        toStatus: oneOf(p, "toStatus", LEAD_STATUSES),
-        dispositionReason: optStr(p, "dispositionReason"),
-        note: optStr(p, "note"),
-        actor: optStr(p, "actorEmail"),
-      });
+      const leadId = str(p, "leadId");
+      return withDetail(
+        transitionLead({
+          leadId,
+          toStatus: oneOf(p, "toStatus", LEAD_STATUSES),
+          dispositionReason: optStr(p, "dispositionReason"),
+          note: optStr(p, "note"),
+          actor: optStr(p, "actorEmail"),
+        }),
+        leadId
+      );
     }),
 });
 
@@ -339,7 +416,8 @@ server.addHandler({
   execute: async (args) =>
     handle(() => {
       const p = parsePayload(args);
-      return claimLead(str(p, "leadId"), str(p, "actorEmail"));
+      const leadId = str(p, "leadId");
+      return withDetail(claimLead(leadId, str(p, "actorEmail")), leadId);
     }),
 });
 
@@ -357,13 +435,17 @@ server.addHandler({
   execute: async (args) =>
     handle(() => {
       const p = parsePayload(args);
-      return assignLead({
-        leadId: str(p, "leadId"),
-        toUser: str(p, "toUser"),
-        role: oneOf(p, "role", ["actioner", "sales"] as const),
-        reason: optStr(p, "reason"),
-        actor: optStr(p, "actorEmail"),
-      });
+      const leadId = str(p, "leadId");
+      return withDetail(
+        assignLead({
+          leadId,
+          toUser: str(p, "toUser"),
+          role: oneOf(p, "role", ["actioner", "sales"] as const),
+          reason: optStr(p, "reason"),
+          actor: optStr(p, "actorEmail"),
+        }),
+        leadId
+      );
     }),
 });
 
@@ -382,13 +464,17 @@ server.addHandler({
   execute: async (args) =>
     handle(() => {
       const p = parsePayload(args);
-      return logActivity({
-        leadId: str(p, "leadId"),
-        kind: oneOf(p, "kind", ["call", "email", "note", "attachment", "meeting"] as const),
-        body: str(p, "body"),
-        actor: optStr(p, "actorEmail"),
-        fileId: optNum(p, "fileId"),
-      });
+      const leadId = str(p, "leadId");
+      return withDetail(
+        logActivity({
+          leadId,
+          kind: oneOf(p, "kind", ["call", "email", "note", "attachment", "meeting"] as const),
+          body: str(p, "body"),
+          actor: optStr(p, "actorEmail"),
+          fileId: optNum(p, "fileId"),
+        }),
+        leadId
+      );
     }),
 });
 
@@ -405,7 +491,10 @@ server.addHandler({
       const leadId = str(p, "leadId");
       const lead = getLead(leadId);
       if (!lead) throw new Error(`lead ${leadId} not found`);
-      return { leadId, agent: analystAgentName(), input: buildAnalystInput(lead) };
+
+      // One config read shared by the agent name and the prompt it goes with.
+      const data = configData();
+      return { leadId, agent: analystAgentName(data), input: buildAnalystInput(lead, data) };
     }),
 });
 
@@ -424,7 +513,9 @@ server.addHandler({
     const leadId = str(p, "leadId");
     const replyJson = p.replyJson;
     const agent = optStr(p, "agent");
-    return handle(() => analyseLead({ leadId, replyJson, agent: agent ?? undefined }));
+    return handle(() =>
+      withDetail(analyseLead({ leadId, replyJson, agent: agent ?? undefined }), leadId)
+    );
   },
 });
 
@@ -445,14 +536,53 @@ server.addHandler({
   execute: async (args) =>
     handle(() => {
       const p = parsePayload(args);
-      return convertLead({
-        leadId: str(p, "leadId"),
-        actor: optStr(p, "actorEmail"),
-        dealTitle: optStr(p, "dealTitle"),
-        estimatedValue: optNum(p, "estimatedValue"),
-        salesOwnerEmail: optStr(p, "salesOwnerEmail"),
+      const leadId = str(p, "leadId");
+      return withDetail(
+        convertLead({
+          leadId,
+          actor: optStr(p, "actorEmail"),
+          dealTitle: optStr(p, "dealTitle"),
+          estimatedValue: optNum(p, "estimatedValue"),
+          salesOwnerEmail: optStr(p, "salesOwnerEmail"),
+        }),
+        leadId
+      );
+    }),
+});
+
+// --- accounts ---------------------------------------------------------------
+
+const ACCOUNT_ID = S("Account id (uuid)");
+
+server.addHandler({
+  name: "account-list",
+  description:
+    "List accounts — the companies behind converted leads — with how many leads resolved to each and how many deals came out of them.",
+  parameters: {
+    ...ENV,
+    search: S("Substring match on name, email or website domain"),
+    syncStatus: S("Filter by Facilio sync state: pending or synced"),
+    limit: N("Page size, default 50, max 200"),
+    offset: N("Page offset"),
+  },
+  execute: async (args) =>
+    handle(() => {
+      const p = parsePayload(args);
+      return listAccounts({
+        search: optStr(p, "search"),
+        syncStatus: optStr(p, "syncStatus"),
+        limit: readLimit(p),
+        offset: readOffset(p),
       });
     }),
+});
+
+server.addHandler({
+  name: "account-get",
+  description:
+    "One account with its contacts, its deals, and every lead that resolved to this company — repeat enquiries included.",
+  parameters: { ...ENV, accountId: ACCOUNT_ID },
+  execute: async (args) => handle(() => accountDetail(str(parsePayload(args), "accountId"))),
 });
 
 // --- outbox -----------------------------------------------------------------

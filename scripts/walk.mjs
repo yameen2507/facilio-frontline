@@ -311,6 +311,77 @@ try {
     console.log(`     ${c.dim(`outbox: ${JSON.stringify(status.counts)}`)}`);
   }
 
+  // -------------------------------------------------------------------------
+  // An existing customer's next job. Same company, different person — the case
+  // that used to be swallowed as a duplicate. It must reach the queue as a real
+  // lead and then land on the account we already have: a second account here
+  // would mean a second Facilio client for one company.
+  step(15, "Repeat customer — second enquiry from a converted company");
+  const repeat = call("create", {
+    source: "widget",
+    sourceDetail: "website chat",
+    companyName: `Al Manzil Restaurant ${run}`,
+    contactName: "Fatima Noor",
+    contactEmail: `fatima${run}@almanzil${run}.ae`,
+    websiteDomain: `almanzil${run}.ae`,
+    serviceType: "Kitchen hood cleaning",
+    description: "Second branch in Jumeirah, same customer. Wants the same TR19 scope.",
+    siteCity: "Dubai",
+    siteRegion: "Dubai",
+    actorEmail: ACTIONER,
+  });
+  check("not swallowed as a duplicate", repeat.duplicateOf === null);
+  check("enters the queue as new", repeat.status === "new");
+
+  call("claim", { leadId: repeat.leadId, actorEmail: ACTIONER });
+  call("transition", {
+    leadId: repeat.leadId,
+    toStatus: "qualified",
+    note: "Known customer, second site.",
+    actorEmail: ACTIONER,
+  });
+
+  const second = call("convert", {
+    leadId: repeat.leadId,
+    actorEmail: ACTIONER,
+    salesOwnerEmail: SALES,
+  });
+  check("account reused, not created", second.accountCreated === false);
+  check("same account as the first deal", second.accountId === converted.accountId);
+  check("a second deal, not the first", second.dealId !== converted.dealId, second.dealRefNo);
+  check("new person is a new contact", second.contactId !== converted.contactId);
+  check(
+    "no second Facilio client queued",
+    !second.queued.some((k) => k.endsWith(":create_client")),
+    second.queued.join(", ") || "nothing"
+  );
+
+  // -------------------------------------------------------------------------
+  // The account read surface. This is where the linking becomes visible: one
+  // company, two leads, two deals, two contacts.
+  step(16, "Account module — the company view");
+  const account = call("account-get", { accountId: converted.accountId });
+  check("account returned", account.account?.id === converted.accountId, account.account?.name);
+  check("address unpacked from json", typeof account.account?.address === "object");
+  check("both leads resolved here", account.leads.length === 2, `${account.leads.length} leads`);
+  check("both deals on it", account.deals.length === 2, `${account.deals.length} deals`);
+  check("both contacts on it", account.contacts.length === 2, `${account.contacts.length} contacts`);
+  check(
+    "primary contact first",
+    String(account.contacts[0]?.isPrimary) === "true",
+    account.contacts[0]?.email
+  );
+  check(
+    "deal value is a number, not a string",
+    account.deals.every((d) => d.estimatedValue === null || typeof d.estimatedValue === "number")
+  );
+
+  const accounts = call("account-list", { search: `almanzil${run}`, limit: 10 });
+  check("account found by domain search", accounts.total >= 1, `${accounts.total} matching`);
+  const listed = accounts.accounts.find((a) => a.id === converted.accountId);
+  check("counts denormalised onto the row", listed?.leadCount === 2 && listed?.dealCount === 2,
+    `${listed?.leadCount} leads, ${listed?.dealCount} deals`);
+
   function buildInput() {
     return [
       "SERVICE SCOPE — we only serve these service/area combinations:",

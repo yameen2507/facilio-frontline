@@ -7,11 +7,12 @@
  * outbox makes the whole thing retryable and idempotent.
  */
 
-import { mutate, nowIso, one } from "../shared/db";
+import { many, mutate, nowIso, one } from "../shared/db";
 import { appendEvent } from "../shared/events";
 import { nextRef } from "../shared/ids";
 import { enqueue } from "../shared/outbox";
-import { getLead, transitionLead } from "./lead";
+import { dedupKeys, normalizeEmail } from "../domain/normalize";
+import { getLead, transitionLead, type Lead } from "./lead";
 
 export interface ConvertInput {
   leadId: string;
@@ -24,10 +25,48 @@ export interface ConvertInput {
 export interface ConvertResult {
   leadId: string;
   accountId: string;
+  /** False when this lead joined a company we already had an account for. */
+  accountCreated: boolean;
   contactId: string | null;
   dealId: string;
   dealRefNo: string;
   queued: string[];
+}
+
+/**
+ * An account belongs to a company, not to a lead. When an existing customer
+ * enquires again, that second lead has to land on the account we already have —
+ * otherwise conversion mints a second `fl_account` and, through the outbox, a
+ * second Facilio client for one company.
+ *
+ * The company is matched on `fl_lead`'s normalised keys rather than on
+ * `fl_account.website_domain`, because those are the values dedup already
+ * computes: the two can never disagree about what counts as the same company.
+ * Phone is deliberately not a key — a mobile number follows the person, not the
+ * company.
+ *
+ * All four candidates resolve in ONE statement, ranked narrowest-first, because
+ * every query costs ~194ms of fixed bridge overhead (shared/db.ts). A null
+ * parameter simply never matches, so absent keys need no branching.
+ */
+function findAccount(lead: Lead): { id: string; facilioClientId: string | null } | null {
+  const keys = dedupKeys(lead);
+  return one<{ id: string; facilioClientId: string | null }>(
+    `select a.id, a.facilio_client_id
+       from fl_account a
+       join fl_lead l on l.id = a.lead_id
+      where a.id = $1
+         or a.lead_id = $2
+         or l.domain_norm = $3
+         or l.email_norm = $4
+      order by case when a.id = $1 then 0        -- already linked to this lead
+                    when a.lead_id = $2 then 1   -- created by this lead, earlier run
+                    when l.domain_norm = $3 then 2
+                    else 3 end,
+               a.created_at
+      limit 1`,
+    [lead.accountId, lead.id, keys.domainNorm, keys.emailNorm]
+  );
 }
 
 /**
@@ -47,13 +86,9 @@ export function convertLead(input: ConvertInput): ConvertResult {
   const queued: string[] = [];
 
   // --- account ---
-  let accountId = lead.accountId;
-  if (!accountId) {
-    const existing = one<{ id: string }>("select id from fl_account where lead_id = $1 limit 1", [
-      lead.id,
-    ]);
-    accountId = existing?.id ?? null;
-  }
+  const existingAccount = findAccount(lead);
+  let accountId = existingAccount?.id ?? null;
+  const accountCreated = !accountId;
 
   if (!accountId) {
     const row = one<{ id: string }>(
@@ -81,23 +116,48 @@ export function convertLead(input: ConvertInput): ConvertResult {
   }
 
   // --- contact (only if we have an email; Facilio requires one) ---
+  // Matched by email inside the account, not just "the first contact on it":
+  // a second enquiry from a different person at the same company is a second
+  // contact, and hanging the deal off the wrong one is worse than having none.
+  // An account created a moment ago cannot have contacts, and a lead that
+  // already carries one needs no lookup — both skip the read entirely.
+  const contacts =
+    accountCreated || lead.contactId
+      ? []
+      : many<{ id: string; email: string | null; isPrimary: unknown }>(
+          "select id, email, is_primary from fl_account_contact where account_id = $1 order by created_at",
+          [accountId]
+        );
+
+  const emailNorm = normalizeEmail(lead.contactEmail);
   let contactId = lead.contactId;
+
   if (!contactId) {
-    const existing = one<{ id: string }>(
-      "select id from fl_account_contact where account_id = $1 limit 1",
-      [accountId]
-    );
-    contactId = existing?.id ?? null;
+    const match = emailNorm
+      ? contacts.find((c) => normalizeEmail(c.email) === emailNorm)
+      : // Nothing to match on, so the account's oldest contact is the best we have.
+        contacts[0];
+    contactId = match?.id ?? null;
   }
 
   if (!contactId && lead.contactEmail) {
+    // An account keeps its original primary contact; a newcomer joins alongside.
+    const primary = contacts.some((c) => c.isPrimary === true || c.isPrimary === "true");
     const row = one<{ id: string }>(
       `insert into fl_account_contact
          (id, account_id, lead_id, name, email, phone, is_primary,
           facilio_contact_id, sync_status, data_json, created_at, updated_at)
-       values (gen_random_uuid()::text, $1, $2, $3, $4, $5, 'true', null, 'pending', '{}', $6, $6)
+       values (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, null, 'pending', '{}', $7, $7)
        returning id`,
-      [accountId, lead.id, lead.contactName ?? lead.companyName ?? "Contact", lead.contactEmail, lead.contactPhone, now]
+      [
+        accountId,
+        lead.id,
+        lead.contactName ?? lead.companyName ?? "Contact",
+        lead.contactEmail,
+        lead.contactPhone,
+        primary ? "false" : "true",
+        now,
+      ]
     );
     contactId = row?.id ?? null;
   }
@@ -149,8 +209,10 @@ export function convertLead(input: ConvertInput): ConvertResult {
 
   // --- queue the Facilio writes ---
   // Deterministic keys mean a retry can never create a second Facilio client.
+  // A reused account that is already in Facilio short-circuits before the
+  // enqueue, so a repeat customer never re-sends their own client record.
   const clientKey = `account:${accountId}:create_client`;
-  if (enqueue({
+  if (!existingAccount?.facilioClientId && enqueue({
     aggregateType: "account",
     aggregateId: accountId,
     action: "create_client",
@@ -196,8 +258,10 @@ export function convertLead(input: ConvertInput): ConvertResult {
     entityId: lead.id,
     kind: "converted",
     actor: input.actor ?? null,
-    body: `Converted to account + deal ${dealRefNo}`,
-    meta: { accountId, contactId, dealId, dealRefNo, queued },
+    body: accountCreated
+      ? `Converted to account + deal ${dealRefNo}`
+      : `Converted to deal ${dealRefNo} on the existing account`,
+    meta: { accountId, accountCreated, contactId, dealId, dealRefNo, queued },
   });
 
   if (lead.status === "qualified") {
@@ -209,5 +273,13 @@ export function convertLead(input: ConvertInput): ConvertResult {
     });
   }
 
-  return { leadId: lead.id, accountId, contactId, dealId: dealId as string, dealRefNo, queued };
+  return {
+    leadId: lead.id,
+    accountId,
+    accountCreated,
+    contactId,
+    dealId: dealId as string,
+    dealRefNo,
+    queued,
+  };
 }

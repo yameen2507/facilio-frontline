@@ -113,6 +113,19 @@ async function loadLeads() {
   $("ctInbox").textContent = c.open || "";
 }
 
+/**
+ * Refresh the inbox counters without making anything on screen wait.
+ *
+ * `list` returns a hundred leads with every column to update five integers in
+ * the tab bar. While a lead is open nothing visible depends on it, so it runs
+ * detached and the tab bar catches up a moment later. Errors are swallowed on
+ * purpose: `call` has already toasted anything worth telling the user about, and
+ * a failed counter refresh must not look like a failed action.
+ */
+function refreshCounts() {
+  loadLeads().catch(() => {});
+}
+
 const filtered = () => {
   const l = state.leads;
   if (state.tab === "unclaimed") return l.filter((x) => !x.ownerEmail && x.status !== "converted" && x.status !== "closed");
@@ -177,11 +190,22 @@ function renderInbox() {
 
 // --- lead detail ------------------------------------------------------------
 
-async function renderLead(id) {
+/**
+ * `prefetched` is the `detail` a mutation handler already returned.
+ *
+ * Every request to this app costs about a second before it does any work, so a
+ * click that mutates and then re-reads pays that twice. The mutation handlers
+ * return the refreshed view with their result, and passing it here renders it
+ * without asking again.
+ */
+async function renderLead(id, prefetched) {
   state.selected = id;
-  view().innerHTML = `<div class="empty">Loading…</div>`;
 
-  const d = await call("get", { leadId: id });
+  let d = prefetched;
+  if (!d) {
+    view().innerHTML = `<div class="empty">Loading…</div>`;
+    d = await call("get", { leadId: id });
+  }
   if (!d) return;
   const l = d.lead;
 
@@ -373,47 +397,49 @@ async function renderLead(id) {
     });
   }
 
-  const reload = () => renderLead(id);
+  /**
+   * What every action on this page does once its call comes back.
+   *
+   * One round trip, not three. The handler returns `detail` — the refreshed view
+   * — so the lead re-renders from the response instead of asking for it again,
+   * and the inbox counters refresh DETACHED: `list` fetches a hundred leads to
+   * update five integers in the tab bar, and nothing on this screen waits on it.
+   */
+  const settled = (result, message) => {
+    if (!result) return false;
+    toast(message);
+    refreshCounts();
+    renderLead(id, result.detail);
+    return true;
+  };
 
   const claim = $("aClaim");
   if (claim)
-    claim.onclick = async () => {
-      if (await call("claim", { leadId: id, actorEmail: state.actor })) {
-        toast("Claimed — it's yours");
-        await loadLeads();
-        reload();
-      }
-    };
+    claim.onclick = async () =>
+      settled(await call("claim", { leadId: id, actorEmail: state.actor }), "Claimed — it's yours");
 
   $("aCall").onclick = async () => {
     const body = prompt("What happened on the call?");
     if (!body) return;
-    if (await call("log-activity", { leadId: id, kind: "call", body, actorEmail: state.actor })) {
-      toast("Call logged");
-      await loadLeads();
-      reload();
-    }
+    settled(
+      await call("log-activity", { leadId: id, kind: "call", body, actorEmail: state.actor }),
+      "Call logged"
+    );
   };
 
   const qual = $("aQual");
   if (qual)
-    qual.onclick = async () => {
-      if (await call("transition", { leadId: id, toStatus: "qualified", actorEmail: state.actor })) {
-        toast("Qualified");
-        await loadLeads();
-        reload();
-      }
-    };
+    qual.onclick = async () =>
+      settled(
+        await call("transition", { leadId: id, toStatus: "qualified", actorEmail: state.actor }),
+        "Qualified"
+      );
 
   const conv = $("aConv");
   if (conv)
     conv.onclick = async () => {
       const r = await call("convert", { leadId: id, actorEmail: state.actor });
-      if (r) {
-        toast(`${r.dealRefNo} created · ${r.queued.length} Facilio writes queued`);
-        await loadLeads();
-        reload();
-      }
+      if (r) settled(r, `${r.dealRefNo} created · ${r.queued.length} Facilio writes queued`);
     };
 
   const nurture = $("aNurture");
@@ -422,12 +448,13 @@ async function renderLead(id) {
       const until = prompt("Bring this back on which date? (YYYY-MM-DD)", new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10));
       if (!until) return;
       // Two steps: the status change is validated by the state machine, the date
-      // is an ordinary field edit.
+      // is an ordinary field edit. Only the second one's view is rendered — the
+      // first would be stale a moment later.
       if (await call("transition", { leadId: id, toStatus: "nurture", note: `Nurturing until ${until}`, actorEmail: state.actor })) {
-        await call("update", { leadId: id, nurtureUntil: until, actorEmail: state.actor });
-        toast(`Parked until ${until}`);
-        await loadLeads();
-        reload();
+        settled(
+          await call("update", { leadId: id, nurtureUntil: until, actorEmail: state.actor }),
+          `Parked until ${until}`
+        );
       }
     };
 
@@ -437,11 +464,10 @@ async function renderLead(id) {
       const who = prompt("Assign to which email?", state.actor);
       if (!who) return;
       const role = confirm("OK = hand to SALES owner\nCancel = reassign the ACTIONER") ? "sales" : "actioner";
-      if (await call("assign", { leadId: id, toUser: who, role, reason: "assigned from the lead view", actorEmail: state.actor })) {
-        toast(`${role === "sales" ? "Sales owner" : "Actioner"} set to ${who}`);
-        await loadLeads();
-        reload();
-      }
+      settled(
+        await call("assign", { leadId: id, toUser: who, role, reason: "assigned from the lead view", actorEmail: state.actor }),
+        `${role === "sales" ? "Sales owner" : "Actioner"} set to ${who}`
+      );
     };
 
   const close = $("aClose");
@@ -452,11 +478,10 @@ async function renderLead(id) {
         "not_interested"
       );
       if (!reason) return;
-      if (await call("transition", { leadId: id, toStatus: "closed", dispositionReason: reason, actorEmail: state.actor })) {
-        toast("Closed");
-        await loadLeads();
-        reload();
-      }
+      settled(
+        await call("transition", { leadId: id, toStatus: "closed", dispositionReason: reason, actorEmail: state.actor }),
+        "Closed"
+      );
     };
 
   for (const btn of [$("doAnalyse"), $("doAnalyse2")]) {
@@ -490,8 +515,8 @@ async function assess(id, btn) {
     const stored = await call("analyse", { leadId: id, replyJson: content });
     if (stored) {
       toast(`${stored.verdict.replace("_", " ")} · score ${stored.score}`);
-      await loadLeads();
-      await renderLead(id);
+      refreshCounts();
+      await renderLead(id, stored.detail);
     }
   } catch (err) {
     toast(err?.message ?? String(err), true);
@@ -633,7 +658,9 @@ async function sendChat(text) {
           content: `Your enquiry is with our team — reference ${r.refNo}.`,
         });
         renderChat();
-        await loadLeads();
+        // The visitor's view is already correct; only the sales-side counter is
+        // behind, and nothing here waits for it.
+        refreshCounts();
       }
     }
   } catch (err) {
@@ -650,6 +677,20 @@ async function renderSettings() {
 
   const s = await call("settings-get");
   if (!s) return;
+
+  const agent = s.agent ?? { name: "lead-analyst", link: "", linkConfigured: false };
+  const prompt = s.prompt ?? { scopeNotes: "", analystTask: "" };
+
+  // The lead block is shown as a placeholder: the brief and the closing task are
+  // the same on every run, the fields in between are the lead being assessed.
+  const promptPreview = [
+    s.brief ?? "",
+    "",
+    "LEAD:",
+    "Company: …   City: …   Service asked for: …   Enquiry: …",
+    "",
+    prompt.analystTask,
+  ].join("\n");
 
   const lineById = Object.fromEntries(s.serviceLines.map((l) => [l.id, l]));
   const rows = s.areas
@@ -693,6 +734,59 @@ async function renderSettings() {
           </div>
         </div>
       </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <header>
+        <h3>Lead analyst agent</h3>
+        <div class="grow"></div>
+        <span style="font-size:11.5px;color:var(--ink-3)">provider, model and schema are CLI-managed</span>
+      </header>
+      <div class="in">
+        <div class="split" style="gap:14px">
+          <div>
+            <label class="f" style="margin-top:0">Name the browser resolves</label>
+            <input type="text" id="agentName" value="${esc(agent.name)}" placeholder="lead-analyst" />
+          </div>
+          <div>
+            <label class="f" style="margin-top:0">Flow-AI link name (server path)</label>
+            <input type="text" id="agentLink" value="${esc(agent.link)}" placeholder="lead-analyst_&lt;appuuid&gt;" />
+          </div>
+        </div>
+        <div style="margin-top:7px;font-size:12.5px;color:var(--ink-2)">
+          Both point at an agent created with the CLI — copy them from
+          <span style="font-family:var(--mono)">facilio vibe agent get lead-analyst</span>. They are two
+          different identifiers: passing one where the other belongs returns <i>agent not found</i>.
+          A blank field leaves the saved value unchanged.
+          ${
+            agent.linkConfigured
+              ? ""
+              : `<div class="err" style="margin-top:5px">The link name is not set, so server-side assessment will fail. Assessing from this console still works.</div>`
+          }
+        </div>
+
+        <label class="f">Scope notes — appended to the generated service brief</label>
+        <textarea id="scopeNotes" rows="3"
+          placeholder="e.g. No high-rise façade work. Minimum job value AED 2,000.">${esc(prompt.scopeNotes)}</textarea>
+
+        <label class="f">Task instruction — the closing line the analyst gets for every lead</label>
+        <textarea id="analystTask" rows="2">${esc(prompt.analystTask)}</textarea>
+
+        <div class="bar" style="margin-top:13px">
+          <button class="btn pri" id="promptSave">Save agent settings</button>
+          <button class="btn" id="promptReset">Restore default task</button>
+        </div>
+
+        <div style="margin-top:11px;font-size:12.5px;color:var(--ink-2)">
+          Applies to the next assessment; stored verdicts keep the prompt version that produced
+          them. The agent's own instructions, provider, model and output schema are fixed when the
+          agent is created — change those with
+          <span style="font-family:var(--mono)">facilio vibe agent update</span>.
+        </div>
+
+        <label class="f">What the analyst receives</label>
+        <pre class="raw">${esc(promptPreview)}</pre>
+      </div>
     </div>`;
 
   $("slaSave").onclick = async () => {
@@ -703,7 +797,39 @@ async function renderSettings() {
     });
     if (r) {
       toast("Targets saved");
-      await loadLeads();
+      // Overdue is derived at read time, so the counters shift — but the settings
+      // page is unaffected and must not wait for them.
+      refreshCounts();
+    }
+  };
+
+  // Sent through the payload envelope rather than as flat fields: clearing the
+  // scope notes means sending "", and a blank flat field is dropped upstream as
+  // an unresolved connection-action template.
+  $("promptSave").onclick = async () => {
+    const r = await call("settings-put", {
+      payload: JSON.stringify({
+        // The two identifiers go through optStr server-side, so a blank one is
+        // "leave it alone" — the prompt fields below are the ones "" clears.
+        analystAgent: $("agentName").value,
+        analystAgentLink: $("agentLink").value,
+        scopeNotes: $("scopeNotes").value,
+        analystTask: $("analystTask").value,
+      }),
+    });
+    if (r) {
+      toast("Prompt saved");
+      await renderSettings();
+    }
+  };
+
+  // An empty task restores the shipped default server-side, so the default
+  // wording lives in exactly one place instead of being copied into the client.
+  $("promptReset").onclick = async () => {
+    const r = await call("settings-put", { payload: JSON.stringify({ analystTask: "" }) });
+    if (r) {
+      toast("Default task restored");
+      await renderSettings();
     }
   };
 }
@@ -750,6 +876,13 @@ $("out").onclick = (e) => {
   state.actor = me.user?.email ?? "";
   $("me").innerHTML = `<b>${esc(me.user?.name ?? state.actor)}</b><br>org ${esc(String(me.org?.orgId ?? ""))}`;
 
-  await loadLeads();
+  // The lead list and the first view are independent requests — unless the view
+  // IS the list — so they start together rather than one after the other. Every
+  // request costs about a second before it does any work, so on a lead or
+  // settings URL this takes one of those out of the cold load entirely.
+  const leads = loadLeads().catch(() => {});
+  const page = (location.hash || "#inbox").replace(/^#/, "").split("/")[0];
+  if (page === "inbox" || page === "") await leads;
+
   await route();
 })();
