@@ -507,4 +507,8 @@ Split by **function**, so two people never edit the same file.
 
 Already created: app **`frontline`** (`https://frontline.vibe.facilio.com/`), function `tenderprobe` (a reachability probe, safe to delete).
 
-Not yet done: `facilio vibe db create`, any deploy, any production promotion, public access.
+Database provisioned, with the `fl_*` tables imported and carrying working data. Functions `lead` and `migrate` are uploaded and built; the other five directories under `src/functions/` are still empty, so nothing else ships.
+
+Deployed to **preview only** — `https://preview-frontline.vibe.facilio.com/`. `facilio vibe deploy` publishes there by default; production is the separate `--prod` flag.
+
+Not yet done: any production promotion (`facilio vibe deploy --prod`), public access.
