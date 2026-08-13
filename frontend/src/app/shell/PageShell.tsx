@@ -4,25 +4,20 @@
  * through this, so the header is designed here once.
  *
  *   ┌──────────────────────────────────────┐
- *   │ EYEBROW                              │  FIXED ─┐ one band, one
- *   │ Title  ·  subtext           actions  │         │ border under it
- *   │ tabs ────────────··········· extras  │  FIXED ─┘ (strip optional)
+ *   │ module › Title · subtext    actions  │  FIXED ─┐ one flat band,
+ *   │ [tab][tab][tab]   ····· search/extra │  FIXED ─┘ one border under it
  *   ├──────────────────────────────────────┤
  *   │ ░░ body — the only thing that scrolls│
  *   └──────────────────────────────────────┘
  *
- * ONE band is the rule; a cramped band is not. The eyebrow names the module,
- * the title sits big under it with the subtext trailing on the same baseline,
- * actions centre against them on the right, and the strip's tabs sit FLUSH on
- * the band's border (the underline restyle in ui/Tabs pairs with this — its
- * active bar overlaps the border via -mb-px). The shape before that — a tall
- * title row plus a floating boxed tab group — spent two bands' worth of height
- * saying one band's worth of things, so the breathing room here is bought
- * inside the single band, never by splitting it.
- *
- * The band also carries a faint top-down wash from `muted`: the fixed header
- * and the scrolling body are the same colour otherwise, and the border alone
- * was doing all the work of separating them.
+ * The shape is taken from how Linear, Stripe and Attio head their list pages
+ * (checked against real screens on Mobbin, 2026-08): a SLIM title row — the
+ * module reads as a breadcrumb prefix inline with the title, the subtext
+ * trails on the same line, actions sit right — and ONE compact control row
+ * where pill tabs (ui/Tabs) sit left and search/extras sit right. Nothing
+ * stacks: the eyebrow-over-big-title-over-subtitle version of this header
+ * spent ~120px saying what this says in ~90, and none of the references
+ * decorate the band (no gradient wash — flat bg, border does the separating).
  *
  * Scrolling goes through OverlayScrollbar so the bar floats over the content
  * and the body width doesn't jump when a short page becomes a long one.
@@ -96,25 +91,23 @@ export function PageShell({
       {/* px steps down on phones — six units of gutter is a tenth of the screen.
           The mobile sidebar trigger floats at top-left (Layout), so the title
           indents past it below md. */}
-      <div className="from-muted/40 to-background shrink-0 border-b bg-gradient-to-b px-4 pt-6 max-md:pl-14 sm:px-6">
-        <div className="flex flex-wrap items-end gap-x-6 gap-y-3 pb-5">
-          <div className="min-w-0 flex-1">
+      <div className="shrink-0 border-b px-4 pt-2 max-md:pl-14 sm:px-6">
+        {/* The title row: one slim line, Linear-breadcrumb style. min-h rather
+            than h so wrapped actions on a phone can grow it. */}
+        <div className="flex min-h-11 flex-wrap items-center gap-x-4 gap-y-1 py-1">
+          <div className="flex min-w-0 flex-1 items-baseline gap-x-2">
             {label ? (
-              <div className="text-muted-foreground mb-1.5 truncate text-[11px] font-medium tracking-[0.14em] uppercase">
-                {label}
-              </div>
+              <span className="text-muted-foreground shrink-0 text-sm">
+                {label} <span aria-hidden="true" className="mx-0.5 opacity-50">›</span>
+              </span>
             ) : null}
-            {/* Baseline, not centre: the subtext trails the title as a second
-                clause of one line, and wraps under it only when it must. */}
-            <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
-              <h1 className="truncate text-2xl leading-tight font-semibold tracking-tight">{title}</h1>
-              {subtitle ? (
-                <p className="text-muted-foreground min-w-0 truncate text-sm">
-                  <span aria-hidden="true" className="mr-2.5 opacity-40">·</span>
-                  {subtitle}
-                </p>
-              ) : null}
-            </div>
+            <h1 className="truncate text-base leading-tight font-semibold tracking-tight">{title}</h1>
+            {subtitle ? (
+              <p className="text-muted-foreground min-w-0 truncate text-sm max-sm:hidden">
+                <span aria-hidden="true" className="mr-2 opacity-40">·</span>
+                {subtitle}
+              </p>
+            ) : null}
           </div>
           {/* flex-wrap, not shrink-0: a detail page carries five actions, and on
               a phone they wrap under the title instead of forcing a scroll. */}
@@ -123,11 +116,12 @@ export function PageShell({
           ) : null}
         </div>
 
-        {/* items-end so tabs land on the border while taller extras (a search
-            field) bottom-align beside them; contributes no height when absent.
-            Wraps on phones — tabs above, search below. */}
+        {/* The control row: pill tabs left, search/extras right, all one
+            compact line that wraps on phones — tabs above, search below. */}
         {strip ? (
-          <div className="flex min-w-0 flex-wrap items-end justify-between gap-x-6 gap-y-3">{strip}</div>
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-6 gap-y-2 pt-0.5 pb-2.5">
+            {strip}
+          </div>
         ) : null}
       </div>
 

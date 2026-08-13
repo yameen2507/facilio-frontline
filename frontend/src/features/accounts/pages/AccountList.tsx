@@ -107,7 +107,7 @@ export function AccountList() {
       strip={
         // No tabs on this page, so the field is the whole strip and supplies
         // the band's bottom padding itself.
-        <Bar className="w-full pb-5">
+        <Bar className="w-full">
           <Input
             type="text"
             placeholder="Search name, email or domain"

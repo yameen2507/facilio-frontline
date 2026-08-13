@@ -58,10 +58,19 @@ function toGroups(): Group[] {
     stay put when the rail collapses to icon width. */
 function BrandMark({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 32 32" fill="none" aria-hidden="true" className={className}>
+    <svg
+      viewBox="0 0 32 32"
+      fill="none"
+      aria-hidden="true"
+      // The brand lime (#C4FF00) is built for dark ground and disappears on
+      // the light sidebar, so light mode wears the same hue pulled down to
+      // olive; dark mode keeps the true lime. currentColor lets one path
+      // serve both.
+      className={cn("text-[hsl(74_100%_29%)] dark:text-[#C4FF00]", className)}
+    >
       <path
         d="M5.36269e-07 1.33971e-07C-0.00109738 4.24287 1.68369 8.31242 4.68376 11.3135C7.68383 14.3145 11.7534 16.0012 15.9974 16.0026L15.9974 1.33971e-07L5.36269e-07 1.33971e-07ZM15.9974 16.0026H32L32 1.33971e-07C29.8981 -0.000271818 27.8167 0.413492 25.8748 1.21765C23.9329 2.02181 22.1685 3.20061 20.6824 4.68669C19.1963 6.17278 18.0177 7.93703 17.2138 9.87865C16.4099 11.8203 15.9966 13.9012 15.9974 16.0026ZM15.9974 16.0026L15.9974 32H32C32.0001 29.8991 31.5863 27.8187 30.7821 25.8777C29.978 23.9366 28.7992 22.173 27.3132 20.6875C25.8272 19.2019 24.063 18.0236 22.1214 17.2197C20.1798 16.4159 18.0989 16.0023 15.9974 16.0026ZM15.9974 16.0026L5.36269e-07 16.0026L5.36269e-07 32C4.24324 31.9992 8.3124 30.3133 11.3124 27.3133C14.3125 24.3133 15.9977 20.2447 15.9974 16.0026Z"
-        fill="#C4FF00"
+        fill="currentColor"
       />
     </svg>
   );
@@ -168,30 +177,20 @@ function NavButton({ item, active, badge }: { item: NavItemEntry; active: boolea
     <SidebarMenuItem>
       {/* `tooltip` is the collapsed rail's label — without it an icon-only
           item is unexplained. */}
-      <SidebarMenuButton
-        asChild
-        isActive={active}
-        tooltip={item.label}
-        // The stock active state is bg-sidebar-accent, which in the light theme
-        // is a 1.5% lightness step off the sidebar itself — invisible. Primary
-        // is the inverted pair in both themes, so the selected item reads at a
-        // glance. The hover: pair pins the colour while the pointer is over it,
-        // where the base hover:bg-sidebar-accent would otherwise contest it.
-        className="data-[active=true]:bg-primary data-[active=true]:text-primary-foreground data-[active=true]:hover:bg-primary data-[active=true]:hover:text-primary-foreground"
-      >
+      {/* The active treatment is the stock bg-sidebar-accent wash — SUBTLE on
+          purpose (an inverted primary pill was tried and shouted). What makes
+          it visible is the --sidebar-accent token itself, stepped to a real
+          contrast against the sidebar in globals.css rather than shadcn's
+          near-invisible 1.5% default. */}
+      <SidebarMenuButton asChild isActive={active} tooltip={item.label}>
         <Link to={item.to}>
           <item.icon />
           <span>{item.label}</span>
         </Link>
       </SidebarMenuButton>
       {/* Nothing until the count is known — a zero would claim an empty inbox
-          before anything has been fetched. The text override keeps the count
-          legible on the active item's inverted pill. */}
-      {badge ? (
-        <SidebarMenuBadge className="peer-data-[active=true]/menu-button:text-primary-foreground">
-          {badge}
-        </SidebarMenuBadge>
-      ) : null}
+          before anything has been fetched. */}
+      {badge ? <SidebarMenuBadge>{badge}</SidebarMenuBadge> : null}
     </SidebarMenuItem>
   );
 }

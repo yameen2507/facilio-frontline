@@ -12,7 +12,7 @@ import { useEffect, useId, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Clock3, FilePlus2, FileText, ListChecks, MoreVertical, Plus } from "lucide-react";
 import { PageShell } from "../../../app/shell/PageShell";
-import { ago } from "../../../lib/format";
+import { ago, plural } from "../../../lib/format";
 import { Bar, Card } from "../../../ui/Card";
 import { Chip, type Tone } from "../../../ui/Chip";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -137,7 +137,14 @@ function TemplateCard({
           onOpen();
         }
       }}
-      className="group bg-card hover:border-ring/40 flex cursor-pointer flex-col overflow-hidden rounded-xl border transition-colors">
+      className="group bg-card hover:border-ring/40 relative flex cursor-pointer flex-col overflow-hidden rounded-xl border transition-colors">
+      {/* The status chip lives on the thumbnail, where there is empty space —
+          in the body it was shoulder-to-shoulder with the name and the ⋯ menu.
+          A sibling of the thumb div, not a child, so an archived card's
+          grayscale/dim filter never washes out its own label. */}
+      <span className="absolute top-2.5 left-2.5 z-[1]">
+        <Chip tone={STATUS_TONE[t.status]}>{t.status}</Chip>
+      </span>
       {/* The thumbnail. Archived templates go grayscale — the shelf keeps its
           shape but visibly steps out of the working set. */}
       <div
@@ -168,10 +175,14 @@ function TemplateCard({
         ) : null}
       </div>
 
-      {/* Body. flex-1 + mt-auto footer keeps every card's footer on one line
-          across the row, however long the names above them run. */}
-      <div className="flex flex-1 flex-col gap-1 p-3.5">
-        <div className="flex items-start justify-between gap-2">
+      {/* Body: name + meta with only the ⋯ menu beside them (the status chip
+          moved up onto the thumbnail), then a hairline above the stats footer.
+          flex-1 + mt-auto keeps every card's footer on one line across the
+          row, however long the names above them run. */}
+      <div className="flex flex-1 flex-col p-3.5 pt-3">
+        {/* pb-3 is the minimum air above the footer hairline; mt-auto on the
+            footer grows it when a short name leaves the card with spare rows. */}
+        <div className="flex items-start justify-between gap-2 pb-3">
           <div className="min-w-0">
             <div className="truncate text-sm font-medium">{t.name}</div>
             <div className="text-muted-foreground mt-0.5 truncate text-xs">
@@ -180,16 +191,15 @@ function TemplateCard({
               {t.usageCount ? ` · used by ${t.usageCount}` : ""}
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-1">
-            <Chip tone={STATUS_TONE[t.status]}>{t.status}</Chip>
-            {/* stopPropagation: the menu lives on a clickable card, and opening
-                it must not also open the template. */}
-            <DropdownMenu>
+          {/* stopPropagation: the menu lives on a clickable card, and opening
+              it must not also open the template. Nudged into the corner so the
+              hit target is generous without stealing body padding. */}
+          <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="-mr-1.5 size-7"
+                  className="text-muted-foreground -mt-1 -mr-1.5 size-7 shrink-0"
                   disabled={busy}
                   onClick={(e) => e.stopPropagation()}
                   aria-label={`Actions for ${t.name}`}
@@ -214,13 +224,13 @@ function TemplateCard({
                   </>
                 ) : null}
               </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
+          </DropdownMenu>
         </div>
-        <div className="text-muted-foreground mt-auto flex items-center gap-3 pt-2 text-xs">
+        {/* A hairline over the stats so the footer reads as its own band. */}
+        <div className="text-muted-foreground mt-auto flex items-center gap-3 border-t pt-2.5 text-xs">
           <span className="inline-flex items-center gap-1">
             <ListChecks className="size-3.5" aria-hidden="true" />
-            {t.questionCount ?? 0} questions
+            {plural(t.questionCount ?? 0, "question", "questions")}
           </span>
           <span className="inline-flex items-center gap-1">
             <Clock3 className="size-3.5" aria-hidden="true" />
@@ -330,7 +340,7 @@ export function TemplateList() {
         // w-full so justify-between has a full line to work across; the field
         // takes a fixed width beside the tabs and only goes full-width once it
         // has wrapped under them on a phone.
-        <Bar className="w-full justify-between gap-x-6 pb-1">
+        <Bar className="w-full justify-between gap-x-6">
           <Tabs items={tabs} active={filter} onChange={setFilter} />
           <Input
             type="text"

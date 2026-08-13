@@ -125,7 +125,7 @@ export function SurveyList() {
         </Button>
       }
       strip={
-        <Bar className="w-full justify-between gap-x-6 pb-1">
+        <Bar className="w-full justify-between gap-x-6">
           <Tabs items={tabs} active={filter} onChange={setFilter} />
           <Input
             type="text"
