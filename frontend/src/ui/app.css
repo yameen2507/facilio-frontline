@@ -1031,3 +1031,49 @@ pre.raw {
   font-variant-numeric: tabular-nums;
   flex: none;
 }
+
+/* ── Top-bar avatar and its menu ─────────────────────────────────────────────
+   The identity affordance every console referenced uses: initials in a circle,
+   top right, with the account menu behind it. */
+
+.avatar-btn {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--border-round);
+  background: var(--colors-background-neutral-base-medium);
+  color: var(--colors-text-description);
+  font: var(--text-caption-med-ll-12);
+  display: grid;
+  place-items: center;
+  flex: none;
+  letter-spacing: 0.02em;
+}
+
+.avatar-btn:hover {
+  background: var(--colors-background-midground-dark);
+  color: var(--colors-text-main);
+}
+
+/* A full-width row inside a menu panel. */
+.menu-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-container-medium);
+  padding: var(--spacing-container-small) var(--spacing-container-medium);
+  /* Negative margin + matching extra width makes the hover fill reach the panel's
+     padding edge instead of stopping short of it. */
+  margin: 0 calc(-1 * var(--spacing-container-medium));
+  width: calc(100% + 2 * var(--spacing-container-medium));
+  border: 0;
+  border-radius: var(--border-small);
+  background: none;
+  color: var(--colors-text-description);
+  font: var(--text-body-reg-14);
+  text-align: left;
+}
+
+.menu-row:hover {
+  background: var(--colors-background-midground-subtle);
+  color: var(--colors-text-main);
+}

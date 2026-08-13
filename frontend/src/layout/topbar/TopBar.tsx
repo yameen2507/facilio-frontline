@@ -14,11 +14,8 @@
  * `calc(... - 56px)`, so a change here needs the same change there.
  */
 
-import { useUser } from '../../app/auth'
-import { vibe } from '../../lib/vibe'
-import { ThemeSwitcher } from '../../theme/ThemeSwitcher'
 import { Icon } from '../../ui/Icon'
-import { VerticalDivider } from '../primitives'
+import ProfileMenu from './ProfileMenu'
 
 export const TOPBAR_HEIGHT = 56
 
@@ -29,8 +26,6 @@ export default function TopBar({
   sidebarCollapsed: boolean
   onToggleSidebar: () => void
 }) {
-  const me = useUser()
-
   return (
     <header
       style={{
@@ -72,37 +67,9 @@ export default function TopBar({
         <b style={{ font: 'var(--text-heading-med-14)', color: 'var(--colors-text-main)' }}>Frontline</b>
       </span>
 
-      <VerticalDivider />
-
-      <span
-        style={{
-          font: 'var(--text-body-reg-14)',
-          color: 'var(--colors-text-description)',
-          whiteSpace: 'nowrap',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          minWidth: 0,
-        }}
-      >
-        {me.user?.name ?? me.user?.email ?? '…'}
-        {me.org?.orgId ? (
-          <span style={{ color: 'var(--colors-text-caption)' }}> · org {String(me.org.orgId)}</span>
-        ) : null}
-      </span>
-
       <span style={{ flex: 1 }} />
 
-      <ThemeSwitcher />
-
-      <button
-        type="button"
-        className="icon-btn"
-        onClick={() => vibe.logout()}
-        title="Sign out"
-        aria-label="Sign out"
-      >
-        <Icon name="logOut" size={16} />
-      </button>
+      <ProfileMenu />
     </header>
   )
 }
