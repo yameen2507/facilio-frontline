@@ -73,7 +73,7 @@ export function Inbox() {
 
   return (
     <PageShell
-      title="Inbox"
+      title="Leads"
       actions={
         <Button small glyph="refresh" onClick={reload}>
           Refresh

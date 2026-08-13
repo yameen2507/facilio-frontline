@@ -45,7 +45,7 @@ export const DEFAULT_ROUTE = "/leads";
 export const NAV_TOP: NavEntry[] = [
   // `badge` names a count from the app-level counts context, fed up by the
   // owning feature — so the sidebar still needs no feature import.
-  { type: "item", to: "/leads", icon: Inbox, label: "Lead inbox", badge: "openLeads" },
+  { type: "item", to: "/leads", icon: Inbox, label: "Leads", badge: "openLeads" },
   { type: "item", to: "/accounts", icon: Building2, label: "Accounts" },
   // The survey lane. Templates sit beside surveys rather than under Settings:
   // the form builder is a platform piece other modules will consume, and an Ops

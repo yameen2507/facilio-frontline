@@ -15,12 +15,12 @@ import { PageShell } from "../../../app/shell/PageShell";
 import { ago } from "../../../lib/format";
 import { Bar, Card } from "../../../ui/Card";
 import { Chip, type Tone } from "../../../ui/Chip";
-import { TableCell, TableRow } from "@/components/ui/table";
-import { ListTable, ListTableSkeleton, type Col } from "../../../ui/DataTable";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Empty, ErrorState } from "../../../ui/States";
 import { Tabs, type Tab } from "../../../ui/Tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import { listTemplates } from "../api/templates-util";
 import type { Template, TemplateStatus } from "../types/template";
 
@@ -39,12 +39,109 @@ const STATUS_TONE: Record<TemplateStatus, Tone> = {
   archived: "neutral",
 };
 
-const COLS: Col[] = [
-  { label: "Template", icon: FileText, skel: "entity" },
-  { label: "Status", className: "w-32", skel: "chip" },
-  { label: "Questions", icon: ListChecks, className: "max-sm:hidden w-28", skel: "num" },
-  { label: "Updated", icon: Clock3, className: "max-md:hidden w-28", skel: "text" },
-];
+/**
+ * Templates render as CARDS, not rows: a template is a designed artifact —
+ * like a doc in a docs picker — and a gallery reads that better than a ledger.
+ * The grid packs by viewport, one column on phones up to four on wide screens.
+ */
+const GRID = "grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4";
+
+/**
+ * The thumbnail's gradient, derived from the template's name the same way
+ * CompanyLogo tints its initials: hash → hue, so every template keeps its own
+ * colour between visits and neighbours rarely collide. Two stops ~40° apart on
+ * the wheel keep it lively without ever pairing complementary colours.
+ * Saturated ink works over both themes because the tile is its own surface.
+ */
+function thumbStyle(name: string): React.CSSProperties {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
+  return {
+    background: `linear-gradient(135deg, hsl(${h} 70% 52%), hsl(${(h + 42) % 360} 78% 38%))`,
+  };
+}
+
+/**
+ * Not clickable, deliberately — the old table never navigated either, because
+ * the `:id` builder route renders a blank builder today (it never calls
+ * `getTemplate`). Wire `onOpen` back on the day the builder hydrates from it;
+ * the hover styles below are display polish, kept shy of a click affordance.
+ */
+function TemplateCard({ t }: { t: Template }) {
+  return (
+    // Flat like every other surface: no shadow at rest or on hover — the
+    // border tint is the hover cue, and the glyph animation the delight.
+    <div className="group bg-card hover:border-ring/40 flex flex-col overflow-hidden rounded-xl border transition-colors">
+      {/* The thumbnail. Archived templates go grayscale — the shelf keeps its
+          shape but visibly steps out of the working set. */}
+      <div
+        className={cn("relative h-28 shrink-0", t.status === "archived" && "opacity-60 grayscale")}
+        style={thumbStyle(t.name)}
+      >
+        {/* A soft top-left light so the gradient reads as a lit surface. */}
+        <div
+          className="absolute inset-0"
+          style={{ background: "radial-gradient(120% 90% at 18% 0%, rgb(255 255 255 / 0.28), transparent 55%)" }}
+        />
+        {/* The document glyph, oversized and bleeding off the corner — the
+            gallery's version of the row tile, grown to poster scale. */}
+        <FileText
+          className="absolute -right-3 -bottom-4 size-20 rotate-[-8deg] text-white/25 transition-transform duration-300 group-hover:rotate-0"
+          aria-hidden="true"
+        />
+        {t.category ? (
+          <span className="absolute bottom-2 left-3 max-w-[70%] truncate text-[11px] font-medium tracking-[0.08em] text-white/85 uppercase">
+            {t.category}
+          </span>
+        ) : null}
+      </div>
+
+      {/* Body. flex-1 + mt-auto footer keeps every card's footer on one line
+          across the row, however long the names above them run. */}
+      <div className="flex flex-1 flex-col gap-1 p-3.5">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-medium">{t.name}</div>
+            <div className="text-muted-foreground mt-0.5 truncate text-xs">
+              v{t.versionNo}
+              {` · ${t.sectionCount ?? 0} section${t.sectionCount === 1 ? "" : "s"}`}
+              {t.usageCount ? ` · used by ${t.usageCount}` : ""}
+            </div>
+          </div>
+          <Chip tone={STATUS_TONE[t.status]}>{t.status}</Chip>
+        </div>
+        <div className="text-muted-foreground mt-auto flex items-center gap-3 pt-2 text-xs">
+          <span className="inline-flex items-center gap-1">
+            <ListChecks className="size-3.5" aria-hidden="true" />
+            {t.questionCount ?? 0} questions
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <Clock3 className="size-3.5" aria-hidden="true" />
+            {t.updatedAt ? ago(t.updatedAt) : "—"}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Loading cards on the identical grid and card anatomy, so nothing shifts. */
+function CardsSkeleton({ count = 8 }: { count?: number }) {
+  return (
+    <div className={GRID} aria-busy="true" aria-label="Loading templates">
+      {Array.from({ length: count }, (_, i) => (
+        <div key={i} className="bg-card flex flex-col overflow-hidden rounded-xl border" aria-hidden="true">
+          <Skeleton className="bg-border h-28 shrink-0 rounded-none" />
+          <div className="flex flex-col gap-2 p-3.5">
+            <Skeleton className="bg-border h-3.5 rounded-sm" style={{ width: ["72%", "55%", "64%", "48%"][i % 4] }} />
+            <Skeleton className="bg-border h-3 rounded-sm" style={{ width: ["88%", "70%", "79%", "62%"][i % 4] }} />
+            <Skeleton className="bg-border mt-2 h-3 w-2/5 rounded-sm" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export function TemplateList() {
   const navigate = useNavigate();
@@ -119,53 +216,29 @@ export function TemplateList() {
         </Bar>
       }
     >
-      <Card pad={false}>
-        {!loaded ? (
-          <ListTableSkeleton cols={COLS} rows={4} />
-        ) : error ? (
+      {/* The gallery stands on the page itself; only the empty and error
+          states keep a Card so they have a surface to sit on. */}
+      {!loaded ? (
+        <CardsSkeleton count={8} />
+      ) : error ? (
+        <Card pad={false}>
           <ErrorState message={error} onRetry={() => setReloadKey((k) => k + 1)} />
-        ) : rows.length ? (
-          <ListTable cols={COLS}>
-            {rows.map((t) => (
-              // Plain rows: a template is edited through the builder, and this
-              // list deliberately never navigated on click.
-              <TableRow key={t.id}>
-                <TableCell className="px-4 py-3">
-                  <div className="flex items-center gap-3">
-                    {/* A document tile where entity rows carry a logo — same
-                        footprint, so all four lists lead with the same shape. */}
-                    <div className="bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-lg border">
-                      <FileText className="size-4" aria-hidden="true" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium">{t.name}</div>
-                      <div className="text-muted-foreground truncate text-xs">
-                        v{t.versionNo}
-                        {t.category ? ` · ${t.category}` : ""}
-                        {` · ${t.sectionCount ?? 0} section${t.sectionCount === 1 ? "" : "s"}`}
-                        {t.usageCount ? ` · used by ${t.usageCount} survey${t.usageCount === 1 ? "" : "s"}` : ""}
-                      </div>
-                    </div>
-                  </div>
-                </TableCell>
-                <TableCell className="w-32 px-4 py-3">
-                  <Chip tone={STATUS_TONE[t.status]}>{t.status}</Chip>
-                </TableCell>
-                <TableCell className="w-28 px-4 py-3 text-sm font-medium tabular-nums max-sm:hidden">
-                  {t.questionCount ?? 0}
-                </TableCell>
-                <TableCell className="text-muted-foreground w-28 px-4 py-3 text-xs max-md:hidden">
-                  {t.updatedAt ? ago(t.updatedAt) : "—"}
-                </TableCell>
-              </TableRow>
-            ))}
-          </ListTable>
-        ) : templates.length ? (
+        </Card>
+      ) : rows.length ? (
+        <div className={GRID}>
+          {rows.map((t) => (
+            <TemplateCard key={t.id} t={t} />
+          ))}
+        </div>
+      ) : templates.length ? (
+        <Card pad={false}>
           <Empty
             title="Nothing matches"
             body="No template in this tab matches the search."
           />
-        ) : (
+        </Card>
+      ) : (
+        <Card pad={false}>
           <Empty
             title="No templates yet"
             body="A template is sections and questions. The survey copies it at scheduling, so a template edited later never reaches a survey already in flight."
@@ -176,8 +249,8 @@ export function TemplateList() {
               </Button>
             }
           />
-        )}
-      </Card>
+        </Card>
+      )}
     </PageShell>
   );
 }

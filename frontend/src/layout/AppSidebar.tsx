@@ -80,22 +80,28 @@ function BrandHeader() {
 
   if (state === "collapsed" && !isMobile) {
     return (
-      <SidebarMenuButton
-        size="lg"
-        onClick={toggleSidebar}
-        tooltip="Expand sidebar"
-        aria-label="Expand sidebar"
-        // justify-center is required, not cosmetic: `size="lg"` overrides the
-        // base `p-2` with `p-0` when collapsed, and that padding is the only
-        // thing centering every other icon in the rail. Without it the mark
-        // sits flush left against a column of centred icons.
-        className="group/brand justify-center"
-      >
-        <div className="relative flex size-5 shrink-0 items-center justify-center">
-          <BrandMark className="size-5 transition-opacity group-hover/brand:opacity-0" />
-          <PanelLeftOpen className="absolute size-4 opacity-0 transition-opacity group-hover/brand:opacity-100" />
-        </div>
-      </SidebarMenuButton>
+      // h-12 matches the expanded brand row exactly, so the mark holds its
+      // vertical position while the rail collapses instead of jumping up: the
+      // rail forces menu buttons down to size-8, and the wrapper keeps that
+      // shorter button centred in the same 48px slot the expanded row occupies.
+      <div className="flex h-12 items-center justify-center">
+        <SidebarMenuButton
+          size="lg"
+          onClick={toggleSidebar}
+          tooltip="Expand sidebar"
+          aria-label="Expand sidebar"
+          // justify-center is required, not cosmetic: `size="lg"` overrides the
+          // base `p-2` with `p-0` when collapsed, and that padding is the only
+          // thing centering every other icon in the rail. Without it the mark
+          // sits flush left against a column of centred icons.
+          className="group/brand justify-center"
+        >
+          <div className="relative flex size-5 shrink-0 items-center justify-center">
+            <BrandMark className="size-5 transition-opacity group-hover/brand:opacity-0" />
+            <PanelLeftOpen className="absolute size-4 opacity-0 transition-opacity group-hover/brand:opacity-100" />
+          </div>
+        </SidebarMenuButton>
+      </div>
     );
   }
 
@@ -114,20 +120,30 @@ function BrandHeader() {
 }
 
 /**
- * The section divider: a zigzag rather than a rule, the one playful stroke in
- * an otherwise flat rail. Drawn as an SVG pattern so the peaks stay equilateral
- * at any rail width — it simply shows more or fewer of them — and inked with
- * the sidebar's own border token so it reads as structure, not decoration.
- * It stays in the collapsed rail too, where it does the labels' job while
- * they're hidden.
+ * The section divider: a soft sine wave, the one playful stroke in an
+ * otherwise flat rail. The curve is the designer-supplied wavedivider.svg
+ * (one 13.3px period of it), but re-inked for theming: the original carried a
+ * hardcoded grey-to-charcoal gradient that only worked on one dark background,
+ * so here the stroke is the sidebar's foreground at low opacity and the fade
+ * is a CSS mask — the same left-to-right dissolve, correct in both themes.
+ * A pattern rather than a stretched path keeps the humps the same shape at
+ * any rail width; the collapsed rail just shows fewer of them, where the wave
+ * does the hidden labels' job.
  */
-function ZigZag() {
+function WaveDivider() {
   const id = useId();
   return (
-    <svg className="text-sidebar-border mx-2 h-1.5 shrink-0" aria-hidden="true">
+    <svg
+      className="text-sidebar-foreground/35 mx-2 h-[5px] shrink-0 [mask-image:linear-gradient(to_right,black,transparent)]"
+      aria-hidden="true"
+    >
       <defs>
-        <pattern id={id} width="8" height="6" patternUnits="userSpaceOnUse">
-          <path d="M0 5 L4 1 L8 5" fill="none" stroke="currentColor" strokeWidth="1" />
+        <pattern id={id} width="13.34" height="5" patternUnits="userSpaceOnUse">
+          <path
+            d="M0 2.5C2.22 -0.17 4.45 -0.17 6.67 2.5C8.89 5.17 11.12 5.17 13.34 2.5"
+            fill="none"
+            stroke="currentColor"
+          />
         </pattern>
       </defs>
       <rect width="100%" height="100%" fill={`url(#${id})`} />
@@ -175,12 +191,12 @@ export default function AppSidebar() {
         </SidebarMenu>
       </SidebarHeader>
 
-      {/* gap-0: the zigzag is the divider now, and the default gap on top of
+      {/* gap-0: the wave is the divider now, and the default gap on top of
           each group's padding was reading as dead space between sections. */}
       <SidebarContent className="gap-0">
         {toGroups().map((group, i) => (
           <Fragment key={group.label ?? i}>
-            {i > 0 ? <ZigZag /> : null}
+            {i > 0 ? <WaveDivider /> : null}
             <SidebarGroup className="py-1.5">
               {group.label ? <SidebarGroupLabel>{group.label}</SidebarGroupLabel> : null}
               <SidebarGroupContent>
