@@ -30,7 +30,51 @@ const NUMERIC_COLUMNS = new Set([
   "turn_index",
   "size_bytes",
   "vibe_file_id",
+
+  // --- survey lane ---------------------------------------------------------
+  // Derived by replaying the CSV type inference over db/tables/*.csv, not by
+  // reading the spec: these are exactly the columns whose seed value parses as
+  // a number. A `condition_score >= 3` filter on an uncoerced string compares
+  // lexically, and "10" < "9".
+  "sequence_no",
+  "entry_no",
+  "version_no",
+  "template_version_no",
+  "source_template_version_no",
+  "revision_no",
+  "rework_count",
+  "completeness_pct",
+  "not_visited_pct",
+  "condition_score",
+  "value_number",
+  "ai_confidence",
+  "area_sqft",
+  "floor_count",
+  "room_count",
+  "restroom_count",
+  "min_repeats",
+  "max_repeats",
+  "geo_lat",
+  "geo_lng",
+  "geo_accuracy_m",
 ]);
+
+/**
+ * DELIBERATELY NOT ABOVE, and each one would corrupt data if added:
+ *
+ *   user_id · facilio_id · suggested_service_id · space_category ·
+ *   source_document_id   — Facilio ids that look numeric but are stored as
+ *                          text, so coercing them loses leading zeros and
+ *                          precision beyond 2^53.
+ *   rfp_value · survey_value · suggested_value · manual_value
+ *                        — reconciliation holds whatever the field held. A
+ *                          square-footage diff must come back as the string
+ *                          that was stored, not a number nobody wrote.
+ *   site_contact_phone · visit_number · checksum · ancestry_path
+ *                        — text that can look numeric.
+ *
+ * This is why coercion is keyed on column NAME and never on the value's shape.
+ */
 
 const snakeToCamel = (s: string): string => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
 

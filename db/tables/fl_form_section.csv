@@ -1,0 +1,2 @@
+id,data_json,created_at,updated_at,template_id,name,description,sequence_no,level_binding,applicability_service_ids_json,is_repeatable,repeat_label,min_repeats,max_repeats,creates_portfolio_node,node_type_created,created_by,updated_by,is_active
+00000000-0000-0000-0000-000000000000,{},2000-01-01T00:00:00Z,2000-01-01T00:00:00Z,00000000-0000-0000-0000-000000000000,Seed Section,Seed row - safe to delete,0,per_survey,[],false,Room,0,0,false,space,seed@example.com,seed@example.com,false

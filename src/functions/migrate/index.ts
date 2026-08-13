@@ -32,10 +32,17 @@ const TABLES = [
   "fl_intake_message",
 ];
 
-/** Ref-number counters. Values are the last number issued. */
+/**
+ * Ref-number counters. Values are the last number issued.
+ *
+ * There is deliberately NO `visit` sequence: a visit number is composed as
+ * `{survey.ref_no}/V{sequence_no}`, which is derivable, unique within its
+ * survey, and one fewer row to keep in step.
+ */
 const SEQUENCES = [
   { name: "lead", prefix: "LEAD" },
   { name: "deal", prefix: "DEAL" },
+  { name: "survey", prefix: "SUR" },
 ];
 
 /**
@@ -50,6 +57,60 @@ const DEFAULT_SETTINGS: Record<string, unknown> = {
   "lead.default_currency": "AED",
   "lead.assignment_mode": "claim",
   "lead.auto_analyse": true,
+
+  // --- survey module settings ----------------------------------------------
+  // The survey spec asks for a wide `survey_module_settings` singleton table.
+  // The house pattern is key/value, so these are keys — same information, one
+  // settings mechanism instead of two. Seeded here because a capture handler
+  // reading an ABSENT key gets null and silently falls back, which is a worse
+  // failure than a missing row: nothing errors and the wrong number ships.
+  //
+  // ⚠ `condition_scale_direction` IS NOT YET DECIDED (D-e) AND IT FEEDS PRICING.
+  // `1_is_worst` means 5 = excellent, the FM convention. The cleaning-buildup
+  // convention is the exact opposite, and both live in this product. Two teams
+  // reading this number in opposite directions is real money on a semi-comp
+  // contract. This default is a placeholder awaiting Sudharsan's call — confirm
+  // it before capture ships, and render the WORD beside every score, never the
+  // bare number.
+  "survey.condition_scale_direction": "1_is_worst",
+  "survey.condition_scale_labels": {
+    "1": "Critical",
+    "2": "Poor",
+    "3": "Fair",
+    "4": "Good",
+    "5": "Excellent",
+  },
+  "survey.contamination_levels": [
+    "none",
+    "light_dust_film",
+    "moderate_residue",
+    "heavy_debris",
+    "hazardous",
+  ],
+  "survey.suggested_frequencies": [
+    "one_time",
+    "daily",
+    "weekly",
+    "fortnightly",
+    "monthly",
+    "quarterly",
+    "annual",
+  ],
+  // Capture only — never live tracking. No background location, no tracking table.
+  "survey.geotag_capture": "best_effort",
+  "survey.geotag_accuracy_warn_m": 100,
+  // A condition at or below this needs a photo before the row can be saved.
+  "survey.require_photo_below_condition": 2,
+  // Warn, never block, above this share of seeded nodes left unvisited.
+  "survey.not_visited_warn_threshold_pct": 20,
+  "survey.allow_complete_with_not_visited": true,
+  // Banner, not a block — an unbounded rework loop should at least be visible.
+  "survey.rework_warn_after_bounces": 3,
+  // Device clock vs server clock on geotagged photos; drift corrupts the
+  // evidence chain the qualification defence rests on.
+  "survey.clock_drift_warn_minutes": 60,
+  // Notify only. The BD moves the deal stage by hand — no auto-advance, ever.
+  "survey.notify_deal_owner_on_complete": true,
 };
 
 const server = new StudioFunctions({ name: "migrate" });

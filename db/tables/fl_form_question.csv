@@ -1,0 +1,2 @@
+id,data_json,created_at,updated_at,section_id,template_id,label,help_text,field_type,options_json,allow_multiple,sequence_no,is_required,feeds_estimation,estimation_key,unit,created_by,updated_by,is_active
+00000000-0000-0000-0000-000000000000,{},2000-01-01T00:00:00Z,2000-01-01T00:00:00Z,00000000-0000-0000-0000-000000000000,00000000-0000-0000-0000-000000000000,Seed question?,Seed row - safe to delete,short_text,[],false,0,false,false,seed_key,sqft,seed@example.com,seed@example.com,false

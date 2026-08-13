@@ -1,0 +1,2 @@
+id,data_json,created_at,updated_at,survey_id,user_email,user_id,discipline_ids_json,is_lead,participation,assigned_by,assigned_at,notified_at,removed_by,removed_at,removal_reason,is_active
+00000000-0000-0000-0000-000000000000,{},2000-01-01T00:00:00Z,2000-01-01T00:00:00Z,00000000-0000-0000-0000-000000000000,seed@example.com,none,[],false,observer,seed@example.com,2000-01-01T00:00:00Z,2000-01-01T00:00:00Z,seed@example.com,2000-01-01T00:00:00Z,seed,false
