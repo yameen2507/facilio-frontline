@@ -21,6 +21,14 @@ import {
   validateSurveyTransition,
   type SurveyStatus,
 } from "../domain/survey-state";
+import {
+  allowedNext as visitAllowedNext,
+  canTransition as visitCanTransition,
+  isVisitStatus,
+  requiresReason as visitRequiresReason,
+  stampColumnFor as visitStampColumnFor,
+  type VisitStatus,
+} from "../domain/visit-state";
 import { count, many, manyWithTruncation, mutate, nowIso, one } from "../shared/db";
 import { appendEvent } from "../shared/events";
 import { nextRef } from "../shared/ids";
@@ -176,6 +184,12 @@ export interface SurveyDetail {
   nodes: unknown[];
   reconciliation: unknown[];
   qualifications: unknown[];
+  /** The audit trail — every event this module has been writing since day one. */
+  events: unknown[];
+  /** Evidence at the desk: every photo hanging off this survey's entities. */
+  photos: unknown[];
+  /** id → label for captioning photos by the room they evidence. */
+  entryLabels: unknown[];
   /** How much of the template the T2 snapshot copied — the walk's size. */
   snapshot: { sections: number; questions: number };
 }
@@ -196,6 +210,9 @@ export function surveyDetail(id: string): SurveyDetail {
     nodes: unknown[];
     reconciliation: unknown[];
     qualifications: unknown[];
+    events: unknown[];
+    photos: unknown[];
+    entryLabels: unknown[];
     sectionInstanceCount: unknown;
     questionInstanceCount: unknown;
   }>(
@@ -242,6 +259,34 @@ export function surveyDetail(id: string): SurveyDetail {
            limit 200
         ) x) as qualifications_arr,
 
+       (select coalesce(json_agg(x order by x.occurred_at desc), '[]'::json) from (
+          select id, entity_type, kind, actor, body, meta_json, occurred_at
+            from fl_event
+           where (entity_type = 'survey' and entity_id = $1)
+              or (entity_type = 'survey_visit'
+                  and entity_id in (select id from fl_survey_visit where survey_id = $1))
+           order by occurred_at desc
+           limit 100
+        ) x) as events_arr,
+
+       (select coalesce(json_agg(x order by x.created_at desc), '[]'::json) from (
+          select id, entity_type, entity_id, vibe_file_id, file_name, content_type,
+                 size_bytes, caption, data_json, created_at
+            from fl_photo
+           where (entity_type = 'survey' and entity_id = $1)
+              or entity_id in (select id from fl_survey_visit where survey_id = $1)
+              or entity_id in (select id from fl_survey_section_entry where survey_id = $1)
+              or entity_id in (select id from fl_survey_answer where survey_id = $1)
+              or entity_id in (select id from fl_survey_observation where survey_id = $1)
+              or entity_id in (select id from fl_prospect_node where survey_id = $1)
+           limit 500
+        ) x) as photos_arr,
+
+       (select coalesce(json_agg(x), '[]'::json) from (
+          select id, entry_label from fl_survey_section_entry
+           where survey_id = $1 and is_active = 'true'
+        ) x) as entry_labels_arr,
+
        (select count(*) from fl_survey_section_instance
          where survey_id = $1 and is_active = 'true') as section_instance_count,
 
@@ -265,6 +310,9 @@ export function surveyDetail(id: string): SurveyDetail {
     nodes: row.nodes,
     reconciliation: row.reconciliation,
     qualifications: row.qualifications,
+    events: row.events,
+    photos: row.photos,
+    entryLabels: row.entryLabels,
     snapshot: {
       sections: Number(row.sectionInstanceCount ?? 0),
       questions: Number(row.questionInstanceCount ?? 0),
@@ -537,6 +585,84 @@ export function scheduleVisit(
     : null;
 
   return { visit, snapshot };
+}
+
+// ── Visit transition ─────────────────────────────────────────────────────────
+
+/**
+ * F13, the rule this handler exists to keep: a `no_show` leaves the survey
+ * EXACTLY where it was. A wasted trip is a real, recurring tender event and it
+ * must never read as "surveyed" — only `capture` ever moves the survey
+ * forward, and only a real capture does that.
+ */
+export function transitionVisit(input: {
+  visitId: string;
+  toStatus: string;
+  reason?: string | null;
+  actor: string | null;
+}): { visit: VisitRecord } {
+  const visit = one<{ id: string; surveyId: string; status: VisitStatus; visitNumber: string }>(
+    `select id, survey_id, status, visit_number
+       from fl_survey_visit where id = $1 and is_active = 'true' limit 1`,
+    [input.visitId]
+  );
+  if (!visit) throw new Error(`visit ${input.visitId} not found`);
+
+  if (!isVisitStatus(input.toStatus)) {
+    throw new Error(`unknown visit status: ${input.toStatus}`);
+  }
+  const to = input.toStatus;
+  if (!visitCanTransition(visit.status, to)) {
+    throw new Error(
+      `a ${visit.status} visit cannot become ${to} (allowed: ${visitAllowedNext(visit.status).join(", ") || "nothing"})`
+    );
+  }
+
+  const reason = input.reason?.trim() || null;
+  if (visitRequiresReason(to) && !reason) {
+    throw new Error(
+      to === "no_show" ? "a no-show must say why — the reason is the record" : "cancelling a visit requires a reason"
+    );
+  }
+
+  const now = nowIso();
+  const sets: string[] = ["status = $2", "updated_by = $3", "updated_at = $4"];
+  const params: unknown[] = [input.visitId, to, input.actor, now];
+
+  const stamp = visitStampColumnFor(to);
+  if (stamp) sets.push(`${stamp} = $4`);
+  if (to === "no_show") {
+    params.push(reason);
+    sets.push(`no_show_reason = $${params.length}`);
+  }
+  if (to === "cancelled") {
+    params.push(reason);
+    sets.push(`cancel_reason = $${params.length}`);
+  }
+
+  // `and status = $n` closes the race, same as every transition in this app.
+  params.push(visit.status);
+  const updated = mutate(
+    `update fl_survey_visit set ${sets.join(", ")}
+      where id = $1 and status = $${params.length} and is_active = 'true'`,
+    params
+  );
+  if (!updated) throw new Error(`visit is no longer ${visit.status} — reload and try again`);
+
+  appendEvent({
+    entityType: "survey_visit",
+    entityId: input.visitId,
+    kind: "status_change",
+    actor: input.actor,
+    body: `${visit.visitNumber}: ${visit.status} → ${to}`,
+    meta: reason ? { reason } : {},
+  });
+
+  const fresh = one<VisitRecord>(
+    `select ${VISIT_COLUMNS} from fl_survey_visit where id = $1 limit 1`,
+    [input.visitId]
+  );
+  return { visit: fresh as VisitRecord };
 }
 
 // ── Transition ────────────────────────────────────────────────────────────────

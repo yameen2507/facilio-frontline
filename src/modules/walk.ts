@@ -178,11 +178,22 @@ export function walkState(surveyId: string, visitId?: string | null): Record<str
               or entity_id in (select id from fl_survey_observation where survey_id = $1)
               or entity_id in (select id from fl_prospect_node where survey_id = $1)
            limit 1000
-        ) x) as photos_arr`,
+        ) x) as photos_arr,
+
+       (select coalesce(json_agg(x), '[]'::json) from (
+          select key, value_json from fl_setting
+           where key in ('survey.condition_scale_labels', 'survey.condition_scale_direction',
+                         'survey.require_photo_below_condition', 'survey.geotag_capture')
+        ) x) as settings_arr`,
     [surveyId, visitId ?? null]
   );
 
   if (!row?.survey) throw new Error(`survey ${surveyId} not found`);
+
+  // The condition scale and the photo rule are CONFIG, not code — the walk
+  // renders what the org decided (D-e), never a hardcoded mirror of it.
+  const settingRows = (row.settings ?? []) as { key: string; value: unknown }[];
+  const setting = (key: string) => settingRows.find((s) => s.key === key)?.value;
 
   return {
     survey: row.survey,
@@ -192,6 +203,12 @@ export function walkState(surveyId: string, visitId?: string | null): Record<str
     answers: row.answers,
     observations: row.observations,
     photos: row.photos,
+    settings: {
+      conditionScaleLabels: setting("survey.condition_scale_labels") ?? null,
+      conditionScaleDirection: setting("survey.condition_scale_direction") ?? "1_is_worst",
+      requirePhotoBelowCondition: Number(setting("survey.require_photo_below_condition") ?? 2),
+      geotagCapture: setting("survey.geotag_capture") ?? "best_effort",
+    },
   };
 }
 

@@ -24,6 +24,7 @@ import {
   parsePayload,
   str,
 } from "../../shared/envelope";
+import { getSetting, setSetting } from "../../modules/settings";
 import {
   assignSurveyors,
   createSurvey,
@@ -33,6 +34,7 @@ import {
   setLead,
   surveyDetail,
   transitionSurvey,
+  transitionVisit,
   type AssigneeInput,
 } from "../../modules/survey";
 import {
@@ -186,6 +188,94 @@ server.addHandler({
         reason: optStr(p, "reason"),
         actor: optStr(p, "actorEmail"),
       });
+    }),
+});
+
+server.addHandler({
+  name: "visit-transition",
+  description:
+    "Move a visit through its lifecycle: planned → in_progress → done, or no_show / cancelled with a reason. A no-show NEVER advances the survey — only a real capture does.",
+  parameters: {
+    ...ENV,
+    visitId: S("Visit id"),
+    toStatus: S(`Target status: ${VISIT_STATUSES.join(", ")}`),
+    reason: S("Why — required for no_show and cancelled"),
+    actorEmail: ACTOR,
+  },
+  execute: async (args) =>
+    handle(() => {
+      const p = parsePayload(args);
+      return transitionVisit({
+        visitId: str(p, "visitId"),
+        toStatus: str(p, "toStatus"),
+        reason: optStr(p, "reason"),
+        actor: optStr(p, "actorEmail"),
+      });
+    }),
+});
+
+/** The survey settings the UI reads and edits — a subset with real consequences. */
+const SURVEY_SETTINGS_VIEW = () => ({
+  conditionScaleDirection: getSetting("survey.condition_scale_direction", "1_is_worst"),
+  conditionScaleLabels: getSetting<Record<string, string>>("survey.condition_scale_labels", {}),
+  requirePhotoBelowCondition: getSetting("survey.require_photo_below_condition", 2),
+  geotagCapture: getSetting("survey.geotag_capture", "best_effort"),
+  notVisitedWarnThresholdPct: getSetting("survey.not_visited_warn_threshold_pct", 20),
+});
+
+server.addHandler({
+  name: "settings-get",
+  description:
+    "The survey module's settings: condition scale direction and labels, the photo-below-condition threshold, geotag capture mode.",
+  parameters: {},
+  execute: async () => handle(() => SURVEY_SETTINGS_VIEW()),
+});
+
+server.addHandler({
+  name: "settings-put",
+  description:
+    "Update survey settings. conditionScaleDirection is decision D-e and FEEDS PRICING — two teams reading the scale opposite ways is real money, so change it deliberately.",
+  parameters: {
+    ...ENV,
+    conditionScaleDirection: S("1_is_worst (5 = excellent, the FM convention) or 5_is_worst (5 = filthy, the buildup convention)"),
+    requirePhotoBelowCondition: N("A condition at or below this needs a photo; 0 disables the rule"),
+    geotagCapture: S("off or best_effort — never required, never background tracking"),
+    actorEmail: ACTOR,
+  },
+  execute: async (args) =>
+    handle(() => {
+      const p = parsePayload(args);
+      const applied: string[] = [];
+
+      const direction = optStr(p, "conditionScaleDirection");
+      if (direction) {
+        if (direction !== "1_is_worst" && direction !== "5_is_worst") {
+          throw new Error("conditionScaleDirection must be 1_is_worst or 5_is_worst");
+        }
+        setSetting("survey.condition_scale_direction", direction);
+        applied.push("conditionScaleDirection");
+      }
+
+      const threshold = optNum(p, "requirePhotoBelowCondition");
+      if (threshold !== null) {
+        if (threshold < 0 || threshold > 5) {
+          throw new Error("requirePhotoBelowCondition is a 0–5 value (0 disables the rule)");
+        }
+        setSetting("survey.require_photo_below_condition", Math.round(threshold));
+        applied.push("requirePhotoBelowCondition");
+      }
+
+      const geotag = optStr(p, "geotagCapture");
+      if (geotag) {
+        if (geotag !== "off" && geotag !== "best_effort") {
+          throw new Error("geotagCapture must be off or best_effort");
+        }
+        setSetting("survey.geotag_capture", geotag);
+        applied.push("geotagCapture");
+      }
+
+      if (!applied.length) throw new Error("no settings supplied");
+      return { applied, settings: SURVEY_SETTINGS_VIEW() };
     }),
 });
 
