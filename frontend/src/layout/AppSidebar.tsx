@@ -85,7 +85,11 @@ function BrandHeader() {
         onClick={toggleSidebar}
         tooltip="Expand sidebar"
         aria-label="Expand sidebar"
-        className="group/brand"
+        // justify-center is required, not cosmetic: `size="lg"` overrides the
+        // base `p-2` with `p-0` when collapsed, and that padding is the only
+        // thing centering every other icon in the rail. Without it the mark
+        // sits flush left against a column of centred icons.
+        className="group/brand justify-center"
       >
         <div className="relative flex size-5 shrink-0 items-center justify-center">
           <BrandMark className="size-5 transition-opacity group-hover/brand:opacity-0" />
