@@ -1,0 +1,2 @@
+id,data_json,created_at,updated_at,name,description,currency,condition_scale_direction,status,version_no,parent_rate_card_id,published_by,published_at,archived_by,archived_at,created_by,updated_by,is_active
+00000000-0000-0000-0000-000000000000,{},2000-01-01T00:00:00Z,2000-01-01T00:00:00Z,Seed Rate Card,Seed row - safe to delete,AED,1_is_worst,archived,0,00000000-0000-0000-0000-000000000000,seed@example.com,2000-01-01T00:00:00Z,seed@example.com,2000-01-01T00:00:00Z,seed@example.com,seed@example.com,false

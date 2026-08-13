@@ -8,6 +8,7 @@
  */
 
 import { many, mutate, nowIso, one } from "../shared/db";
+import { upsertJsonKey } from "../shared/row-map";
 import { DEFAULT_SLA, type SlaTargets } from "../domain/sla";
 
 export interface ServiceArea {
@@ -23,6 +24,15 @@ export interface ServiceLine {
   code: string;
   name: string;
   active: string;
+  /**
+   * The Facilio Services record id this line maps to — C23: every service
+   * referenced anywhere must ultimately be a Facilio Services id, never an
+   * app-local definition. Null until the G1 pass answers L10 (the Services
+   * read action and id shape), then back-filled. Carried inside `data_json`
+   * because `fl_service_line` was imported before C23 was ruled and the DB
+   * role cannot ALTER a table.
+   */
+  facilioServiceId: string | null;
 }
 
 export interface Coverage {
@@ -84,7 +94,9 @@ export function configData(): ConfigData {
         ) x) as areas_arr,
 
        (select coalesce(json_agg(x order by x.code), '[]'::json) from (
-          select id, code, name, active
+          select id, code, name, active,
+                 (coalesce(nullif(data_json::text, ''), '{}'))::jsonb ->> 'facilio_service_id'
+                   as facilio_service_id
             from fl_service_line order by code limit 200
         ) x) as service_lines_arr,
 
@@ -245,7 +257,10 @@ export function listAreas(): ServiceArea[] {
 
 export function listServiceLines(): ServiceLine[] {
   return many<ServiceLine>(
-    "select id, code, name, active from fl_service_line order by code limit 200"
+    `select id, code, name, active,
+            (coalesce(nullif(data_json::text, ''), '{}'))::jsonb ->> 'facilio_service_id'
+              as facilio_service_id
+       from fl_service_line order by code limit 200`
   );
 }
 
@@ -286,28 +301,55 @@ export function saveArea(input: {
   return row.id;
 }
 
-export function saveServiceLine(input: { code: string; name: string; active?: boolean }): string {
+export function saveServiceLine(input: {
+  code: string;
+  name: string;
+  active?: boolean;
+  /**
+   * Facilio Services record id (C23) — see the ServiceLine interface. `null`
+   * clears the link, `undefined` leaves whatever is stored untouched.
+   */
+  facilioServiceId?: string | null;
+}): string {
   const now = nowIso();
   const active = input.active === false ? "false" : "true";
-  const existing = one<{ id: string }>("select id from fl_service_line where code = $1 limit 1", [
-    input.code,
-  ]);
+  const existing = one<{ id: string; dataRaw: unknown }>(
+    "select id, data_json::text as data_raw from fl_service_line where code = $1 limit 1",
+    [input.code]
+  );
 
   if (existing) {
-    mutate(`update fl_service_line set name = $2, active = $3, updated_at = $4 where id = $1`, [
-      existing.id,
-      input.name,
-      active,
-      now,
-    ]);
+    if (input.facilioServiceId === undefined) {
+      mutate(`update fl_service_line set name = $2, active = $3, updated_at = $4 where id = $1`, [
+        existing.id,
+        input.name,
+        active,
+        now,
+      ]);
+    } else {
+      // Read-modify-write in code rather than jsonb_set in SQL: it works
+      // whatever type CSV inference gave data_json, and preserves any other
+      // overflow keys already riding in the column.
+      mutate(
+        `update fl_service_line set name = $2, active = $3, data_json = $4, updated_at = $5 where id = $1`,
+        [
+          existing.id,
+          input.name,
+          active,
+          upsertJsonKey(existing.dataRaw, "facilio_service_id", input.facilioServiceId),
+          now,
+        ]
+      );
+    }
     return existing.id;
   }
 
+  const data = upsertJsonKey("{}", "facilio_service_id", input.facilioServiceId ?? null);
   const row = one<{ id: string }>(
     `insert into fl_service_line (id, code, name, active, data_json, created_at, updated_at)
-     values (gen_random_uuid()::text, $1, $2, $3, '{}', $4, $4)
+     values (gen_random_uuid()::text, $1, $2, $3, $4, $5, $5)
      returning id`,
-    [input.code, input.name, active, now]
+    [input.code, input.name, active, data, now]
   );
   if (!row) throw new Error("could not save service line");
   return row.id;

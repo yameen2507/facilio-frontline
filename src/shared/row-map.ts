@@ -57,6 +57,28 @@ const NUMERIC_COLUMNS = new Set([
   "geo_lat",
   "geo_lng",
   "geo_accuracy_m",
+
+  // --- quote lane ----------------------------------------------------------
+  // Same derivation: exactly the columns whose seed value in db-import.mjs
+  // parses as a number. Money columns above all — a subtotal built from
+  // uncoerced strings CONCATENATES (see the file header).
+  "unit_rate",
+  "min_charge",
+  "qty",
+  "condition_multiplier",
+  "per_occurrence_amount",
+  "monthly_equivalent_amount",
+  "one_time_amount",
+  "liability_threshold_amount",
+  "one_time_subtotal",
+  "recurring_monthly_subtotal",
+  "optional_one_time_total",
+  "optional_recurring_monthly_total",
+  "tax_pct",
+  "tax_one_time",
+  "tax_recurring_monthly",
+  "total_one_time",
+  "total_recurring_monthly",
 ]);
 
 /**
@@ -92,6 +114,25 @@ export function parseJson<T>(value: unknown, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+/**
+ * Read-modify-write for one key inside a `data_json` overflow column, without
+ * assuming the column's SQL type — CSV inference may have produced text OR
+ * json, and this helper accepts the raw value either way. `value: null`
+ * removes the key. A malformed blob is replaced rather than crashing a save:
+ * the overflow column is a convenience, never a record of truth.
+ */
+export function upsertJsonKey(
+  raw: unknown,
+  key: string,
+  value: string | null
+): string {
+  const parsed = parseJson<Record<string, unknown>>(raw, {});
+  const obj = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  if (value === null) delete obj[key];
+  else obj[key] = value;
+  return JSON.stringify(obj);
 }
 
 /**

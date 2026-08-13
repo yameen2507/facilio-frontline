@@ -43,6 +43,7 @@ const SEQUENCES = [
   { name: "lead", prefix: "LEAD" },
   { name: "deal", prefix: "DEAL" },
   { name: "survey", prefix: "SUR" },
+  { name: "quote", prefix: "QTE" },
 ];
 
 /**

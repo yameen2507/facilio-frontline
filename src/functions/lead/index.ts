@@ -154,10 +154,19 @@ server.addHandler({
         const l = raw as Record<string, unknown>;
         if (typeof l.code !== "string" || !l.code.trim())
           throw new Error("each service line needs a code");
+        // C23: the Facilio Services id a line maps to. "" clears the link
+        // (same convention as scopeNotes); a field left out leaves it alone.
+        const facilioServiceId =
+          typeof l.facilioServiceId === "string"
+            ? l.facilioServiceId.trim() || null
+            : l.facilioServiceId === null
+              ? null
+              : undefined;
         const id = saveServiceLine({
           code: l.code.trim(),
           name: typeof l.name === "string" && l.name.trim() ? l.name.trim() : l.code.trim(),
           active: l.active !== false,
+          facilioServiceId,
         });
         lineIdsByCode.set(l.code.trim(), id);
         created.serviceLines++;

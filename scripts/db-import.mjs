@@ -709,6 +709,131 @@ const tables = {
     trigger_kind: "cancel",
     is_current: "false",
   },
+
+  // ==========================================================================
+  // QUOTE LANE — 4 tables. C10 (optional lines excluded from totals),
+  // C11 (condition-adjusted rates), C12 (one-time + recurring), C14 (semi-comp
+  // liability threshold). Consumes the survey lane's frozen §5 payload.
+  //
+  // The survey lane's three seed rules apply unchanged. Two columns are C23
+  // landmines if seeded wrong: `facilio_service_id` is a Facilio Services id —
+  // a numeric string in the wild, seeded "none" so it stays text, and NULLABLE
+  // until the G1 pass answers L10. `service_code` is OUR catalogue code
+  // (fl_service_line.code), never a copied Facilio name.
+  // ==========================================================================
+
+  fl_rate_card: {
+    ...common,
+    name: "Seed Rate Card",
+    description: "Seed row - safe to delete",
+    currency: "AED",
+    // The direction this card's condition multipliers were authored in. D-e is
+    // unsettled and both conventions live in this product; stamping the card's
+    // assumption is what makes a later flip detectable instead of a mispriced
+    // contract (src/domain/pricing.ts).
+    condition_scale_direction: "1_is_worst",
+    status: "archived",
+    version_no: 0,
+    parent_rate_card_id: SEED_ID,
+    published_by: "seed@example.com",
+    published_at: NOW,
+    archived_by: "seed@example.com",
+    archived_at: NOW,
+    created_by: "seed@example.com",
+    updated_by: "seed@example.com",
+    is_active: "false",
+  },
+
+  fl_rate_card_entry: {
+    ...common,
+    rate_card_id: SEED_ID,
+    facilio_service_id: "none",
+    service_code: "SEED",
+    description: "Seed entry - safe to delete",
+    // Joins §5 payload `estimation_values` to a price. The KEY is the contract
+    // between the lanes (§5 rule 2), so it lives on the rate entry, not on any
+    // question wording.
+    estimation_key: "seed_key",
+    uom: "unit",
+    unit_rate: 0,
+    min_charge: 0,
+    condition_multipliers_json: "{}",
+    default_frequency: "one_time",
+    sequence_no: 0,
+    notes: "seed",
+    created_by: "seed@example.com",
+    updated_by: "seed@example.com",
+    is_active: "false",
+  },
+
+  fl_quote: {
+    ...common,
+    ref_no: "QTE-0000",
+    deal_id: SEED_ID,
+    account_id: SEED_ID,
+    // Both nullable in life: C22 says a simple customer is quoted straight
+    // from a call, with no survey at all.
+    survey_id: SEED_ID,
+    survey_revision_id: SEED_ID,
+    rate_card_id: SEED_ID,
+    title: "Seed Quote",
+    status: "superseded",
+    currency: "AED",
+    contract_type: "non_comprehensive",
+    liability_threshold_amount: 0,
+    // Stamped at pricing time from the org setting, so a quote is auditable
+    // even if D-e's answer later changes the org default.
+    condition_scale_direction: "1_is_worst",
+    one_time_subtotal: 0,
+    recurring_monthly_subtotal: 0,
+    optional_one_time_total: 0,
+    optional_recurring_monthly_total: 0,
+    tax_pct: 0,
+    tax_one_time: 0,
+    tax_recurring_monthly: 0,
+    total_one_time: 0,
+    total_recurring_monthly: 0,
+    valid_until: NOW,
+    revision_no: 0,
+    parent_quote_id: SEED_ID,
+    superseded_by_quote_id: SEED_ID,
+    sent_at: NOW,
+    accepted_at: NOW,
+    rejected_at: NOW,
+    reject_reason: "seed",
+    notes: "Seed row - safe to delete",
+    created_by: "seed@example.com",
+    updated_by: "seed@example.com",
+    is_active: "false",
+  },
+
+  fl_quote_line: {
+    ...common,
+    quote_id: SEED_ID,
+    sequence_no: 0,
+    description: "Seed line - safe to delete",
+    facilio_service_id: "none",
+    service_code: "SEED",
+    scope_node_id: SEED_ID,
+    estimation_key: "seed_key",
+    source_answer_id: "none",
+    source_observation_id: "none",
+    source_role: "finding",
+    qty: 0,
+    uom: "unit",
+    unit_rate: 0,
+    condition_score: 0,
+    condition_multiplier: 0,
+    frequency: "one_time",
+    per_occurrence_amount: 0,
+    monthly_equivalent_amount: 0,
+    one_time_amount: 0,
+    is_optional: "false",
+    notes: "seed",
+    created_by: "seed@example.com",
+    updated_by: "seed@example.com",
+    is_active: "false",
+  },
 };
 
 // --- CSV writing ------------------------------------------------------------
