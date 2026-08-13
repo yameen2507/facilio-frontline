@@ -49,6 +49,8 @@ export type Survey = {
   accountId?: string | null;
   accountName?: string | null;
   templateId?: string | null;
+  templateName?: string | null;
+  templateVersionNo?: number | null;
   leadUserEmail?: string | null;
   contractIntent?: ContractIntent | null;
   targetCompletionDate?: string | null;
@@ -156,6 +158,8 @@ export type SurveyDetailResponse = {
   nodes: ProspectNode[];
   reconciliation: ReconciliationItem[];
   qualifications: Qualification[];
+  /** How much of the template the T2 snapshot copied — the walk's size. */
+  snapshot?: { sections: number; questions: number };
 };
 
 // ── Display vocabulary ───────────────────────────────────────────────────────

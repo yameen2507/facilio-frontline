@@ -1,18 +1,13 @@
 /**
  * The survey data layer.
  *
- * ⚠ EVERY FUNCTION IN THIS FILE IS A [SEAM]. The `survey` platform function does
- * not exist yet — `src/functions/survey/` holds a `.gitkeep` and nothing else.
- * These are written against the frozen contract (Survey Backend Plan v1 §7) so
- * that when the handlers land, no page changes. On failure each returns
- * `{ data: null, error }` like every other call in this app, and the page
- * renders that error verbatim.
- *
- * THE FILE SHIPS COMPLETE AND UNCALLED. Pages do not invoke these yet: a page
- * that fires a request at a function which does not exist shows an error state
- * on every load, which reads as a broken product rather than an unbuilt one.
- * They render their real empty state instead, and grow the effect plus its
- * loading and error states together when the backend arrives.
+ * The `survey` function's DESK SLICE is LIVE (built 2026-08-13): `create`,
+ * `list`, `get`, `schedule`, `transition`, `deal-list`, `reference`. The
+ * wrappers still marked [SEAM] below — the walk, capture, assignment, nodes,
+ * reconciliation and submit — await the next backend slice and stay uncalled;
+ * their pages keep real empty states rather than firing at missing handlers.
+ * On failure every call returns `{ data: null, error }` like the rest of the
+ * app, and the page renders that error verbatim.
  *
  * | handler            | args                                            | returns                          |
  * | ------------------ | ----------------------------------------------- | -------------------------------- |
@@ -58,7 +53,7 @@ const payload = (body: Record<string, unknown>) => ({ payload: JSON.stringify(bo
 
 // ── Reads ────────────────────────────────────────────────────────────────────
 
-/** [SEAM] `survey.list` — one hardcoded default list; saved views are a platform item. */
+/** `survey.list` — one hardcoded default list; saved views are a platform item. */
 export const listSurveys = (status: string, search: string) =>
   call<SurveyListResponse>("list", {
     limit: LIST_LIMIT,
@@ -68,7 +63,7 @@ export const listSurveys = (status: string, search: string) =>
     ...(search ? { search } : {}),
   });
 
-/** [SEAM] `survey.get` — survey + visits + assignees + nodes + reconciliation in ONE query. */
+/** `survey.get` — survey + visits + assignees + nodes + reconciliation in ONE query. */
 export const getSurvey = (surveyId: string) => call<SurveyDetailResponse>("get", { surveyId });
 
 /** [SEAM] `survey.walk` — the surveyor's whole screen in one batched read. */
@@ -77,19 +72,62 @@ export const getWalk = (surveyId: string, visitId?: string) =>
 
 // ── Desk mutations ───────────────────────────────────────────────────────────
 
-/** [SEAM] `survey.create` — asks three things; only `dealId` is mandatory. */
+/** `survey.create` — asks three things; only `dealId` is mandatory. */
 export const createSurvey = (
   dealId: string,
   actorEmail: string,
-  opts: { scheduledStart?: string; scheduledEnd?: string; templateId?: string } = {}
+  opts: {
+    scheduledStart?: string;
+    scheduledEnd?: string;
+    templateId?: string;
+    title?: string;
+    timezone?: string;
+    targetCompletionDate?: string;
+  } = {}
 ) => call<{ survey: Survey }>("create", { dealId, actorEmail, ...opts });
+
+/** A deal as the create-survey picker needs it. */
+export type DealOption = {
+  id: string;
+  refNo: string;
+  title: string | null;
+  stage: string;
+  accountName: string | null;
+  estimatedValue: number | null;
+  currency: string | null;
+  surveyCount: number;
+};
+
+/** `survey.deal-list` — a survey is raised AGAINST a deal, so the picker needs them. */
+export const listDeals = () => call<{ deals: DealOption[] }>("deal-list");
+
+/** A published template as the picker needs it. */
+export type TemplateOption = {
+  id: string;
+  name: string;
+  versionNo: number;
+  sectionCount?: number;
+  questionCount?: number;
+};
+
+/**
+ * `form.template-list` filtered to published — the picker's other half. Calls
+ * the `form` function directly rather than importing the templates feature's
+ * api-util: features do not import each other's internals, and this thin
+ * duplicate is the cheapest honest boundary.
+ */
+export const listPublishedTemplates = () =>
+  requestFrom<{ templates: TemplateOption[] }>("form", "template-list", {
+    status: "published",
+    limit: 100,
+  });
 
 /** [SEAM] `survey.update` — status is rejected here; use `transition`. */
 export const updateSurvey = (surveyId: string, fields: Record<string, string>) =>
   call<{ survey: Survey }>("update", { surveyId, ...fields });
 
 /**
- * [SEAM] `survey.transition` — guards live server-side in `domain/survey-state.ts`,
+ * `survey.transition` — guards live server-side in `domain/survey-state.ts`,
  * not in this client. Cancelling and rework both require a reason; T5/T6/T7 are
  * lead-only. The UI disables what it can, but the function is the authority.
  */
@@ -100,7 +138,7 @@ export const transitionSurvey = (
   actorEmail: string
 ) => call<{ survey: Survey }>("transition", { surveyId, toStatus, reason, actorEmail });
 
-/** [SEAM] `survey.schedule` — schedule AND reschedule; always re-runs conflict-warn. */
+/** `survey.schedule` — schedule AND reschedule; always re-runs conflict-warn. */
 export const scheduleVisit = (surveyId: string, body: Record<string, unknown>) =>
   call<{ visit: Visit }>("schedule", { surveyId, ...payload(body) });
 
