@@ -250,9 +250,6 @@ export function LeadDetail() {
   return (
     <PageShell
       title={lead.companyName}
-      // The route would name this lane "Lead inbox", which is where the record
-      // was found, not what it is.
-      eyebrow="Lead"
       subtitle={`${lead.refNo} · from ${lead.source} · ${ago(lead.createdAt)}`}
       actions={
         <Button small glyph="refresh" onClick={() => setReloadKey((k) => k + 1)}>

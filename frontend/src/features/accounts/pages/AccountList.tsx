@@ -21,7 +21,7 @@ import { Building2, Clock3, Handshake, Users } from "lucide-react";
 import { PageShell } from "../../../app/shell/PageShell";
 import { ago, plural } from "../../../lib/format";
 import { Chip } from "../../../ui/Chip";
-import { Bar, Card } from "../../../ui/Card";
+import { Card } from "../../../ui/Card";
 import { Input } from "@/components/ui/input";
 import { TableCell } from "@/components/ui/table";
 import { CountLine } from "../../../ui/Row";
@@ -104,19 +104,17 @@ export function AccountList() {
     <PageShell
       title="Accounts"
       subtitle={total ? `${plural(total, "company", "companies")}${result?.truncated ? " · first page" : ""}` : undefined}
-      strip={
-        // No tabs on this page, so the field is the whole strip and supplies
-        // the band's bottom padding itself.
-        <Bar className="w-full">
-          <Input
-            type="text"
-            placeholder="Search name, email or domain"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full sm:w-80"
-            aria-label="Search companies"
-          />
-        </Bar>
+      // No tabs on this page — the shell still pins search to the row's right,
+      // where it lives on every other page.
+      search={
+        <Input
+          type="text"
+          placeholder="Search name, email or domain"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="h-8 w-full sm:w-56"
+          aria-label="Search companies"
+        />
       }
     >
       <Card pad={false}>

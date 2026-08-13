@@ -15,7 +15,7 @@ import { ClipboardList, Clock3, Footprints, Plus } from "lucide-react";
 import { useCounts } from "../../../app/counts";
 import { PageShell } from "../../../app/shell/PageShell";
 import { ago } from "../../../lib/format";
-import { Bar, Card } from "../../../ui/Card";
+import { Card } from "../../../ui/Card";
 import { TableCell } from "@/components/ui/table";
 import { ClickRow, ListTable, ListTableSkeleton, type Col } from "../../../ui/DataTable";
 import { CompanyLogo } from "../../../ui/CompanyLogo";
@@ -119,23 +119,21 @@ export function SurveyList() {
       title="Surveys"
       subtitle="Condition surveys against a deal"
       actions={
-        <Button onClick={() => setCreating(true)}>
+        <Button size="sm" onClick={() => setCreating(true)}>
           <Plus className="size-4" />
           New survey
         </Button>
       }
-      strip={
-        <Bar className="w-full justify-between gap-x-6">
-          <Tabs items={tabs} active={filter} onChange={setFilter} />
-          <Input
-            type="text"
-            placeholder="Search by number, account or site"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full sm:w-72"
-            aria-label="Search surveys"
-          />
-        </Bar>
+      strip={<Tabs items={tabs} active={filter} onChange={setFilter} />}
+      search={
+        <Input
+          type="text"
+          placeholder="Search by number, account or site"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="h-8 w-full sm:w-56"
+          aria-label="Search surveys"
+        />
       }
     >
       <Card pad={false}>

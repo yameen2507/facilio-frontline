@@ -13,7 +13,7 @@ import { useNavigate } from "react-router-dom";
 import { Clock3, FilePlus2, FileText, ListChecks, MoreVertical, Plus } from "lucide-react";
 import { PageShell } from "../../../app/shell/PageShell";
 import { ago, plural } from "../../../lib/format";
-import { Bar, Card } from "../../../ui/Card";
+import { Card } from "../../../ui/Card";
 import { Chip, type Tone } from "../../../ui/Chip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Empty, ErrorState } from "../../../ui/States";
@@ -331,26 +331,21 @@ export function TemplateList() {
       title="Templates"
       subtitle="Question sets the survey copies at scheduling"
       actions={
-        <Button onClick={() => navigate("/templates/new")}>
+        <Button size="sm" onClick={() => navigate("/templates/new")}>
           <Plus className="size-4" />
           New template
         </Button>
       }
-      strip={
-        // w-full so justify-between has a full line to work across; the field
-        // takes a fixed width beside the tabs and only goes full-width once it
-        // has wrapped under them on a phone.
-        <Bar className="w-full justify-between gap-x-6">
-          <Tabs items={tabs} active={filter} onChange={setFilter} />
-          <Input
-            type="text"
-            placeholder="Search templates"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full sm:w-72"
-            aria-label="Search templates"
-          />
-        </Bar>
+      strip={<Tabs items={tabs} active={filter} onChange={setFilter} />}
+      search={
+        <Input
+          type="text"
+          placeholder="Search templates"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="h-8 w-full sm:w-56"
+          aria-label="Search templates"
+        />
       }
     >
       {/* The gallery stands on the page itself; only the empty and error

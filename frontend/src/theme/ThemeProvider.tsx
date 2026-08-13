@@ -43,9 +43,29 @@ const systemPrefers = (): Resolved =>
 
 const resolve = (mode: ThemeMode): Resolved => (mode === "system" ? systemPrefers() : mode);
 
-/** Always an explicit value — never remove the attribute, see the note above. */
+/**
+ * Always an explicit value — never remove the attribute, see the note above.
+ *
+ * The switch CROSSFADES rather than snapping: browsers with the View
+ * Transitions API get a true whole-page fade (the engine screenshots old and
+ * new and blends them — no per-property transition weirdness); everything else
+ * gets a brief `.theme-fade` class that transitions the colour properties, cut
+ * loose after the fade so hover states don't animate forever. theme-boot.js
+ * still stamps first paint directly — a fade from nothing is a flash.
+ */
 function apply(mode: ThemeMode) {
-  document.documentElement.setAttribute("data-theme", resolve(mode));
+  const next = resolve(mode);
+  const root = document.documentElement;
+  if (root.getAttribute("data-theme") === next) return;
+
+  const doc = document as Document & { startViewTransition?: (update: () => void) => void };
+  if (typeof doc.startViewTransition === "function") {
+    doc.startViewTransition(() => root.setAttribute("data-theme", next));
+    return;
+  }
+  root.classList.add("theme-fade");
+  root.setAttribute("data-theme", next);
+  window.setTimeout(() => root.classList.remove("theme-fade"), 300);
 }
 
 type ThemeApi = { mode: ThemeMode; resolved: Resolved; setMode: (m: ThemeMode) => void };
