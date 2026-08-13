@@ -8,9 +8,9 @@
  * that stops being true.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Clock3, FilePlus2, FileText, ListChecks, Plus } from "lucide-react";
+import { Clock3, FilePlus2, FileText, ListChecks, MoreVertical, Plus } from "lucide-react";
 import { PageShell } from "../../../app/shell/PageShell";
 import { ago } from "../../../lib/format";
 import { Bar, Card } from "../../../ui/Card";
@@ -21,7 +21,15 @@ import { Tabs, type Tab } from "../../../ui/Tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { listTemplates } from "../api/templates-util";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useToast } from "../../../ui/Toast";
+import { archiveTemplate, cloneTemplate, listTemplates, publishTemplate } from "../api/templates-util";
 import type { Template, TemplateStatus } from "../types/template";
 
 type Filter = TemplateStatus | "all";
@@ -47,49 +55,113 @@ const STATUS_TONE: Record<TemplateStatus, Tone> = {
 const GRID = "grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4";
 
 /**
- * The thumbnail's gradient, derived from the template's name the same way
- * CompanyLogo tints its initials: hash → hue, so every template keeps its own
- * colour between visits and neighbours rarely collide. Two stops ~40° apart on
- * the wheel keep it lively without ever pairing complementary colours.
- * Saturated ink works over both themes because the tile is its own surface.
+ * The thumbnail's look, derived from the template's name the same way
+ * CompanyLogo tints its initials: one hash feeds both the hue and which
+ * texture the tile wears, so every template keeps its identity between visits
+ * and neighbours rarely match. Two stops ~40° apart on the wheel keep the
+ * gradient lively without ever pairing complementary colours. Saturated ink
+ * works over both themes because the tile is its own surface.
  */
-function thumbStyle(name: string): React.CSSProperties {
+function thumbOf(name: string): { style: React.CSSProperties; texture: number } {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
   return {
-    background: `linear-gradient(135deg, hsl(${h} 70% 52%), hsl(${(h + 42) % 360} 78% 38%))`,
+    style: {
+      background: `linear-gradient(135deg, hsl(${h} 70% 52%), hsl(${(h + 42) % 360} 78% 38%))`,
+    },
+    // A different divisor than the hue's, so texture and colour don't travel
+    // together — two teal cards can still wear different weaves.
+    texture: Math.floor(h / 7) % 4,
   };
 }
 
+/** One tile of each texture, all white-on-nothing so the gradient shows
+    through: dots, diagonal weave, drafting grid, and the sidebar's wave. */
+const TEXTURES: { w: number; h: number; draw: React.ReactNode }[] = [
+  { w: 12, h: 12, draw: <circle cx="2" cy="2" r="1.1" fill="white" /> },
+  { w: 10, h: 10, draw: <path d="M-1 11 L11 -1" stroke="white" strokeWidth="1.2" fill="none" /> },
+  { w: 14, h: 14, draw: <path d="M13.5 0 V13.5 H0" stroke="white" fill="none" /> },
+  { w: 16, h: 8, draw: <path d="M0 4C2.7 0.8 5.3 0.8 8 4C10.7 7.2 13.3 7.2 16 4" stroke="white" fill="none" /> },
+];
+
+/** The texture layer: an SVG pattern over the gradient, quiet enough that the
+    colour stays the subject and the weave only shows on a second look. */
+function ThumbTexture({ texture }: { texture: number }) {
+  const id = useId();
+  const t = TEXTURES[texture];
+  return (
+    <svg className="absolute inset-0 size-full opacity-[0.16]" aria-hidden="true">
+      <defs>
+        <pattern id={id} width={t.w} height={t.h} patternUnits="userSpaceOnUse">
+          {t.draw}
+        </pattern>
+      </defs>
+      <rect width="100%" height="100%" fill={`url(#${id})`} />
+    </svg>
+  );
+}
+
 /**
- * Not clickable, deliberately — the old table never navigated either, because
- * the `:id` builder route renders a blank builder today (it never calls
- * `getTemplate`). Wire `onOpen` back on the day the builder hydrates from it;
- * the hover styles below are display polish, kept shy of a click affordance.
+ * Clickable now that the builder hydrates from `/templates/:id` — a draft
+ * opens editable, published and archived open straight into their preview.
+ * The ⋯ menu carries the lifecycle moves; Archive IS this model's delete
+ * (soft, reversible, and in-flight surveys keep their snapshots).
  */
-function TemplateCard({ t }: { t: Template }) {
+function TemplateCard({
+  t,
+  busy,
+  onOpen,
+  onClone,
+  onPublish,
+  onArchive,
+}: {
+  t: Template;
+  busy: boolean;
+  onOpen: () => void;
+  onClone: () => void;
+  onPublish: () => void;
+  onArchive: () => void;
+}) {
+  const thumb = thumbOf(t.name);
   return (
     // Flat like every other surface: no shadow at rest or on hover — the
     // border tint is the hover cue, and the glyph animation the delight.
-    <div className="group bg-card hover:border-ring/40 flex flex-col overflow-hidden rounded-xl border transition-colors">
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      className="group bg-card hover:border-ring/40 flex cursor-pointer flex-col overflow-hidden rounded-xl border transition-colors">
       {/* The thumbnail. Archived templates go grayscale — the shelf keeps its
           shape but visibly steps out of the working set. */}
       <div
         className={cn("relative h-28 shrink-0", t.status === "archived" && "opacity-60 grayscale")}
-        style={thumbStyle(t.name)}
+        style={thumb.style}
       >
+        <ThumbTexture texture={thumb.texture} />
         {/* A soft top-left light so the gradient reads as a lit surface. */}
         <div
           className="absolute inset-0"
           style={{ background: "radial-gradient(120% 90% at 18% 0%, rgb(255 255 255 / 0.28), transparent 55%)" }}
         />
         {/* The document glyph, oversized and bleeding off the corner — the
-            gallery's version of the row tile, grown to poster scale. */}
+            gallery's version of the row tile, grown to poster scale. Stroke
+            thinned from lucide's default 2 so at this size it stays a
+            watermark, not a diagram. */}
         <FileText
+          strokeWidth={1.25}
           className="absolute -right-3 -bottom-4 size-20 rotate-[-8deg] text-white/25 transition-transform duration-300 group-hover:rotate-0"
           aria-hidden="true"
         />
-        {t.category ? (
+        {/* Only a REAL category earns the label: every template is born with
+            the default "General", and a word all cards share says nothing. */}
+        {t.category && t.category.trim().toLowerCase() !== "general" ? (
           <span className="absolute bottom-2 left-3 max-w-[70%] truncate text-[11px] font-medium tracking-[0.08em] text-white/85 uppercase">
             {t.category}
           </span>
@@ -108,7 +180,42 @@ function TemplateCard({ t }: { t: Template }) {
               {t.usageCount ? ` · used by ${t.usageCount}` : ""}
             </div>
           </div>
-          <Chip tone={STATUS_TONE[t.status]}>{t.status}</Chip>
+          <div className="flex shrink-0 items-center gap-1">
+            <Chip tone={STATUS_TONE[t.status]}>{t.status}</Chip>
+            {/* stopPropagation: the menu lives on a clickable card, and opening
+                it must not also open the template. */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="-mr-1.5 size-7"
+                  disabled={busy}
+                  onClick={(e) => e.stopPropagation()}
+                  aria-label={`Actions for ${t.name}`}
+                >
+                  <MoreVertical className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                <DropdownMenuItem onSelect={onOpen}>
+                  {t.status === "draft" ? "Edit" : "View preview"}
+                </DropdownMenuItem>
+                {t.status === "draft" ? (
+                  <DropdownMenuItem onSelect={onPublish}>Publish</DropdownMenuItem>
+                ) : null}
+                <DropdownMenuItem onSelect={onClone}>Clone to new draft</DropdownMenuItem>
+                {t.status !== "archived" ? (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem variant="destructive" onSelect={onArchive}>
+                      Archive
+                    </DropdownMenuItem>
+                  </>
+                ) : null}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
         <div className="text-muted-foreground mt-auto flex items-center gap-3 pt-2 text-xs">
           <span className="inline-flex items-center gap-1">
@@ -145,8 +252,11 @@ function CardsSkeleton({ count = 8 }: { count?: number }) {
 
 export function TemplateList() {
   const navigate = useNavigate();
+  const toast = useToast();
   const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
+  /** Id of the card whose action is in flight — its menu locks meanwhile. */
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -165,6 +275,23 @@ export function TemplateList() {
       live = false;
     };
   }, [reloadKey]);
+
+  /** One lifecycle move: run it, toast the outcome verbatim, refresh the shelf. */
+  const act = async (
+    t: Template,
+    run: () => Promise<{ data: unknown; error: string | null }>,
+    done: string
+  ) => {
+    setBusyId(t.id);
+    const { error: err } = await run();
+    setBusyId(null);
+    if (err) {
+      toast(err, true);
+      return;
+    }
+    toast(done);
+    setReloadKey((k) => k + 1);
+  };
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -227,7 +354,28 @@ export function TemplateList() {
       ) : rows.length ? (
         <div className={GRID}>
           {rows.map((t) => (
-            <TemplateCard key={t.id} t={t} />
+            <TemplateCard
+              key={t.id}
+              t={t}
+              busy={busyId === t.id}
+              onOpen={() => navigate(`/templates/${t.id}`)}
+              onClone={() =>
+                void cloneTemplate(t.id).then(({ data, error: err }) => {
+                  if (err || !data) toast(err ?? "The clone did not land", true);
+                  else navigate(`/templates/${data.template.id}`);
+                })
+              }
+              onPublish={() =>
+                void act(t, () => publishTemplate(t.id), `${t.name} published`)
+              }
+              onArchive={() =>
+                void act(
+                  t,
+                  () => archiveTemplate(t.id),
+                  `${t.name} archived — off the pickers; surveys in flight keep their snapshots`
+                )
+              }
+            />
           ))}
         </div>
       ) : templates.length ? (

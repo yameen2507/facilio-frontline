@@ -53,7 +53,9 @@ function toGroups(): Group[] {
 
 /** The Frontline pinwheel, inlined so it needs no asset fetch. Drawn bare —
     no tile behind it — at 20px: a shade larger than the 16px nav icons so the
-    brand row reads as the heading, but on the same left edge as the column. */
+    brand row reads as the heading, CENTRED on the icon column's axis (x=24)
+    rather than sharing its left edge — that centring is what lets the mark
+    stay put when the rail collapses to icon width. */
 function BrandMark({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 32 32" fill="none" aria-hidden="true" className={className}>
@@ -111,7 +113,10 @@ function BrandHeader() {
       {/* A plain row, not a button: the name is a heading, and wrapping it in
           menu-button chrome offered a hover state for a target that had
           nothing to do. The only control on the row is the trigger. */}
-      <div className="flex h-12 min-w-0 flex-1 items-center gap-2 px-2">
+      {/* px-1.5, not the row's usual px-2: it puts the 20px mark's centre at
+          x=24 — the exact centre the collapsed rail gives it — so toggling the
+          rail never moves the logo sideways, only fades the name. */}
+      <div className="flex h-12 min-w-0 flex-1 items-center gap-2 px-1.5">
         <BrandMark className="size-5 shrink-0" />
         <span className="truncate text-sm font-semibold">Frontline</span>
       </div>
@@ -163,15 +168,30 @@ function NavButton({ item, active, badge }: { item: NavItemEntry; active: boolea
     <SidebarMenuItem>
       {/* `tooltip` is the collapsed rail's label — without it an icon-only
           item is unexplained. */}
-      <SidebarMenuButton asChild isActive={active} tooltip={item.label}>
+      <SidebarMenuButton
+        asChild
+        isActive={active}
+        tooltip={item.label}
+        // The stock active state is bg-sidebar-accent, which in the light theme
+        // is a 1.5% lightness step off the sidebar itself — invisible. Primary
+        // is the inverted pair in both themes, so the selected item reads at a
+        // glance. The hover: pair pins the colour while the pointer is over it,
+        // where the base hover:bg-sidebar-accent would otherwise contest it.
+        className="data-[active=true]:bg-primary data-[active=true]:text-primary-foreground data-[active=true]:hover:bg-primary data-[active=true]:hover:text-primary-foreground"
+      >
         <Link to={item.to}>
           <item.icon />
           <span>{item.label}</span>
         </Link>
       </SidebarMenuButton>
       {/* Nothing until the count is known — a zero would claim an empty inbox
-          before anything has been fetched. */}
-      {badge ? <SidebarMenuBadge>{badge}</SidebarMenuBadge> : null}
+          before anything has been fetched. The text override keeps the count
+          legible on the active item's inverted pill. */}
+      {badge ? (
+        <SidebarMenuBadge className="peer-data-[active=true]/menu-button:text-primary-foreground">
+          {badge}
+        </SidebarMenuBadge>
+      ) : null}
     </SidebarMenuItem>
   );
 }

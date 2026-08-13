@@ -15,14 +15,15 @@
  * the server does it, and matching it here keeps the two honest about each other.
  */
 
-import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { ArrowDown, ArrowUp, Eye, Plus, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import { ArrowDown, ArrowLeft, ArrowUp, Eye, Plus, Trash2 } from "lucide-react";
 import { useActor } from "../../../app/auth";
 import { PageShell } from "../../../app/shell/PageShell";
 import { Card, Stack } from "../../../ui/Card";
 import { Chip } from "../../../ui/Chip";
-import { Empty } from "../../../ui/States";
+import { Empty, ErrorState } from "../../../ui/States";
+import { SkeletonRows } from "../../../ui/Skeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -43,7 +44,7 @@ import {
   type AnswerValue,
   type RepeatEntry,
 } from "../components/FormRender";
-import { importTemplate, type ImportSectionBody } from "../api/templates-util";
+import { cloneTemplate, getTemplate, importTemplate, type ImportSectionBody } from "../api/templates-util";
 import {
   FIELD_TYPES,
   FIELD_TYPE_LABEL,
@@ -51,6 +52,7 @@ import {
   type FieldType,
   type Question,
   type Section,
+  type TemplateStatus,
 } from "../types/template";
 
 /** Session ids only — the server issues real uuids when a template is saved. */
@@ -93,6 +95,8 @@ function resequence<T extends { sequenceNo: number }>(items: T[], from: number, 
 export function TemplateBuilder() {
   const navigate = useNavigate();
   const actor = useActor();
+  /** Present on /templates/:id — the builder hydrates from it. Absent on /new. */
+  const { id } = useParams();
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -101,6 +105,59 @@ export function TemplateBuilder() {
   const [saving, setSaving] = useState<"draft" | "publish" | null>(null);
   /** The server's answer, VERBATIM — never reworded here. */
   const [serverError, setServerError] = useState<string | null>(null);
+
+  const [hydrating, setHydrating] = useState(Boolean(id));
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [status, setStatus] = useState<TemplateStatus>("draft");
+  const [versionNo, setVersionNo] = useState(1);
+  const [cloning, setCloning] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    if (!id) return;
+    // Reset before fetching — this component serves /templates/a and
+    // /templates/b in turn, and stale sections must never flash between them.
+    let live = true;
+    setHydrating(true);
+    setLoadError(null);
+    setServerError(null);
+
+    getTemplate(id).then(({ data, error }) => {
+      if (!live) return;
+      setHydrating(false);
+      if (error || !data) {
+        setLoadError(error ?? "template not found");
+        return;
+      }
+      setName(data.template.name);
+      setDescription(data.template.description ?? "");
+      setSections(data.sections);
+      setStatus(data.template.status);
+      setVersionNo(data.template.versionNo);
+      // Frozen content opens AS its preview — that IS the detail view.
+      if (data.template.status !== "draft") setPreview(true);
+    });
+
+    return () => {
+      live = false;
+    };
+  }, [id, reloadKey]);
+
+  /** Published and archived content is frozen — the builder shows, never edits. */
+  const readOnly = Boolean(id) && status !== "draft";
+
+  const clone = async () => {
+    if (!id || cloning) return;
+    setCloning(true);
+    setServerError(null);
+    const { data, error } = await cloneTemplate(id);
+    setCloning(false);
+    if (error || !data) {
+      setServerError(error ?? "The clone did not land");
+      return;
+    }
+    navigate(`/templates/${data.template.id}`);
+  };
 
   const blockers = useMemo(() => {
     const list = publishBlockers(sections);
@@ -119,6 +176,7 @@ export function TemplateBuilder() {
     setServerError(null);
 
     const body = {
+      ...(id ? { templateId: id } : {}),
       name: name.trim(),
       ...(description.trim() ? { description: description.trim() } : {}),
       publish,
@@ -197,10 +255,65 @@ export function TemplateBuilder() {
     setSections((s) => s.map((sec) => (sec.id === sectionId ? { ...sec, questions: fn(sec.questions) } : sec)));
   }
 
+  if (hydrating) {
+    return (
+      <PageShell title="Template" subtitle="Loading…">
+        <Card pad={false}>
+          <SkeletonRows count={4} />
+        </Card>
+      </PageShell>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <PageShell title="Template">
+        <Card pad={false}>
+          <ErrorState message={loadError} onRetry={() => setReloadKey((k) => k + 1)} />
+        </Card>
+      </PageShell>
+    );
+  }
+
+  // The frozen states ARE their preview — same components as the capture
+  // screen, which is why this needs no separate detail page.
+  if (readOnly) {
+    return (
+      <PageShell
+        title={name}
+        subtitle={`v${versionNo} · ${status} — content is frozen; clone it to make changes`}
+        actions={
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => navigate("/templates")}>
+              <ArrowLeft className="size-4" />
+              Templates
+            </Button>
+            <Button onClick={clone} disabled={cloning}>
+              {cloning ? "Cloning…" : "Clone to new draft"}
+            </Button>
+          </div>
+        }
+      >
+        <Stack>
+          <TemplatePreview name={name} sections={sections} />
+          {serverError ? (
+            <Card>
+              <p className="text-destructive text-sm">{serverError}</p>
+            </Card>
+          ) : null}
+        </Stack>
+      </PageShell>
+    );
+  }
+
   return (
     <PageShell
-      title="New template"
-      subtitle="Drafting locally — nothing is kept until you save or publish"
+      title={id ? name || "Edit template" : "New template"}
+      subtitle={
+        id
+          ? `Draft v${versionNo} — saving rewrites this draft in place`
+          : "Drafting locally — nothing is kept until you save or publish"
+      }
       actions={
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={() => setPreview((p) => !p)} disabled={!sections.length}>

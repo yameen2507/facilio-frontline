@@ -525,6 +525,8 @@ export interface ImportSection {
  * it did not publish" is the honest answer, not a rollback that cannot exist.
  */
 export function importTemplate(input: {
+  /** When set, REPLACES this draft's content in place instead of creating. */
+  templateId?: string | null;
   name: string;
   description: string | null;
   category: string | null;
@@ -551,18 +553,54 @@ export function importTemplate(input: {
   const now = nowIso();
   const category = input.category ?? "General";
 
-  const row = one<{ id: string }>(
-    `insert into fl_form_template
-       (id, name, description, category, status, version_no, parent_template_id,
-        created_by, updated_by, is_active, data_json, created_at, updated_at)
-     values (gen_random_uuid()::text, $1, $2, $3, 'draft', 1, null, $4, $4, 'true', '{}', $5, $5)
-     returning id`,
-    [input.name, input.description, category, input.actor, now]
-  );
-  if (!row) throw new Error("template insert returned no row");
-  const templateId = row.id;
+  let templateId: string;
+  let versionNo = 1;
+
+  if (input.templateId) {
+    // Replace: only a draft is rewritable (published content is what
+    // `version_no` names — editableTemplate throws the clone-instead message).
+    const current = editableTemplate(input.templateId);
+    templateId = current.id;
+    versionNo = current.versionNo;
+
+    mutate(
+      `update fl_form_template
+          set name = $2, description = $3, category = $4, updated_by = $5, updated_at = $6
+        where id = $1`,
+      [templateId, input.name, input.description, category, input.actor, now]
+    );
+
+    // The old tree steps aside, the new one lands whole. Deactivated rows keep
+    // the history; the section-id salt below keeps their ids from colliding
+    // with the fresh copies.
+    mutate(
+      `update fl_form_section set is_active = 'false', updated_by = $2, updated_at = $3
+        where template_id = $1 and is_active = 'true'`,
+      [templateId, input.actor, now]
+    );
+    mutate(
+      `update fl_form_question set is_active = 'false', updated_by = $2, updated_at = $3
+        where template_id = $1 and is_active = 'true'`,
+      [templateId, input.actor, now]
+    );
+  } else {
+    const row = one<{ id: string }>(
+      `insert into fl_form_template
+         (id, name, description, category, status, version_no, parent_template_id,
+          created_by, updated_by, is_active, data_json, created_at, updated_at)
+       values (gen_random_uuid()::text, $1, $2, $3, 'draft', 1, null, $4, $4, 'true', '{}', $5, $5)
+       returning id`,
+      [input.name, input.description, category, input.actor, now]
+    );
+    if (!row) throw new Error("template insert returned no row");
+    templateId = row.id;
+  }
 
   if (input.sections.length) {
+    // $3 (now) salts the md5-derived section ids: a draft saved twice reuses
+    // the same s0/s1 keys, and unsalted ids would collide with the previous
+    // save's now-inactive rows — the not-exists guard would then silently skip
+    // the new content.
     const sp: unknown[] = [templateId, input.actor, now];
     const sectionRows = input.sections.map((s, i) => {
       sp.push(`s${i}`);
@@ -582,7 +620,7 @@ export function importTemplate(input: {
       add(s.maxRepeats ?? null);
       add(String(s.createsPortfolioNode ?? false));
       add(s.nodeTypeCreated ?? "space");
-      return `(md5($1 || ${key})::uuid::text, $1, ${vals[0]}, ${vals[1]}, ${i + 1}, ${vals[2]},
+      return `(md5($1 || $3 || ${key})::uuid::text, $1, ${vals[0]}, ${vals[1]}, ${i + 1}, ${vals[2]},
                ${vals[3]}, ${vals[4]}, ${vals[5]}, ${vals[6]}, ${vals[7]}, ${vals[8]}, ${vals[9]},
                $2, $2, 'true', '{}', $3, $3)`;
     });
@@ -619,7 +657,7 @@ export function importTemplate(input: {
       add(q.estimationKey ?? null);
       add(q.unit ?? null);
       questionRows.push(
-        `(gen_random_uuid()::text, md5($1 || ${key})::uuid::text, $1, ${vals[0]}, ${vals[1]},
+        `(gen_random_uuid()::text, md5($1 || $3 || ${key})::uuid::text, $1, ${vals[0]}, ${vals[1]},
           ${vals[2]}, ${vals[3]}, ${vals[4]}, ${qi + 1}, ${vals[5]}, ${vals[6]}, ${vals[7]},
           ${vals[8]}, $2, $2, 'true', '{}', $3, $3)`
       );
@@ -640,7 +678,7 @@ export function importTemplate(input: {
   appendEvent({
     entityType: "form_template",
     entityId: templateId,
-    kind: "created",
+    kind: input.templateId ? "updated" : "created",
     actor: input.actor,
     body: input.name,
   });
@@ -665,7 +703,7 @@ export function importTemplate(input: {
       entityId: templateId,
       kind: "published",
       actor: input.actor,
-      body: `${input.name} v1`,
+      body: `${input.name} v${versionNo}`,
     });
     published = true;
   }
@@ -677,7 +715,7 @@ export function importTemplate(input: {
       description: input.description,
       category,
       status: published ? "published" : "draft",
-      versionNo: 1,
+      versionNo,
       parentTemplateId: null,
       publishedBy: published ? input.actor : null,
       publishedAt: published ? now : null,

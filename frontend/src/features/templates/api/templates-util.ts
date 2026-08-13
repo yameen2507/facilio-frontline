@@ -94,11 +94,13 @@ export interface ImportSectionBody {
 
 /**
  * `form.template-import` — the whole builder tree in ONE round trip, optionally
- * publishing. A failed publish guard does not throw: the tree is saved as a
- * draft and the blockers come back in `publishBlockers`.
+ * publishing. With `templateId` it REPLACES that draft's content in place;
+ * without, it creates. A failed publish guard does not throw: the tree is
+ * saved as a draft and the blockers come back in `publishBlockers`.
  */
 export const importTemplate = (
   body: {
+    templateId?: string;
     name: string;
     description?: string;
     category?: string;

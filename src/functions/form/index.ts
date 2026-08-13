@@ -175,9 +175,10 @@ function importSections(raw: unknown[]): ImportSection[] {
 server.addHandler({
   name: "template-import",
   description:
-    "Create a whole draft template — sections and questions — in one batched call, optionally publishing it. The builder's save: pass the tree inside payload. Never throws on a failed publish guard; returns the saved draft with the blockers instead.",
+    "The builder's save: a whole template tree — sections and questions — in one batched call, optionally publishing it. With templateId it REPLACES that draft's content in place; without, it creates. Never throws on a failed publish guard; returns the saved draft with the blockers instead.",
   parameters: {
     ...ENV,
+    templateId: S("Existing DRAFT to rewrite in place — omit to create a new template"),
     name: S("Template name — required"),
     description: S("What the template is for"),
     category: S("Free-text grouping, defaults to General"),
@@ -188,6 +189,7 @@ server.addHandler({
     handle(() => {
       const p = parsePayload(args);
       return importTemplate({
+        templateId: optStr(p, "templateId"),
         name: str(p, "name"),
         description: optStr(p, "description"),
         category: optStr(p, "category"),
