@@ -1,13 +1,14 @@
 /**
  * The survey data layer.
  *
- * The `survey` function's DESK SLICE is LIVE (built 2026-08-13): `create`,
- * `list`, `get`, `schedule`, `transition`, `deal-list`, `reference`. The
- * wrappers still marked [SEAM] below — the walk, capture, assignment, nodes,
- * reconciliation and submit — await the next backend slice and stay uncalled;
- * their pages keep real empty states rather than firing at missing handlers.
- * On failure every call returns `{ data: null, error }` like the rest of the
- * app, and the page renders that error verbatim.
+ * LIVE: the desk slice (`create`, `list`, `get`, `schedule`, `transition`,
+ * `deal-list`, `reference` — built 2026-08-13) and the WALK slice (`assign`,
+ * `set-lead`, `walk`, `capture`, `attach` — built 2026-08-14, photos included).
+ * The wrappers still marked [SEAM] below — update, visit-transition,
+ * node-verdict, reconciliation and submit — await the review slice and stay
+ * uncalled; their surfaces keep real empty states rather than firing at
+ * missing handlers. On failure every call returns `{ data: null, error }` like
+ * the rest of the app, and the page renders that error verbatim.
  *
  * | handler            | args                                            | returns                          |
  * | ------------------ | ----------------------------------------------- | -------------------------------- |
@@ -33,11 +34,14 @@
 
 import { requestFrom, type Result } from "../../../lib/request";
 import type {
+  Assignee,
   ReconciliationItem,
   Survey,
   SurveyDetailResponse,
   SurveyListResponse,
   Visit,
+  WalkPhoto,
+  WalkState,
 } from "../types/survey";
 
 /** Its own platform function — never widen `lead` for a different module. */
@@ -66,9 +70,9 @@ export const listSurveys = (status: string, search: string) =>
 /** `survey.get` — survey + visits + assignees + nodes + reconciliation in ONE query. */
 export const getSurvey = (surveyId: string) => call<SurveyDetailResponse>("get", { surveyId });
 
-/** [SEAM] `survey.walk` — the surveyor's whole screen in one batched read. */
+/** `survey.walk` — the surveyor's whole screen in one batched read. */
 export const getWalk = (surveyId: string, visitId?: string) =>
-  call<unknown>("walk", { surveyId, ...(visitId ? { visitId } : {}) });
+  call<WalkState>("walk", { surveyId, ...(visitId ? { visitId } : {}) });
 
 // ── Desk mutations ───────────────────────────────────────────────────────────
 
@@ -146,20 +150,21 @@ export const scheduleVisit = (surveyId: string, body: Record<string, unknown>) =
 export const transitionVisit = (visitId: string, toStatus: string, reason: string) =>
   call<{ visit: Visit }>("visit-transition", { visitId, toStatus, reason });
 
-/** [SEAM] `survey.assign` — multi-select, one multi-row insert. */
+/** `survey.assign` — multi-select, one idempotent multi-row insert. */
 export const assignSurveyors = (
   surveyId: string,
-  assignees: { userEmail: string; participation: string }[]
-) => call<{ assignees: unknown[] }>("assign", { surveyId, ...payload({ assignees }) });
+  assignees: { userEmail: string; participation: string }[],
+  actorEmail: string
+) => call<{ assignees: Assignee[] }>("assign", { surveyId, actorEmail, ...payload({ assignees }) });
 
-/** [SEAM] `survey.set-lead` — exactly one lead; this is the whole T3 guard. */
-export const setLead = (surveyId: string, assigneeId: string, reason: string) =>
-  call<{ survey: Survey }>("set-lead", { surveyId, assigneeId, reason });
+/** `survey.set-lead` — exactly one lead; setting the first fires T3. */
+export const setLead = (surveyId: string, assigneeId: string, reason: string, actorEmail: string) =>
+  call<{ survey: Survey }>("set-lead", { surveyId, assigneeId, reason, actorEmail });
 
 // ── The walk ─────────────────────────────────────────────────────────────────
 
 /**
- * [SEAM] `survey.capture` — THE BATCH WRITE, and the shape matters more than any
+ * `survey.capture` — THE BATCH WRITE, and the shape matters more than any
  * other call in this module. A room is ~5 answers plus a condition score plus
  * photos; sent one at a time that is ~1.1s each and the surveyor abandons the
  * tool on the second floor. One room, one round trip.
@@ -172,9 +177,26 @@ export const capture = (
     entries?: unknown[];
     answers?: unknown[];
     observations?: unknown[];
-    verdicts?: unknown[];
+    photos?: unknown[];
   }
-) => call<unknown>("capture", { surveyId, visitId, actorEmail, ...payload(body) });
+) =>
+  call<WalkState & { written: Record<string, number> }>("capture", {
+    surveyId,
+    visitId,
+    actorEmail,
+    ...payload(body),
+  });
+
+/**
+ * `survey.attach` — one photo outside a capture batch. Upload the bytes with
+ * `vibe.uploadFile` FIRST; this records the evidence row (device capturedAt,
+ * server uploadedAt, geotag).
+ */
+export const attachPhoto = (
+  surveyId: string,
+  photo: Record<string, unknown>,
+  actorEmail: string
+) => call<{ photo: WalkPhoto }>("attach", { surveyId, actorEmail, ...payload(photo) });
 
 /** [SEAM] `survey.node-verdict` — a note is mandatory for not_found / not_visited / changed. */
 export const setNodeVerdict = (

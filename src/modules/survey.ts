@@ -21,7 +21,7 @@ import {
   validateSurveyTransition,
   type SurveyStatus,
 } from "../domain/survey-state";
-import { count, manyWithTruncation, mutate, nowIso, one } from "../shared/db";
+import { count, many, manyWithTruncation, mutate, nowIso, one } from "../shared/db";
 import { appendEvent } from "../shared/events";
 import { nextRef } from "../shared/ids";
 import { snapshotTemplate } from "./snapshot";
@@ -607,6 +607,163 @@ export function transitionSurvey(input: {
     [input.surveyId]
   );
 
+  return { survey: fresh as SurveyRecord };
+}
+
+// ── Assignment ────────────────────────────────────────────────────────────────
+
+export interface AssigneeInput {
+  userEmail: string;
+  participation?: string | null;
+  disciplineIds?: string[];
+}
+
+export interface AssigneeRecord {
+  id: string;
+  userEmail: string;
+  participation: string | null;
+  disciplineIds: string[] | null;
+  assignedAt: string | null;
+}
+
+const readAssignees = (surveyId: string): AssigneeRecord[] =>
+  many<AssigneeRecord>(
+    `select id, user_email, participation, discipline_ids_json, assigned_at
+       from fl_survey_assignee
+      where survey_id = $1 and is_active = 'true'
+      order by assigned_at
+      limit 100`,
+    [surveyId]
+  );
+
+/**
+ * Multi-select, one idempotent multi-row insert: an email already actively
+ * assigned is skipped, so re-sending the same list never duplicates anyone.
+ * `is_lead` is never written here — the lead lives on `fl_survey` (X1).
+ */
+export function assignSurveyors(
+  surveyId: string,
+  assignees: AssigneeInput[],
+  actor: string | null
+): { assignees: AssigneeRecord[] } {
+  const survey = one<{ id: string; status: SurveyStatus }>(
+    `select id, status from fl_survey where id = $1 and is_active = 'true' limit 1`,
+    [surveyId]
+  );
+  if (!survey) throw new Error(`survey ${surveyId} not found`);
+  if (survey.status === "completed" || survey.status === "cancelled") {
+    throw new Error(`a ${survey.status} survey cannot be assigned`);
+  }
+
+  const cleaned = assignees
+    .map((a) => ({
+      userEmail: a.userEmail?.trim().toLowerCase() ?? "",
+      participation: a.participation === "observer" ? "observer" : "surveyor",
+      disciplineIds: a.disciplineIds ?? [],
+    }))
+    .filter((a) => a.userEmail.includes("@"));
+  if (!cleaned.length) throw new Error("assignees[] needs at least one userEmail");
+
+  const now = nowIso();
+  const params: unknown[] = [surveyId, actor, now];
+  const tuples = cleaned.map((a, i) => {
+    params.push(a.userEmail, a.participation, JSON.stringify(a.disciplineIds));
+    const base = params.length - 2;
+    const cast = i === 0 ? "::text" : "";
+    return `($${base}${cast}, $${base + 1}${cast}, $${base + 2}${cast})`;
+  });
+
+  mutate(
+    `insert into fl_survey_assignee
+       (id, survey_id, user_email, participation, discipline_ids_json, is_lead,
+        assigned_by, assigned_at, is_active, data_json, created_at, updated_at)
+     select gen_random_uuid()::text, $1, v.user_email, v.participation, v.discipline_ids, 'false',
+            $2, $3, 'true', '{}', $3, $3
+       from (values ${tuples.join(", ")}) as v(user_email, participation, discipline_ids)
+      where not exists (select 1 from fl_survey_assignee a
+                         where a.survey_id = $1 and a.user_email = v.user_email
+                           and a.is_active = 'true')`,
+    params
+  );
+
+  appendEvent({
+    entityType: "survey",
+    entityId: surveyId,
+    kind: "assigned",
+    actor,
+    body: cleaned.map((a) => a.userEmail).join(", "),
+  });
+
+  return { assignees: readAssignees(surveyId) };
+}
+
+/**
+ * T3. `fl_survey.lead_assignee_id` is the single source of truth (X1): one
+ * single-statement update, so two people clicking at once cannot produce two
+ * leads — the second write simply wins, visibly, and the handover is logged.
+ */
+export function setLead(
+  surveyId: string,
+  assigneeId: string,
+  reason: string | null,
+  actor: string | null
+): { survey: SurveyRecord } {
+  const survey = one<{ id: string; status: SurveyStatus; leadUserEmail: string | null }>(
+    `select id, status, lead_user_email from fl_survey where id = $1 and is_active = 'true' limit 1`,
+    [surveyId]
+  );
+  if (!survey) throw new Error(`survey ${surveyId} not found`);
+
+  const assignee = one<{ id: string; userEmail: string }>(
+    `select id, user_email from fl_survey_assignee
+      where id = $1 and survey_id = $2 and is_active = 'true' limit 1`,
+    [assigneeId, surveyId]
+  );
+  if (!assignee) throw new Error(`assignee ${assigneeId} not found on this survey`);
+
+  const now = nowIso();
+  mutate(
+    `update fl_survey
+        set lead_assignee_id = $2, lead_user_email = $3, updated_by = $4, updated_at = $5
+      where id = $1 and is_active = 'true'`,
+    [surveyId, assignee.id, assignee.userEmail, actor, now]
+  );
+
+  appendEvent({
+    entityType: "survey",
+    entityId: surveyId,
+    kind: "lead_handover",
+    actor,
+    body: `${survey.leadUserEmail ?? "nobody"} → ${assignee.userEmail}`,
+    meta: reason ? { reason } : {},
+  });
+
+  // T3 — setting the first lead is what moves scheduled → assigned.
+  if (survey.status === "scheduled") {
+    validateSurveyTransition({ from: "scheduled", to: "assigned", actorIsLead: false });
+    mutate(
+      `update fl_survey
+          set status = 'assigned', status_changed_at = $2, status_changed_by = $3,
+              updated_by = $3, updated_at = $2
+        where id = $1 and status = 'scheduled'`,
+      [surveyId, now, actor]
+    );
+    appendEvent({
+      entityType: "survey",
+      entityId: surveyId,
+      kind: "status_change",
+      actor,
+      body: "T3: scheduled → assigned",
+    });
+  }
+
+  const fresh = one<SurveyRecord>(
+    `select ${SURVEY_COLUMNS},
+            (select a.name from fl_account a where a.id = s.account_id) as account_name,
+            (select t.name from fl_form_template t where t.id = s.template_id) as template_name
+       from fl_survey s where s.id = $1 limit 1`,
+    [surveyId]
+  );
   return { survey: fresh as SurveyRecord };
 }
 

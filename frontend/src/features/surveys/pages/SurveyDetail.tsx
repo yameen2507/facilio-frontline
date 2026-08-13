@@ -15,7 +15,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, CalendarPlus, ChevronRight } from "lucide-react";
+import { ArrowLeft, CalendarPlus, ChevronRight, Footprints, UserPlus } from "lucide-react";
 import { useActor } from "../../../app/auth";
 import { PageShell } from "../../../app/shell/PageShell";
 import { ago, when } from "../../../lib/format";
@@ -37,7 +37,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { getSurvey, scheduleVisit, transitionSurvey } from "../api/surveys-util";
+import { assignSurveyors, getSurvey, scheduleVisit, setLead, transitionSurvey } from "../api/surveys-util";
 import { SurveyStatusChip, VisitStatusChip } from "../components/SurveyChips";
 import {
   SURVEY_TRAIL,
@@ -67,6 +67,7 @@ export function SurveyDetail() {
   const [reloadKey, setReloadKey] = useState(0);
 
   const [scheduling, setScheduling] = useState(false);
+  const [assigning, setAssigning] = useState(false);
   const [cancelling, setCancelling] = useState(false);
 
   useEffect(() => {
@@ -109,6 +110,16 @@ export function SurveyDetail() {
                 <CalendarPlus className="size-4" />
                 {survey.status === "draft" ? "Schedule visit" : "Add visit"}
               </Button>
+              <Button variant="outline" onClick={() => setAssigning(true)}>
+                <UserPlus className="size-4" />
+                Assign
+              </Button>
+              {detail?.visits.length ? (
+                <Button onClick={() => navigate(`/surveys/${id}/walk`)}>
+                  <Footprints className="size-4" />
+                  Open walk
+                </Button>
+              ) : null}
               <Button variant="outline" onClick={() => setCancelling(true)}>
                 Cancel survey
               </Button>
@@ -146,6 +157,14 @@ export function SurveyDetail() {
             surveyId={id}
             actor={actor}
             isFirst={survey?.status === "draft"}
+            onDone={reload}
+          />
+          <AssignDialog
+            open={assigning}
+            onOpenChange={setAssigning}
+            surveyId={id}
+            actor={actor}
+            hasLead={Boolean(survey?.leadUserEmail)}
             onDone={reload}
           />
           <CancelSurveyDialog
@@ -461,6 +480,121 @@ function ScheduleVisitDialog({
             </DialogClose>
             <Button type="submit" disabled={!start || busy}>
               {busy ? "Scheduling…" : "Schedule"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AssignDialog({
+  open,
+  onOpenChange,
+  surveyId,
+  actor,
+  hasLead,
+  onDone,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  surveyId: string;
+  actor: string;
+  hasLead: boolean;
+  onDone: () => void;
+}) {
+  const [email, setEmail] = useState("");
+  const [makeLead, setMakeLead] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setEmail("");
+      // The first assignee is almost always the lead — default accordingly.
+      setMakeLead(!hasLead);
+      setError(null);
+    }
+  }, [open, hasLead]);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    const address = email.trim().toLowerCase();
+    if (!address.includes("@") || busy) return;
+    setBusy(true);
+    setError(null);
+
+    const { data, error: err } = await assignSurveyors(
+      surveyId,
+      [{ userEmail: address, participation: "surveyor" }],
+      actor
+    );
+    if (err || !data) {
+      setBusy(false);
+      setError(err ?? "The assignment did not land");
+      return;
+    }
+
+    if (makeLead) {
+      const assignee = data.assignees.find((a) => a.userEmail === address);
+      if (assignee) {
+        const { error: leadErr } = await setLead(surveyId, assignee.id, "", actor);
+        if (leadErr) {
+          setBusy(false);
+          setError(leadErr);
+          return;
+        }
+      }
+    }
+
+    setBusy(false);
+    onOpenChange(false);
+    onDone();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <form onSubmit={submit}>
+          <DialogHeader>
+            <DialogTitle>Assign a surveyor</DialogTitle>
+            <DialogDescription>
+              A survey carries any number of assignees and exactly one lead. Setting the first lead
+              moves a scheduled survey to assigned — which is what opens the walk for capture.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4 py-4">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="as-email">Email</Label>
+              <Input
+                id="as-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="surveyor@facilio.com"
+              />
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={makeLead}
+                onChange={(e) => setMakeLead(e.target.checked)}
+                className="size-4"
+              />
+              Make them the lead
+            </label>
+            {error ? <p className="text-destructive text-sm">{error}</p> : null}
+          </div>
+
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="outline" disabled={busy}>
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button type="submit" disabled={!email.trim().includes("@") || busy}>
+              {busy ? "Assigning…" : "Assign"}
             </Button>
           </DialogFooter>
         </form>

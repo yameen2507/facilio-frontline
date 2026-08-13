@@ -18,18 +18,32 @@ import {
   handle,
   limit as readLimit,
   offset as readOffset,
+  optArray,
+  optNum,
   optStr,
   parsePayload,
   str,
 } from "../../shared/envelope";
 import {
+  assignSurveyors,
   createSurvey,
   listDeals,
   listSurveys,
   scheduleVisit,
+  setLead,
   surveyDetail,
   transitionSurvey,
+  type AssigneeInput,
 } from "../../modules/survey";
+import {
+  attachPhoto,
+  captureBatch,
+  walkState,
+  type CaptureAnswer,
+  type CaptureEntry,
+  type CaptureObservation,
+  type CapturePhoto,
+} from "../../modules/walk";
 
 const S = (description: string) => ({ description, type: "string" as const });
 const N = (description: string) => ({ description, type: "number" as const });
@@ -172,6 +186,138 @@ server.addHandler({
         reason: optStr(p, "reason"),
         actor: optStr(p, "actorEmail"),
       });
+    }),
+});
+
+server.addHandler({
+  name: "assign",
+  description:
+    "Assign surveyors — multi-select, one idempotent multi-row insert. Pass assignees[] (userEmail, participation, disciplineIds) inside payload. Never sets the lead; use set-lead.",
+  parameters: { ...ENV, surveyId: SURVEY_ID, actorEmail: ACTOR },
+  execute: async (args) =>
+    handle(() => {
+      const p = parsePayload(args);
+      const raw = optArray(p, "assignees") ?? [];
+      const assignees: AssigneeInput[] = raw.map((r) => {
+        const a = (r ?? {}) as Record<string, unknown>;
+        return {
+          userEmail: typeof a.userEmail === "string" ? a.userEmail : "",
+          participation: typeof a.participation === "string" ? a.participation : null,
+          disciplineIds: Array.isArray(a.disciplineIds) ? a.disciplineIds.map(String) : [],
+        };
+      });
+      return assignSurveyors(str(p, "surveyId"), assignees, optStr(p, "actorEmail"));
+    }),
+});
+
+server.addHandler({
+  name: "set-lead",
+  description:
+    "Make one assignee the lead — a single-statement update of fl_survey.lead_assignee_id, so two clicks cannot produce two leads. Setting the first lead fires T3 (scheduled → assigned).",
+  parameters: {
+    ...ENV,
+    surveyId: SURVEY_ID,
+    assigneeId: S("Assignee id from assign / get"),
+    reason: S("Why the lead is changing hands"),
+    actorEmail: ACTOR,
+  },
+  execute: async (args) =>
+    handle(() => {
+      const p = parsePayload(args);
+      return setLead(
+        str(p, "surveyId"),
+        str(p, "assigneeId"),
+        optStr(p, "reason"),
+        optStr(p, "actorEmail")
+      );
+    }),
+});
+
+server.addHandler({
+  name: "walk",
+  description:
+    "The surveyor's whole screen in one batched read: survey, visit, section and question instances, entries, answers, observations, photos.",
+  parameters: {
+    ...ENV,
+    surveyId: SURVEY_ID,
+    visitId: S("Specific visit — defaults to the in-progress or next planned one"),
+  },
+  execute: async (args) =>
+    handle(() => {
+      const p = parsePayload(args);
+      return walkState(str(p, "surveyId"), optStr(p, "visitId"));
+    }),
+});
+
+server.addHandler({
+  name: "capture",
+  description:
+    "THE batch write: entries[], answers[], observations[] and photos[] in one payload, one round trip per room. Ids are client-supplied so a retry completes a half-landed payload instead of duplicating it. First capture moves the visit, then the survey, to in_progress (T4). A condition at or below the configured threshold must carry a photo. Returns the refreshed walk state.",
+  parameters: {
+    ...ENV,
+    surveyId: SURVEY_ID,
+    visitId: S("The visit being walked — required"),
+    actorEmail: ACTOR,
+  },
+  execute: async (args) =>
+    handle(() => {
+      const p = parsePayload(args);
+      return captureBatch({
+        surveyId: str(p, "surveyId"),
+        visitId: str(p, "visitId"),
+        entries: (optArray(p, "entries") ?? []) as unknown as CaptureEntry[],
+        answers: (optArray(p, "answers") ?? []) as unknown as CaptureAnswer[],
+        observations: (optArray(p, "observations") ?? []) as unknown as CaptureObservation[],
+        photos: (optArray(p, "photos") ?? []) as unknown as CapturePhoto[],
+        actor: optStr(p, "actorEmail"),
+      });
+    }),
+});
+
+server.addHandler({
+  name: "attach",
+  description:
+    "One photo outside a capture batch. Upload the file to the Vibe file store first; this records the fl_photo row with the device's capturedAt AND the server's uploadedAt (device clocks lie), plus the geotag.",
+  parameters: {
+    ...ENV,
+    surveyId: SURVEY_ID,
+    entityType: S("What it evidences: survey, survey_visit, section_entry, answer, observation, prospect_node"),
+    entityId: S("Id of that entity"),
+    vibeFileId: N("File store id from uploadFile"),
+    fileName: S("Original file name"),
+    contentType: S("MIME type, e.g. image/jpeg"),
+    sizeBytes: N("File size in bytes"),
+    caption: S("What the photo shows"),
+    kind: S("photo, document or audio_note — defaults to photo"),
+    capturedAt: S("ISO datetime from the device"),
+    geoLat: N("Latitude at capture"),
+    geoLng: N("Longitude at capture"),
+    geoAccuracyM: N("GPS accuracy in metres"),
+    actorEmail: ACTOR,
+  },
+  execute: async (args) =>
+    handle(() => {
+      const p = parsePayload(args);
+      const vibeFileId = optNum(p, "vibeFileId");
+      if (vibeFileId === null) throw new Error("vibeFileId is required");
+      return attachPhoto(
+        str(p, "surveyId"),
+        {
+          entityType: str(p, "entityType"),
+          entityId: str(p, "entityId"),
+          vibeFileId,
+          fileName: optStr(p, "fileName"),
+          contentType: optStr(p, "contentType"),
+          sizeBytes: optNum(p, "sizeBytes"),
+          caption: optStr(p, "caption"),
+          kind: optStr(p, "kind"),
+          capturedAt: optStr(p, "capturedAt"),
+          geoLat: optNum(p, "geoLat"),
+          geoLng: optNum(p, "geoLng"),
+          geoAccuracyM: optNum(p, "geoAccuracyM"),
+        },
+        optStr(p, "actorEmail")
+      );
     }),
 });
 

@@ -162,6 +162,92 @@ export type SurveyDetailResponse = {
   snapshot?: { sections: number; questions: number };
 };
 
+// ── The walk ─────────────────────────────────────────────────────────────────
+
+/** A question instance — the snapshot copy the surveyor answers. */
+export type WalkQuestion = {
+  id: string;
+  sectionInstanceId: string;
+  label: string;
+  helpText?: string | null;
+  fieldType: string;
+  options?: string[] | null;
+  allowMultiple?: string | null;
+  sequenceNo: number;
+  isRequired?: string | null;
+  estimationKey?: string | null;
+  unit?: string | null;
+};
+
+export type WalkSection = {
+  id: string;
+  name: string;
+  description?: string | null;
+  sequenceNo: number;
+  isRepeatable?: string | null;
+  repeatLabel?: string | null;
+  createsPortfolioNode?: string | null;
+  questions: WalkQuestion[];
+};
+
+export type WalkEntry = {
+  id: string;
+  sectionInstanceId: string;
+  entryNo: number;
+  entryLabel: string;
+  prospectNodeId?: string | null;
+  visitId?: string | null;
+};
+
+export type WalkAnswer = {
+  id: string;
+  questionInstanceId: string;
+  sectionEntryId?: string | null;
+  valueText?: string | null;
+  valueNumber?: number | null;
+  valueJson?: unknown;
+  answeredAt?: string | null;
+};
+
+export type WalkObservation = {
+  id: string;
+  sectionEntryId?: string | null;
+  conditionScore?: number | null;
+  buildupNote?: string | null;
+  observedAt?: string | null;
+};
+
+export type WalkPhoto = {
+  id: string;
+  entityType: string;
+  entityId: string;
+  vibeFileId: number;
+  fileName?: string | null;
+  contentType?: string | null;
+  caption?: string | null;
+  data?: {
+    kind?: string | null;
+    capturedAt?: string | null;
+    uploadedAt?: string | null;
+    geoLat?: number | null;
+    geoLng?: number | null;
+    geoAccuracyM?: number | null;
+  } | null;
+};
+
+export type WalkState = {
+  survey: Pick<Survey, "id" | "refNo" | "title" | "status" | "leadUserEmail" | "templateId">;
+  visit: Pick<
+    Visit,
+    "id" | "visitNumber" | "sequenceNo" | "status" | "scheduledStart" | "scheduledEnd" | "timezone"
+  > | null;
+  sections: WalkSection[];
+  entries: WalkEntry[];
+  answers: WalkAnswer[];
+  observations: WalkObservation[];
+  photos: WalkPhoto[];
+};
+
 // ── Display vocabulary ───────────────────────────────────────────────────────
 
 export const SURVEY_STATUS_LABEL: Record<SurveyStatus, string> = {

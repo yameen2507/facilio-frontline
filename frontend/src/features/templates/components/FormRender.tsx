@@ -131,16 +131,32 @@ function OptionPicker({
   );
 }
 
+/** A file already attached to a question, however the caller stores it. */
+export type QuestionAttachment = { id: string; name: string; url?: string | null };
+
+/**
+ * What a capture surface plugs in to make attachment questions real. The
+ * builder's preview passes nothing and gets the disabled control — a preview
+ * that pretended to take files would be rehearsing the wrong thing.
+ */
+export type AttachmentHandlers = {
+  list: (questionId: string) => QuestionAttachment[];
+  add: (questionId: string, files: FileList) => void;
+  remove?: (questionId: string, attachmentId: string) => void;
+};
+
 export function QuestionField({
   question,
   value,
   onChange,
   disabled,
+  attachments,
 }: {
   question: Question;
   value?: AnswerValue;
   onChange: (v: AnswerValue) => void;
   disabled?: boolean;
+  attachments?: AttachmentHandlers;
 }) {
   const v = value ?? (isOn(question.allowMultiple) ? [] : "");
   const text = Array.isArray(v) ? v.join(", ") : v;
@@ -186,20 +202,108 @@ export function QuestionField({
             Needs at least two choices before it can be answered
           </span>
         )
+      ) : attachments ? (
+        <AttachmentField question={question} attachments={attachments} disabled={disabled} />
       ) : (
-        /* Attachment. The upload path runs through the platform file store and
-           is not wired yet, so the control is present and DISABLED rather than
-           pretending a file was taken. */
+        /* Attachment with no handlers — the builder's preview. The control is
+           present and DISABLED rather than pretending a file was taken. */
         <button
           type="button"
           disabled
-          title="File upload is not connected yet"
+          title="Files are taken on the walk, not in the preview"
           className="text-muted-foreground flex w-fit cursor-not-allowed items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm opacity-60"
         >
           <Paperclip className="size-4" />
           Add {isOn(question.allowMultiple) ? "files" : "a file"}
         </button>
       )}
+    </div>
+  );
+}
+
+/** The live attachment control: existing files as chips, plus the picker. */
+function AttachmentField({
+  question,
+  attachments,
+  disabled,
+}: {
+  question: Question;
+  attachments: AttachmentHandlers;
+  disabled?: boolean;
+}) {
+  const files = attachments.list(question.id);
+  const multiple = isOn(question.allowMultiple);
+  const inputId = `attach-${question.id}`;
+
+  return (
+    <div className="flex flex-col gap-2">
+      {files.length ? (
+        <div className="flex flex-wrap gap-2">
+          {files.map((f) =>
+            f.url ? (
+              <span key={f.id} className="relative">
+                <img
+                  src={f.url}
+                  alt={f.name}
+                  className="size-16 rounded-md border object-cover"
+                />
+                {attachments.remove && !disabled ? (
+                  <button
+                    type="button"
+                    onClick={() => attachments.remove?.(question.id, f.id)}
+                    aria-label={`Remove ${f.name}`}
+                    className="bg-background absolute -top-1.5 -right-1.5 rounded-full border p-0.5"
+                  >
+                    <Trash2 className="size-3" />
+                  </button>
+                ) : null}
+              </span>
+            ) : (
+              <span
+                key={f.id}
+                className="bg-muted/40 flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs"
+              >
+                <Paperclip className="size-3" />
+                {f.name}
+                {attachments.remove && !disabled ? (
+                  <button
+                    type="button"
+                    onClick={() => attachments.remove?.(question.id, f.id)}
+                    aria-label={`Remove ${f.name}`}
+                  >
+                    <Trash2 className="size-3" />
+                  </button>
+                ) : null}
+              </span>
+            )
+          )}
+        </div>
+      ) : null}
+
+      <div>
+        <input
+          id={inputId}
+          type="file"
+          multiple={multiple}
+          disabled={disabled}
+          className="hidden"
+          onChange={(e) => {
+            if (e.target.files?.length) attachments.add(question.id, e.target.files);
+            e.target.value = ""; // the same file picked twice must fire twice
+          }}
+        />
+        <label
+          htmlFor={inputId}
+          className={cn(
+            "flex w-fit cursor-pointer items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm",
+            "hover:bg-accent",
+            disabled && "cursor-not-allowed opacity-60"
+          )}
+        >
+          <Paperclip className="size-4" />
+          Add {multiple ? "files" : files.length ? "another file" : "a file"}
+        </label>
+      </div>
     </div>
   );
 }
@@ -232,6 +336,8 @@ export function RepeatEntryCard({
   onCondition,
   onRemove,
   disabled,
+  attachments,
+  footer,
 }: {
   entry: RepeatEntry;
   index: number;
@@ -244,6 +350,9 @@ export function RepeatEntryCard({
   onCondition: (n: number) => void;
   onRemove: () => void;
   disabled?: boolean;
+  attachments?: AttachmentHandlers;
+  /** The walk hangs the entry's photo strip here; the preview hangs nothing. */
+  footer?: ReactNode;
 }) {
   return (
     <div className="flex flex-col gap-4 rounded-md border p-3">
@@ -282,7 +391,10 @@ export function RepeatEntryCard({
         answers={entry.answers}
         onAnswer={onAnswer}
         disabled={disabled}
+        attachments={attachments}
       />
+
+      {footer}
     </div>
   );
 }
@@ -294,12 +406,14 @@ export function QuestionList({
   onAnswer,
   disabled,
   header,
+  attachments,
 }: {
   questions: Question[];
   answers: Answers;
   onAnswer: (questionId: string, v: AnswerValue) => void;
   disabled?: boolean;
   header?: ReactNode;
+  attachments?: AttachmentHandlers;
 }) {
   if (!questions.length) {
     return (
@@ -321,6 +435,7 @@ export function QuestionList({
             value={answers[q.id]}
             onChange={(v) => onAnswer(q.id, v)}
             disabled={disabled}
+            attachments={attachments}
           />
         ))}
     </div>
