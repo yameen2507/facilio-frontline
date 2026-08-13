@@ -1,0 +1,103 @@
+{
+  "title": "LeadAnalysis",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["understanding", "relevance", "score", "recommendation"],
+  "properties": {
+    "understanding": {
+      "type": "object",
+      "description": "What the enquiry is actually asking for.",
+      "properties": {
+        "wants": { "type": "string", "description": "One sentence: what the customer wants done." },
+        "services": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Services implied by the enquiry, in plain words."
+        },
+        "facilityType": {
+          "type": "string",
+          "description": "Restaurant, hotel, mall, hospital, school, office, other, or unknown."
+        },
+        "location": { "type": "string", "description": "Best available location, or unknown." },
+        "urgency": {
+          "type": "string",
+          "enum": ["immediate", "weeks", "months", "unknown"],
+          "description": "How soon they appear to need it."
+        },
+        "estimatedValue": {
+          "type": "number",
+          "description": "Rough opportunity value in the lead's currency. 0 when there is no basis to estimate."
+        },
+        "missingInfo": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "What an actioner must ask before this can be quoted."
+        },
+        "risks": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Anything that could make this a bad job to take."
+        }
+      }
+    },
+    "relevance": {
+      "type": "object",
+      "description": "Whether this lead is ours, judged only against the supplied SERVICE SCOPE.",
+      "required": ["verdict"],
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "enum": ["relevant", "not_relevant", "outside_region"],
+          "description": "relevant = service and location both covered. outside_region = service covered but location is not. not_relevant = we do not do this work."
+        },
+        "reasons": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Why, citing the scope. One short sentence each."
+        },
+        "matchedServices": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Service codes from the scope that this lead matches."
+        },
+        "unmatchedServices": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Anything requested that the scope does not cover."
+        }
+      }
+    },
+    "score": {
+      "type": "object",
+      "description": "Qualification score.",
+      "required": ["value"],
+      "properties": {
+        "value": {
+          "type": "number",
+          "description": "Integer from 0 to 100. Higher means more worth pursuing now."
+        },
+        "fitReasons": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "What raises the score."
+        },
+        "redFlags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "What lowers it."
+        }
+      }
+    },
+    "recommendation": {
+      "type": "object",
+      "description": "What a human should do next.",
+      "properties": {
+        "nextAction": {
+          "type": "string",
+          "description": "One concrete next step, e.g. 'call to book a site survey'."
+        },
+        "rationale": { "type": "string", "description": "One sentence of justification." }
+      }
+    }
+  }
+}

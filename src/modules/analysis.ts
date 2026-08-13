@@ -1,0 +1,297 @@
+/**
+ * Running the lead-analyst agent and storing its verdict.
+ *
+ * Server-side agent calls go through the ai-studio connection, not an agents
+ * base URL: the run injects `AGENTS_TOKEN` but NOT `AGENTS_URL` (verified), so
+ * `process.system.CONNECTIONS_URL` + the `facilio-ai-studio` connection is the
+ * only reachable path. It is two serialised fetches — create thread, then chat.
+ *
+ * The verdict NEVER writes `fl_lead.status`. A human decides; the agent advises.
+ * That separation is what makes the override rate measurable, which is the metric
+ * that eventually justifies auto-closing low scores.
+ */
+
+import { mutate, nowIso, one } from "../shared/db";
+import { appendEvent } from "../shared/events";
+import { executeAction } from "../shared/facilio";
+import { parseAnalystReply, type AnalystResult } from "../domain/scoring";
+import { coverageBrief, getSetting } from "./settings";
+import { getLead } from "./lead";
+
+/**
+ * The ai-studio actions address an agent by its flow-ai **link name**, which the
+ * platform suffixes with the app's id — `lead-analyst_<appuuid>`, not
+ * `lead-analyst`. It is held in settings rather than hardcoded so it can be
+ * corrected without a rebuild, and so a re-created agent is a config change.
+ */
+export const ANALYST_AGENT_SETTING = "lead.analyst_agent";
+export const ANALYST_LINK_SETTING = "lead.analyst_agent_link";
+
+/**
+ * An agent has TWO identifiers and they are not interchangeable:
+ *
+ *   logical name  `lead-analyst`              → `vibe.executeAgent` in the browser,
+ *                                               which resolves by (app, name)
+ *   link name     `lead-analyst_<appuuid>`    → the ai-studio connection actions
+ *
+ * Passing the link name to the browser SDK returns 404 "agent not found".
+ */
+export function analystAgentName(): string {
+  return getSetting<string>(ANALYST_AGENT_SETTING, "lead-analyst");
+}
+
+/** Link name, for the server-side path only. */
+export function analystAgentLink(): string {
+  const configured = getSetting<string>(ANALYST_LINK_SETTING, "");
+  if (!configured) {
+    throw new Error(
+      `no analyst link name configured — set "${ANALYST_LINK_SETTING}" from \`facilio vibe agent get lead-analyst\``
+    );
+  }
+  return configured;
+}
+
+/** Everything the analyst needs, as plain text. */
+export function buildAnalystInput(lead: {
+  companyName: string | null;
+  contactName: string | null;
+  contactEmail: string | null;
+  contactPhone: string | null;
+  websiteDomain: string | null;
+  serviceType: string | null;
+  description: string | null;
+  siteAddress: string | null;
+  siteCity: string | null;
+  siteRegion: string | null;
+  estimatedValue: number | null;
+  currency: string | null;
+  source: string;
+}): string {
+  const field = (label: string, value: unknown) =>
+    value === null || value === undefined || value === "" ? null : `${label}: ${String(value)}`;
+
+  const lines = [
+    coverageBrief(),
+    "",
+    "LEAD:",
+    field("Company", lead.companyName),
+    field("Contact", lead.contactName),
+    field("Email", lead.contactEmail),
+    field("Phone", lead.contactPhone),
+    field("Website", lead.websiteDomain),
+    field("Service asked for", lead.serviceType),
+    field("Site address", lead.siteAddress),
+    field("City", lead.siteCity),
+    field("Region", lead.siteRegion),
+    field("Stated budget", lead.estimatedValue ? `${lead.estimatedValue} ${lead.currency ?? ""}` : null),
+    field("Channel", lead.source),
+    field("Enquiry", lead.description),
+    "",
+    "Assess this lead against the service scope above. Reply as JSON matching your output schema.",
+  ].filter((l): l is string => l !== null);
+
+  return lines.join("\n");
+}
+
+interface AgentReply {
+  content: string;
+  threadId: string | null;
+}
+
+/**
+ * Two-step: a thread, then a message. `run-agent-chat` requires a threadId, and
+ * a fresh thread per lead keeps one lead's assessment out of another's context.
+ */
+async function askAgent(agent: string, message: string): Promise<AgentReply> {
+  const thread = await executeAction("facilio-ai-studio", "create-chat-thread", {
+    agent,
+    title: "lead analysis",
+  });
+
+  const threadId = thread.recordId;
+  if (!threadId) {
+    throw new Error(`could not create a chat thread for agent "${agent}"`);
+  }
+
+  const chat = await executeAction("facilio-ai-studio", "run-agent-chat", {
+    agent,
+    threadId: Number(threadId),
+    message,
+  });
+
+  const content = findContent(chat.raw);
+  if (!content) {
+    throw new Error(`agent "${agent}" returned no readable content`);
+  }
+
+  return { content, threadId };
+}
+
+/** Agent responses are not shape-normalised, so look for the reply text. */
+function findContent(node: unknown, depth = 0): string | null {
+  if (typeof node === "string") return node.trim() ? node : null;
+  if (!node || typeof node !== "object" || depth > 6) return null;
+
+  const obj = node as Record<string, unknown>;
+
+  for (const key of ["content", "message", "reply", "text", "output", "response"]) {
+    const v = obj[key];
+    if (typeof v === "string" && v.trim()) return v;
+  }
+
+  for (const key of Object.keys(obj)) {
+    const found = findContent(obj[key], depth + 1);
+    if (found) return found;
+  }
+
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const found = findContent(item, depth + 1);
+      if (found) return found;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * A structured-output agent returns its JSON as a *string*. Parsing it is the
+ * single most common bug on this platform, so it is handled in one place — and
+ * tolerantly, since models sometimes wrap JSON in prose or a code fence.
+ */
+export function parseAgentContent(content: string): unknown {
+  const direct = tryJson(content);
+  if (direct !== undefined) return direct;
+
+  const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) {
+    const inner = tryJson(fenced[1]);
+    if (inner !== undefined) return inner;
+  }
+
+  const start = content.indexOf("{");
+  const end = content.lastIndexOf("}");
+  if (start !== -1 && end > start) {
+    const slice = tryJson(content.slice(start, end + 1));
+    if (slice !== undefined) return slice;
+  }
+
+  throw new Error(`agent reply was not JSON: ${content.slice(0, 200)}`);
+}
+
+function tryJson(text: string): unknown {
+  try {
+    return JSON.parse(text.trim());
+  } catch {
+    return undefined;
+  }
+}
+
+/** Persist a verdict as a new version and snapshot it onto the lead for the queue. */
+export function storeAnalysis(
+  leadId: string,
+  result: AnalystResult,
+  meta: { modelName?: string | null; promptVersion?: string | null; raw?: unknown }
+): { version: number } {
+  const now = nowIso();
+
+  const last = one<{ version: number }>(
+    "select version from fl_lead_analysis where lead_id = $1 order by version desc limit 1",
+    [leadId]
+  );
+  const version = (last?.version ?? 0) + 1;
+
+  mutate(
+    `insert into fl_lead_analysis
+       (id, lead_id, version, verdict, score, understanding_json, relevance_json,
+        reasons_json, recommendation_json, model_name, prompt_version,
+        data_json, created_at, updated_at)
+     values (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)`,
+    [
+      leadId,
+      version,
+      result.verdict,
+      result.score,
+      JSON.stringify(result.understanding),
+      JSON.stringify(result.relevance),
+      JSON.stringify(result.reasons),
+      JSON.stringify(result.recommendation),
+      meta.modelName ?? null,
+      meta.promptVersion ?? null,
+      JSON.stringify({ raw: meta.raw ?? null }),
+      now, // $12 — created_at and updated_at both
+    ]
+  );
+
+  // Denormalised onto the lead so the queue can sort and filter without a join —
+  // there are no indexes, so a per-row lookup at read time would be far worse.
+  mutate(
+    "update fl_lead set score = $2, verdict = $3, analysed_at = $4, updated_at = $4 where id = $1",
+    [leadId, result.score, result.verdict, now]
+  );
+
+  appendEvent({
+    entityType: "lead",
+    entityId: leadId,
+    kind: "analysed",
+    actor: "lead-analyst",
+    body: `${result.verdict} · score ${result.score} (${result.band})`,
+    meta: { version, verdict: result.verdict, score: result.score, reasons: result.reasons },
+  });
+
+  return { version };
+}
+
+export interface AnalyseResult {
+  leadId: string;
+  version: number;
+  verdict: string;
+  score: number;
+  band: string;
+  reasons: string[];
+  source: "agent" | "supplied";
+}
+
+/**
+ * Analyse a lead. `replyJson` lets a caller supply an already-obtained agent
+ * reply — used for CLI testing and as a fallback while the agent is being tuned,
+ * so the pipeline can be exercised without burning model calls.
+ */
+export async function analyseLead(input: {
+  leadId: string;
+  replyJson?: unknown;
+  agent?: string;
+}): Promise<AnalyseResult> {
+  const lead = getLead(input.leadId);
+  if (!lead) throw new Error(`lead ${input.leadId} not found`);
+
+  let raw: unknown;
+  let source: "agent" | "supplied";
+
+  if (input.replyJson !== undefined && input.replyJson !== null) {
+    raw = typeof input.replyJson === "string" ? parseAgentContent(input.replyJson) : input.replyJson;
+    source = "supplied";
+  } else {
+    const agent = input.agent ?? analystAgentLink();
+    const reply = await askAgent(agent, buildAnalystInput(lead));
+    raw = parseAgentContent(reply.content);
+    source = "agent";
+  }
+
+  const result = parseAnalystReply(raw);
+  const { version } = storeAnalysis(input.leadId, result, {
+    modelName: source === "agent" ? analystAgentName() : "supplied",
+    promptVersion: "v1",
+    raw,
+  });
+
+  return {
+    leadId: input.leadId,
+    version,
+    verdict: result.verdict,
+    score: result.score,
+    band: result.band,
+    reasons: result.reasons,
+    source,
+  };
+}

@@ -1,0 +1,16 @@
+{
+  "title": "LeadIntake",
+  "type": "object",
+  "required": ["reply", "complete"],
+  "properties": {
+    "reply": { "type": "string", "description": "What to say next. Two or three sentences, at most one question." },
+    "complete": { "type": "string", "description": "\"true\" once company, a contact method, the service and the city are known" },
+    "companyName": { "type": "string", "description": "Business name" },
+    "contactName": { "type": "string", "description": "Person's name" },
+    "contactEmail": { "type": "string", "description": "Email address" },
+    "contactPhone": { "type": "string", "description": "Phone number as given" },
+    "serviceType": { "type": "string", "description": "Service wanted" },
+    "siteCity": { "type": "string", "description": "City or emirate of the site" },
+    "description": { "type": "string", "description": "Short summary of the enquiry for the office, including premises type, number of hoods, what they cook and how soon they need it" }
+  }
+}

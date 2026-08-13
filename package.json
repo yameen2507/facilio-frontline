@@ -1,0 +1,22 @@
+{
+  "name": "frontline",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Facilio Vibe app for the pre-contract funnel: lead, account, site survey, quote, approval and signature, handing off to Facilio FSM.",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "bundle": "node scripts/bundle.mjs",
+    "push": "node scripts/push.mjs"
+  },
+  "dependencies": {
+    "@facilio/vibe-sdk": "^0.3.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

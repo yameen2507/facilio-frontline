@@ -1,0 +1,2 @@
+id,data_json,created_at,updated_at,ref_no,lead_id,account_id,contact_id,title,stage,estimated_value,currency,sales_owner_email,source,won_at,lost_at,lost_reason
+00000000-0000-0000-0000-000000000000,{},2000-01-01T00:00:00Z,2000-01-01T00:00:00Z,DEAL-0000,00000000-0000-0000-0000-000000000000,00000000-0000-0000-0000-000000000000,00000000-0000-0000-0000-000000000000,Seed Deal,lost,0,AED,seed@example.com,manual,2000-01-01T00:00:00Z,2000-01-01T00:00:00Z,seed

@@ -1,0 +1,2 @@
+id,data_json,created_at,updated_at,entity_type,entity_id,kind,actor,body,meta_json,occurred_at
+00000000-0000-0000-0000-000000000000,{},2000-01-01T00:00:00Z,2000-01-01T00:00:00Z,lead,00000000-0000-0000-0000-000000000000,seed,seed@example.com,seed row,{},2000-01-01T00:00:00Z

@@ -1,0 +1,2 @@
+id,data_json,created_at,updated_at,session_token,source_url,ip_hash,user_agent,turn_count,status,lead_id,extracted_json,last_seen_at
+00000000-0000-0000-0000-000000000000,{},2000-01-01T00:00:00Z,2000-01-01T00:00:00Z,seed-token,https://example.com,seedhash,seed-agent,0,abandoned,00000000-0000-0000-0000-000000000000,{},2000-01-01T00:00:00Z

@@ -1,0 +1,2 @@
+id,data_json,created_at,updated_at,aggregate_type,aggregate_id,action,payload_json,idempotency_key,depends_on_id,status,attempts,next_attempt_at,last_error,facilio_id
+00000000-0000-0000-0000-000000000000,{},2000-01-01T00:00:00Z,2000-01-01T00:00:00Z,lead,00000000-0000-0000-0000-000000000000,seed,{},seed:key,00000000-0000-0000-0000-000000000000,done,0,2000-01-01T00:00:00Z,none,none

@@ -1,0 +1,2 @@
+id,data_json,created_at,updated_at,lead_id,name,email,phone,website_domain,address_json,facilio_client_id,sync_status
+00000000-0000-0000-0000-000000000000,{},2000-01-01T00:00:00Z,2000-01-01T00:00:00Z,00000000-0000-0000-0000-000000000000,Seed Account,seed@example.com,+971500000000,example.com,{},none,pending

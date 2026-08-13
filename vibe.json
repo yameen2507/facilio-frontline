@@ -1,0 +1,7 @@
+{
+  "name": "Frontline",
+  "app": "frontline",
+  "build": {
+    "publish": "dist"
+  }
+}

@@ -1,2 +1,10 @@
 .DS_Store
 .claude/settings.local.json
+node_modules/
+
+# esbuild output — the single-file bundles uploaded to the platform
+build/
+
+# holds the app database credentials for CLI function runs — never commit
+env.json
+
