@@ -450,11 +450,11 @@ function ScheduleVisitDialog({
 
           <div className="grid gap-4 py-4">
             <div className="grid grid-cols-2 gap-3">
-              <div className="flex flex-col gap-1.5">
+              <div className="flex min-w-0 flex-col gap-1.5">
                 <Label htmlFor="sv-start">Starts</Label>
                 <DateTimeField id="sv-start" value={start} onChange={pickStart} />
               </div>
-              <div className="flex flex-col gap-1.5">
+              <div className="flex min-w-0 flex-col gap-1.5">
                 <Label htmlFor="sv-end">Ends</Label>
                 <DateTimeField id="sv-end" value={end} onChange={setEnd} disabled={!start} />
               </div>

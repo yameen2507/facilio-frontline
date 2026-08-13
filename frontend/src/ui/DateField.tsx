@@ -113,12 +113,14 @@ function Trigger({
           // Full width by default: these sit in forms beside inputs and selects,
           // and a control that sizes to its own text makes a stack of fields
           // ragged. Call sites override with a width class when they need one.
-          "w-full justify-between font-normal",
+          "w-full min-w-0 justify-between font-normal",
           empty && "text-muted-foreground",
           className
         )}
       >
-        {label}
+        {/* Truncates rather than widening: "Aug 26, 2026, 9:00 AM" does not fit
+            a narrow grid column, and a button that grows drags its column with it. */}
+        <span className="truncate">{label}</span>
         <CalendarIcon className="size-4 shrink-0 opacity-60" aria-hidden="true" />
       </Button>
     </PopoverTrigger>

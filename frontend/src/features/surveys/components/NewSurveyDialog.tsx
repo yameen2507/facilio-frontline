@@ -136,7 +136,7 @@ export function NewSurveyDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
-        <form onSubmit={submit} className="flex flex-col gap-5">
+        <form onSubmit={submit} className="flex min-w-0 flex-col gap-5">
           <DialogHeader>
             <DialogTitle>New survey</DialogTitle>
             <DialogDescription>
@@ -228,13 +228,13 @@ export function NewSurveyDialog({
             </div>
 
             <div className="grid grid-cols-2 gap-3">
-              <div className="flex flex-col gap-1.5">
+              <div className="flex min-w-0 flex-col gap-1.5">
                 <Label htmlFor="ns-start" className="text-muted-foreground text-xs">
                   Starts
                 </Label>
                 <DateTimeField id="ns-start" value={start} onChange={pickStart} />
               </div>
-              <div className="flex flex-col gap-1.5">
+              <div className="flex min-w-0 flex-col gap-1.5">
                 <Label htmlFor="ns-end" className="text-muted-foreground text-xs">
                   Ends
                 </Label>
