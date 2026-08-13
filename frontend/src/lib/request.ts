@@ -17,9 +17,22 @@ export type Result<T> = { data: T | null; error: string | null };
 
 type Envelope<T> = { ok?: boolean; data?: T; error?: string };
 
-export async function request<T>(handler: string, args: Record<string, unknown> = {}): Promise<Result<T>> {
+/**
+ * Same contract as `request`, but names the platform function to call.
+ *
+ * The lead, account, chat and settings surfaces all live in the one `lead`
+ * function, so `request` defaults to it. The survey lane does not: the house
+ * rule is one function per module (builds are per-function, which is what keeps
+ * two people out of each other's files), so surveys call `survey` and the form
+ * builder calls `form`. Those are separate deployables, not separate handlers.
+ */
+export async function requestFrom<T>(
+  fn: string,
+  handler: string,
+  args: Record<string, unknown> = {}
+): Promise<Result<T>> {
   try {
-    const res = await vibe.executeFunction<Envelope<T>>(FUNCTION, handler, args);
+    const res = await vibe.executeFunction<Envelope<T>>(fn, handler, args);
 
     if (res && res.ok === false) {
       return { data: null, error: res.error ?? `${handler} was rejected` };
@@ -30,6 +43,17 @@ export async function request<T>(handler: string, args: Record<string, unknown> 
   } catch (err) {
     return { data: null, error: errMessage(err, `${handler} could not be reached`) };
   }
+}
+
+/**
+ * A declaration rather than a `const` arrow on purpose: this is the app's most
+ * imported function, and a `const` defined at the bottom of the file is in the
+ * temporal dead zone during module evaluation. Nothing calls it at module scope
+ * today, but the first thing that does would fail at import time with an error
+ * that points here rather than at the caller. Declarations hoist; this cannot.
+ */
+export function request<T>(handler: string, args: Record<string, unknown> = {}): Promise<Result<T>> {
+  return requestFrom<T>(FUNCTION, handler, args);
 }
 
 export function errMessage(err: unknown, fallback: string): string {

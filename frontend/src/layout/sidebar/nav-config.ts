@@ -14,6 +14,8 @@
 
 import {
   Building2,
+  ClipboardList,
+  FileText,
   Inbox,
   MessageSquare,
   SlidersHorizontal,
@@ -45,8 +47,14 @@ export const NAV_TOP: NavEntry[] = [
   // app-level counts context — so the sidebar still needs no feature import.
   { type: "item", to: "/leads", icon: Inbox, label: "Lead inbox", badge: true },
   { type: "item", to: "/accounts", icon: Building2, label: "Accounts" },
+  // The survey lane. Templates sit beside surveys rather than under Settings:
+  // the form builder is a platform piece other modules will consume, and an Ops
+  // lead authors templates far more often than an Admin touches setup.
+  { type: "section", label: "Surveys" },
+  { type: "item", to: "/surveys", icon: ClipboardList, label: "Surveys" },
+  { type: "item", to: "/templates", icon: FileText, label: "Templates" },
   { type: "section", label: "Customer view" },
-  { type: "item", to: "/chat", icon: MessageSquare, label: "Website chat" },
+  { type: "item", to: "/chat", icon: MessageSquare, label: "Web widget" },
 ];
 
 /** Pinned to the sidebar footer, away from the modules. */

@@ -19,26 +19,32 @@ import { Row, RowTitle } from "../../../ui/Row";
 import { SettingsSkeleton } from "../../../ui/Skeleton";
 import { Empty, ErrorState } from "../../../ui/States";
 import { useToast } from "../../../ui/Toast";
-import { getSettings, putPrompt, putSla, resetAnalystTask, type Settings as SettingsShape } from "../api/settings-util";
+import {
+  getSettings,
+  putPrompt,
+  putServiceLines,
+  putSla,
+  resetAnalystTask,
+  type Settings as SettingsShape,
+} from "../api/settings-util";
 
 type Draft = {
   firstResponseMins: string;
   qualificationMins: string;
   assignmentMins: string;
-  analystAgent: string;
-  analystAgentLink: string;
   scopeNotes: string;
   analystTask: string;
+  /** Facilio Services id per service-line id; "" means "no link". */
+  serviceLinks: Record<string, string>;
 };
 
 const draftFrom = (s: SettingsShape): Draft => ({
   firstResponseMins: String(s.sla.firstResponseMins),
   qualificationMins: String(s.sla.qualificationMins),
   assignmentMins: String(s.sla.assignmentMins),
-  analystAgent: s.agent?.name ?? "",
-  analystAgentLink: s.agent?.link ?? "",
   scopeNotes: s.prompt?.scopeNotes ?? "",
   analystTask: s.prompt?.analystTask ?? "",
+  serviceLinks: Object.fromEntries(s.serviceLines.map((l) => [l.id, l.facilioServiceId ?? ""])),
 });
 
 export function Settings() {
@@ -110,10 +116,6 @@ export function Settings() {
   const savePrompt = async () => {
     setSaving(true);
     const { error: err } = await putPrompt({
-      // Both identifiers go through optStr server-side, so a blank one means
-      // "leave it alone" — the prompt fields below are the ones "" clears.
-      analystAgent: draft.analystAgent,
-      analystAgentLink: draft.analystAgentLink,
       scopeNotes: draft.scopeNotes,
       analystTask: draft.analystTask,
     });
@@ -135,6 +137,27 @@ export function Settings() {
       return;
     }
     toast("Default task restored");
+    setReloadKey((k) => k + 1);
+  };
+
+  const saveServiceLinks = async () => {
+    setSaving(true);
+    // Every line travels, with its stored code/name/active untouched — this
+    // save owns exactly one field. A trimmed-empty id clears the link.
+    const { error: err } = await putServiceLines(
+      settings.serviceLines.map((l) => ({
+        code: l.code,
+        name: l.name,
+        active: l.active !== "false",
+        facilioServiceId: (draft.serviceLinks[l.id] ?? "").trim(),
+      }))
+    );
+    setSaving(false);
+    if (err) {
+      toast(err, true);
+      return;
+    }
+    toast("Service links saved");
     setReloadKey((k) => k + 1);
   };
 
@@ -217,40 +240,73 @@ export function Settings() {
       </Split>
 
       <div className="mt-4">
-        <Card title="Lead analyst agent" meta="provider, model and schema are CLI-managed">
-          <Split>
-            <div>
-              <label className="text-muted-foreground mt-0 mb-1 block text-xs">
-                Name the browser resolves
-              </label>
-              <Input
-                type="text"
-                value={draft.analystAgent}
-                placeholder="lead-analyst"
-                onChange={(e) => set("analystAgent", e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="text-muted-foreground mt-0 mb-1 block text-xs">
-                Flow-AI link name (server path)
-              </label>
-              <Input
-                type="text"
-                value={draft.analystAgentLink}
-                placeholder="lead-analyst_&lt;appuuid&gt;"
-                onChange={(e) => set("analystAgentLink", e.target.value)}
-              />
-            </div>
-          </Split>
+        <Card title="Facilio service links" meta="every quoted service references a Facilio Services record" pad={false}>
+          {settings.serviceLines.length ? (
+            <>
+              {settings.serviceLines.map((l) => {
+                const saved = (l.facilioServiceId ?? "").trim();
+                const current = (draft.serviceLinks[l.id] ?? "").trim();
+                return (
+                  <Row key={l.id} style={{ gridTemplateColumns: "220px 260px 1fr" }}>
+                    <RowTitle title={l.code} meta={l.name} />
+                    <Input
+                      className="font-mono"
+                      value={draft.serviceLinks[l.id] ?? ""}
+                      placeholder="Facilio Services record id"
+                      onChange={(e) =>
+                        setDraft({
+                          ...draft,
+                          serviceLinks: { ...draft.serviceLinks, [l.id]: e.target.value },
+                        })
+                      }
+                    />
+                    <div>
+                      {saved ? (
+                        <Chip tone="blue">linked</Chip>
+                      ) : (
+                        <Chip>not linked</Chip>
+                      )}
+                      {current !== saved ? (
+                        <span className="text-muted-foreground ml-2 text-xs">unsaved</span>
+                      ) : null}
+                    </div>
+                  </Row>
+                );
+              })}
+              <div className="border-t p-4">
+                <div className="text-muted-foreground text-xs">
+                  Quote lines, rate card entries and survey templates reference the Facilio Services record — never
+                  this local line. Links stay empty until the Services read is verified on the connection; clearing a
+                  field removes the link.
+                </div>
+                <Bar className="mt-3">
+                  <Button variant="primary" onClick={() => void saveServiceLinks()} disabled={saving}>
+                    Save links
+                  </Button>
+                </Bar>
+              </div>
+            </>
+          ) : (
+            <Empty title="No service lines yet" body="Service lines arrive with the seed import." tight />
+          )}
+        </Card>
+      </div>
 
-          <div className="text-muted-foreground mt-2 text-xs">
-            Both point at an agent created with the CLI — copy them from{" "}
-            <span className="font-mono">facilio vibe agent get lead-analyst</span>. They are two different identifiers:
-            passing one where the other belongs returns <i>agent not found</i>. A blank field leaves the saved value
-            unchanged.
+      <div className="mt-4">
+        <Card title="Lead analyst agent" meta="identifiers, provider and model are CLI-managed">
+          {/* The agent's identity is deliberately NOT editable here. The two
+              identifier inputs this replaced only ever collected mistyped copies
+              of values the CLI already knows — what this card owns is the part
+              that gets APPENDED to every briefing. */}
+          <div className="text-muted-foreground text-xs">
+            Runs as <span className="font-mono">{settings.agent?.name || "lead-analyst"}</span> — its
+            instructions, provider and output schema are fixed when the agent is created; change them with{" "}
+            <span className="font-mono">facilio vibe agent update</span>.
             {settings.agent?.linkConfigured ? null : (
               <div className="text-destructive mt-1">
-                The link name is not set, so server-side assessment will fail. Assessing from this console still works.
+                The Flow-AI link is not set (
+                <span className="font-mono">facilio vibe agent get lead-analyst</span>), so server-side
+                assessment will fail. Assessing from this console still works.
               </div>
             )}
           </div>
@@ -272,7 +328,7 @@ export function Settings() {
 
           <Bar className="mt-4">
             <Button variant="primary" onClick={() => void savePrompt()} disabled={saving}>
-              Save agent settings
+              Save briefing
             </Button>
             <Button onClick={() => void restoreTask()} disabled={saving}>
               Restore default task

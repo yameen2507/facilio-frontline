@@ -11,6 +11,7 @@
  * group, so the shell keeps needing no feature imports.
  */
 
+import { PanelLeftOpen } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import { useCounts } from "@/app/counts";
 import {
@@ -26,7 +27,10 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
+  SidebarTrigger,
+  useSidebar,
 } from "@/components/ui/sidebar";
+import { NavUser } from "./NavUser";
 import {
   DEFAULT_ROUTE,
   NAV_TOP,
@@ -44,6 +48,56 @@ function toGroups(): Group[] {
     else if (!entry.hidden) groups[groups.length - 1].items.push(entry);
   }
   return groups.filter((g) => g.items.length > 0);
+}
+
+const BRAND_MARK =
+  "bg-primary text-primary-foreground relative flex aspect-square size-8 shrink-0 items-center justify-center rounded-lg text-sm font-semibold";
+
+/**
+ * The brand row, which is also where the rail is collapsed and expanded — the
+ * topbar that used to hold the trigger is gone, so the control lives beside
+ * the name it collapses.
+ *
+ * Expanded: logo + name with the collapse trigger on the row's right.
+ * Collapsed: the logo itself is the expand control — hovering swaps the mark
+ * for an open-panel glyph so the affordance is visible before the click.
+ * Mobile renders inside a Sheet that is always expanded and has its own close,
+ * so it takes the expanded row without the trigger.
+ */
+function BrandHeader() {
+  const { state, isMobile, toggleSidebar } = useSidebar();
+
+  if (state === "collapsed" && !isMobile) {
+    return (
+      <SidebarMenuButton
+        size="lg"
+        onClick={toggleSidebar}
+        tooltip="Expand sidebar"
+        aria-label="Expand sidebar"
+        className="group/brand"
+      >
+        <div className={BRAND_MARK}>
+          <span className="transition-opacity group-hover/brand:opacity-0">F</span>
+          <PanelLeftOpen className="absolute size-4 opacity-0 transition-opacity group-hover/brand:opacity-100" />
+        </div>
+      </SidebarMenuButton>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1">
+      <SidebarMenuButton size="lg" asChild className="min-w-0 flex-1">
+        <Link to={DEFAULT_ROUTE}>
+          <div className={BRAND_MARK}>F</div>
+          <div className="grid flex-1 text-left leading-tight">
+            <span className="truncate text-sm font-semibold">Frontline</span>
+            <span className="text-muted-foreground truncate text-xs">Facilio</span>
+          </div>
+        </Link>
+      </SidebarMenuButton>
+      {isMobile ? null : <SidebarTrigger className="shrink-0" />}
+    </div>
+  );
 }
 
 function NavButton({ item, active, badge }: { item: NavItemEntry; active: boolean; badge?: number }) {
@@ -74,17 +128,7 @@ export default function AppSidebar() {
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" asChild>
-              <Link to={DEFAULT_ROUTE}>
-                <div className="bg-primary text-primary-foreground flex aspect-square size-8 shrink-0 items-center justify-center rounded-lg text-sm font-semibold">
-                  F
-                </div>
-                <div className="grid flex-1 text-left leading-tight">
-                  <span className="truncate text-sm font-semibold">Frontline</span>
-                  <span className="text-muted-foreground truncate text-xs">Facilio</span>
-                </div>
-              </Link>
-            </SidebarMenuButton>
+            <BrandHeader />
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
@@ -112,6 +156,7 @@ export default function AppSidebar() {
       <SidebarFooter>
         <SidebarMenu>
           <NavButton item={SETTINGS_NAV} active={at(SETTINGS_NAV.to)} />
+          <NavUser />
         </SidebarMenu>
       </SidebarFooter>
 

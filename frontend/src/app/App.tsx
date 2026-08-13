@@ -27,6 +27,8 @@ import { AccountsRouter } from "../features/accounts";
 import { ChatRouter } from "../features/chat";
 import { LeadsRouter } from "../features/leads";
 import { SettingsRouter } from "../features/settings";
+import { SurveysRouter } from "../features/surveys";
+import { TemplatesRouter } from "../features/templates";
 import { ThemeProvider } from "../theme/ThemeProvider";
 import { LinkButton } from "../ui/Button";
 import { Empty } from "../ui/States";
@@ -76,6 +78,8 @@ export function App() {
                   <Route index element={<Navigate to={DEFAULT_ROUTE} replace />} />
                   <Route path="leads/*" element={<LeadsRouter />} />
                   <Route path="accounts/*" element={<AccountsRouter />} />
+                  <Route path="surveys/*" element={<SurveysRouter />} />
+                  <Route path="templates/*" element={<TemplatesRouter />} />
                   <Route path="settings/*" element={<SettingsRouter />} />
                   <Route path="chat/*" element={<ChatRouter />} />
                   <Route path="*" element={<NotFound />} />

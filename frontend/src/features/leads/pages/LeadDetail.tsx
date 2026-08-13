@@ -15,10 +15,10 @@
  *    reply that lands after the user moved on must not paint the previous lead's
  *    data over the current one.
  *
- * Known gap, stated rather than hidden: the destructive and data-entry actions use
- * `prompt()` / `confirm()`, inherited from the vanilla console. A close
- * confirmation should name its consequence in a real dialog. Replacing them is a
- * separate piece of work.
+ * Actions that need input (log a call, nurture-until, assign, close) run through
+ * the dialogs in components/ActionDialogs. Their submit callbacks return whether
+ * the mutation landed: `false` keeps the dialog open with the input intact so a
+ * rejected write can be fixed and retried, `true` lets it close.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -48,6 +48,11 @@ import {
   updateLead,
 } from "../api/leads-util";
 import { AiAssessment } from "../components/AiAssessment";
+import {
+  LeadActionDialogs,
+  type AssignRole,
+  type PendingLeadAction,
+} from "../components/ActionDialogs";
 import { StatusChip, SlaChip } from "../components/LeadChips";
 import { LifecycleSteps } from "../components/LifecycleSteps";
 import { ResponseClocks } from "../components/ResponseClocks";
@@ -64,6 +69,7 @@ export function LeadDetail() {
   const [error, setError] = useState<string | null>(null);
   const [assessing, setAssessing] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const [pending, setPending] = useState<PendingLeadAction>(null);
 
   // Which lead this component is currently showing. An async reply checks against
   // it before writing, which is what stops a slow response for lead A from
@@ -176,47 +182,15 @@ export function LeadDetail() {
       primary: true,
       run: async () => settled(unwrap(await claimLead(id, actor)), "Claimed — it's yours"),
     },
-    "log-call": {
-      label: "Log a call",
-      run: async () => {
-        const body = prompt("What happened on the call?");
-        if (!body) return;
-        settled(unwrap(await logCall(id, body, actor)), "Call logged");
-      },
-    },
+    "log-call": { label: "Log a call", run: () => setPending("log-call") },
     assess: { label: "Assess with AI", primary: true, run: assess },
     reassess: { label: "Re-assess", run: assess },
     qualify: {
       label: "Qualify",
       run: async () => settled(unwrap(await transitionLead(id, "qualified", actor)), "Qualified"),
     },
-    nurture: {
-      label: "Nurture",
-      run: async () => {
-        const until = prompt(
-          "Bring this back on which date? (YYYY-MM-DD)",
-          new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10)
-        );
-        if (!until) return;
-        // Two steps: the status change is validated by the state machine, the date
-        // is an ordinary field edit. Only the second one's view is rendered — the
-        // first would be stale a moment later.
-        if (!unwrap(await transitionLead(id, "nurture", actor, { note: `Nurturing until ${until}` }))) return;
-        settled(unwrap(await updateLead(id, { nurtureUntil: until }, actor)), `Parked until ${until}`);
-      },
-    },
-    assign: {
-      label: "Assign…",
-      run: async () => {
-        const who = prompt("Assign to which email?", actor);
-        if (!who) return;
-        const role = confirm("OK = hand to SALES owner\nCancel = reassign the ACTIONER") ? "sales" : "actioner";
-        settled(
-          unwrap(await assignLead(id, who, role, actor)),
-          `${role === "sales" ? "Sales owner" : "Actioner"} set to ${who}`
-        );
-      },
-    },
+    nurture: { label: "Nurture", run: () => setPending("nurture") },
+    assign: { label: "Assign…", run: () => setPending("assign") },
     convert: {
       label: "Convert to deal",
       primary: true,
@@ -225,17 +199,47 @@ export function LeadDetail() {
         if (r) settled(r, `${r.dealRefNo} created · ${r.queued.length} Facilio writes queued`);
       },
     },
-    close: {
-      label: "Close",
-      run: async () => {
-        const reason = prompt(
-          "Why is this closing?\nspam · outside_region · wrong_service · not_interested · no_budget · no_response · lost_to_competitor",
-          "not_interested"
-        );
-        if (!reason) return;
-        settled(unwrap(await transitionLead(id, "closed", actor, { dispositionReason: reason })), "Closed");
-      },
-    },
+    close: { label: "Close", run: () => setPending("close") },
+  };
+
+  /**
+   * Dialog submits. `true` closes the dialog; `false` (a rejected write, already
+   * toasted by `unwrap`) keeps it open with the input intact for a retry.
+   */
+  const submitLogCall = async (body: string): Promise<boolean> => {
+    const r = unwrap(await logCall(id, body, actor));
+    if (!r) return false;
+    settled(r, "Call logged");
+    setPending(null);
+    return true;
+  };
+
+  const submitNurture = async (until: string): Promise<boolean> => {
+    // Two steps: the status change is validated by the state machine, the date
+    // is an ordinary field edit. Only the second one's view is rendered — the
+    // first would be stale a moment later.
+    if (!unwrap(await transitionLead(id, "nurture", actor, { note: `Nurturing until ${until}` }))) return false;
+    const r = unwrap(await updateLead(id, { nurtureUntil: until }, actor));
+    if (!r) return false;
+    settled(r, `Parked until ${until}`);
+    setPending(null);
+    return true;
+  };
+
+  const submitAssign = async (who: string, role: AssignRole): Promise<boolean> => {
+    const r = unwrap(await assignLead(id, who, role, actor));
+    if (!r) return false;
+    settled(r, `${role === "sales" ? "Sales owner" : "Actioner"} set to ${who}`);
+    setPending(null);
+    return true;
+  };
+
+  const submitClose = async (reason: string): Promise<boolean> => {
+    const r = unwrap(await transitionLead(id, "closed", actor, { dispositionReason: reason }));
+    if (!r) return false;
+    settled(r, "Closed");
+    setPending(null);
+    return true;
   };
 
   // The action set is a pure function of the lead's state, and it is unit-tested.
@@ -347,6 +351,18 @@ export function LeadDetail() {
           </Card>
         </Stack>
       </Split>
+
+      <LeadActionDialogs
+        pending={pending}
+        onOpenChange={(open) => {
+          if (!open) setPending(null);
+        }}
+        defaultAssignee={actor}
+        onLogCall={submitLogCall}
+        onNurture={submitNurture}
+        onAssign={submitAssign}
+        onCloseLead={submitClose}
+      />
     </PageShell>
   );
 }

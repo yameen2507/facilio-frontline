@@ -1,7 +1,8 @@
 /**
- * What a visitor sees on the company website.
+ * The live widget — what a visitor sees on the company website, driven by the
+ * playground's config.
  *
- * The design constraint that shapes this page: THERE IS NO SUBMIT BUTTON and no
+ * The design constraint that shapes it: THERE IS NO SUBMIT BUTTON and no
  * "captured so far" panel. A visitor on a website does not press submit, and must
  * not be shown the extraction. The conversation IS the enquiry — the lead is
  * created the moment the agent has enough, without asking the visitor for anything.
@@ -11,13 +12,17 @@
  * `intake-turn`, which parses and stores it.
  *
  * The agent is stateless, so the whole conversation is resent on every turn.
+ *
+ * Config is applied live where that is honest (header, accent) and at
+ * conversation start where it must be (the greeting — the agent has to see the
+ * same first message the visitor saw, so an override cannot be patched into a
+ * running transcript).
  */
 
 import { useEffect, useRef, useState } from "react";
-import { PageShell } from "../../../app/shell/PageShell";
+import { Input } from "@/components/ui/input";
 import { errMessage } from "../../../lib/request";
 import { vibe } from "../../../lib/vibe";
-import { Input } from "@/components/ui/input";
 import { MSGS, MSG_AGENT, MSG_VISITOR } from "../../../ui/bubbles";
 import { Button } from "../../../ui/Button";
 import { Card } from "../../../ui/Card";
@@ -25,6 +30,7 @@ import { Chip } from "../../../ui/Chip";
 import { ChatSkeleton } from "../../../ui/Skeleton";
 import { useToast } from "../../../ui/Toast";
 import { intakeStart, intakeSubmit, intakeTurn } from "../api/chat-util";
+import type { WidgetConfig } from "../api/widget-config";
 
 type Message = { role: "agent" | "visitor" | "system"; content: string };
 
@@ -42,7 +48,7 @@ type Session = {
  */
 const INTAKE_AGENT = "intake";
 
-export function Chat() {
+export function WidgetPreview({ config }: { config: WidgetConfig }) {
   const toast = useToast();
 
   const [session, setSession] = useState<Session | null>(null);
@@ -53,6 +59,11 @@ export function Chat() {
   const scroller = useRef<HTMLDivElement | null>(null);
   // Guards the one-shot lead creation against a second turn racing it.
   const submitting = useRef(false);
+
+  // The greeting override is read when a conversation STARTS; a ref keeps the
+  // start closure seeing the latest config without restarting on every keystroke.
+  const greeting = useRef(config.greeting);
+  greeting.current = config.greeting;
 
   useEffect(
     () => () => {
@@ -72,7 +83,7 @@ export function Chat() {
     }
     setSession({
       token: data.sessionToken,
-      messages: [{ role: "agent", content: data.greeting }],
+      messages: [{ role: "agent", content: greeting.current.trim() || data.greeting }],
       missing: ["companyName"],
       leadRef: null,
     });
@@ -150,72 +161,78 @@ export function Chat() {
     }
   }
 
+  // An inline override, not a class: the accent is arbitrary user input, and
+  // white text is the widget convention for a brand-coloured bubble.
+  const accentStyle = config.accent ? { background: config.accent, color: "#fff" } : undefined;
+
   return (
-    <PageShell title="Website chat" subtitle="What a visitor sees on the company site">
-      <div className="mx-auto max-w-[620px]">
-        <Card pad={false} className="flex h-[68vh] min-h-[420px] flex-col">
-          <div className="text-muted-foreground flex items-center gap-2 border-b px-4 py-2.5 text-xs">
-            <Chip tone="blue">albaytgrill.ae</Chip>
-            <span>Chat with us — commercial kitchen extract cleaning</span>
-          </div>
+    <div className="mx-auto w-full max-w-[400px]">
+      <Card pad={false} className="flex h-[68vh] min-h-[420px] flex-col">
+        <div className="text-muted-foreground flex items-center gap-2 border-b px-4 py-2.5 text-xs">
+          <Chip tone="blue">{config.siteLabel.trim() || "your-site.com"}</Chip>
+          <span className="truncate">{config.introLine}</span>
+        </div>
 
-          {session ? (
-            <div className={MSGS} ref={scroller}>
-              {session.messages.map((m, i) =>
-                m.role === "system" ? (
-                  <div
-                    className="self-center rounded-full bg-green-100 px-4 py-1.5 text-center text-xs text-green-700 dark:bg-green-950 dark:text-green-400"
-                    key={i}
-                  >
-                    {m.content}
-                  </div>
-                ) : (
-                  <div className={m.role === "agent" ? MSG_AGENT : MSG_VISITOR} key={i}>
-                    {m.content}
-                  </div>
-                )
-              )}
-              {thinking ? (
-                <div className="flex gap-1 self-start px-4 py-2.5">
-                  <span className="bg-muted-foreground size-1.5 animate-bounce rounded-full" />
-                  <span className="bg-muted-foreground size-1.5 animate-bounce rounded-full [animation-delay:150ms]" />
-                  <span className="bg-muted-foreground size-1.5 animate-bounce rounded-full [animation-delay:300ms]" />
+        {session ? (
+          <div className={MSGS} ref={scroller}>
+            {session.messages.map((m, i) =>
+              m.role === "system" ? (
+                <div
+                  className="self-center rounded-full bg-green-100 px-4 py-1.5 text-center text-xs text-green-700 dark:bg-green-950 dark:text-green-400"
+                  key={i}
+                >
+                  {m.content}
                 </div>
-              ) : null}
-            </div>
-          ) : (
-            // The greeting is a round trip away, so the transcript area holds
-            // bubble-shaped placeholders rather than the word "Starting…".
-            <ChatSkeleton />
-          )}
-
-          <div className="flex gap-2 border-t p-4">
-            <Input
-              type="text"
-              className="flex-1 rounded-full"
-              placeholder="Type your message…"
-              autoComplete="off"
-              value={draft}
-              disabled={!session}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void send();
-              }}
-              aria-label="Your message"
-            />
-            <Button variant="primary" onClick={() => void send()} disabled={!session || thinking}>
-              Send
-            </Button>
+              ) : (
+                <div
+                  className={m.role === "agent" ? MSG_AGENT : MSG_VISITOR}
+                  style={m.role === "visitor" ? accentStyle : undefined}
+                  key={i}
+                >
+                  {m.content}
+                </div>
+              )
+            )}
+            {thinking ? (
+              <div className="flex gap-1 self-start px-4 py-2.5">
+                <span className="bg-muted-foreground size-1.5 animate-bounce rounded-full" />
+                <span className="bg-muted-foreground size-1.5 animate-bounce rounded-full [animation-delay:150ms]" />
+                <span className="bg-muted-foreground size-1.5 animate-bounce rounded-full [animation-delay:300ms]" />
+              </div>
+            ) : null}
           </div>
-        </Card>
+        ) : (
+          // The greeting is a round trip away, so the transcript area holds
+          // bubble-shaped placeholders rather than the word "Starting…".
+          <ChatSkeleton />
+        )}
 
-        <div className="text-muted-foreground mt-3 flex items-center justify-between gap-4 text-xs">
-          <span>The assistant never quotes a price — a surveyor confirms that on site.</span>
-          <Button small onClick={() => void start()}>
-            Start a new conversation
+        <div className="flex gap-2 border-t p-4">
+          <Input
+            type="text"
+            className="flex-1 rounded-full"
+            placeholder="Type your message…"
+            autoComplete="off"
+            value={draft}
+            disabled={!session}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void send();
+            }}
+            aria-label="Your message"
+          />
+          <Button variant="primary" onClick={() => void send()} disabled={!session || thinking}>
+            Send
           </Button>
         </div>
+      </Card>
+
+      <div className="text-muted-foreground mt-3 flex items-center justify-between gap-4 text-xs">
+        <span>The assistant never quotes a price — a surveyor confirms that on site.</span>
+        <Button small onClick={() => void start()}>
+          Start a new conversation
+        </Button>
       </div>
-    </PageShell>
+    </div>
   );
 }

@@ -3,12 +3,12 @@
  */
 
 import { Route, Routes } from "react-router-dom";
-import { Chat } from "./pages/Chat";
+import { Playground } from "./pages/Playground";
 
 export function ChatRouter() {
   return (
     <Routes>
-      <Route index element={<Chat />} />
+      <Route index element={<Playground />} />
     </Routes>
   );
 }
