@@ -15,6 +15,7 @@ import { Fragment, useId } from "react";
 import { PanelLeftOpen } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import { useCounts } from "@/app/counts";
+import { cn } from "@/lib/utils";
 import {
   Sidebar,
   SidebarContent,
@@ -130,14 +131,17 @@ function BrandHeader() {
  * any rail width; the collapsed rail just shows fewer of them, where the wave
  * does the hidden labels' job.
  */
-function WaveDivider() {
+function WaveDivider({ className }: { className?: string }) {
   const id = useId();
   return (
     <svg
       // my-3: the wave needs air on both sides to read as a section break. The
       // groups' own py-1.5 alone left it crowded against the item above and the
       // section label below, so the three ran together as one list.
-      className="text-sidebar-foreground/35 mx-2 my-3 h-[5px] shrink-0 [mask-image:linear-gradient(to_right,black,transparent)]"
+      className={cn(
+        "text-sidebar-foreground/35 mx-2 my-3 h-[5px] shrink-0 [mask-image:linear-gradient(to_right,black,transparent)]",
+        className
+      )}
       aria-hidden="true"
     >
       <defs>
@@ -219,9 +223,16 @@ export default function AppSidebar() {
         ))}
       </SidebarContent>
 
+      {/* Two lists, not one: the wave is a sibling of the menus rather than a
+          child, because SidebarMenu is a <ul> and only <li> belongs inside it.
+          Margins are zeroed here — the footer's own p-2 supplies the inset that
+          keeps this wave in line with the ones above, and its gap-2 the room. */}
       <SidebarFooter>
         <SidebarMenu>
           <NavButton item={SETTINGS_NAV} active={at(SETTINGS_NAV.to)} />
+        </SidebarMenu>
+        <WaveDivider className="mx-0 my-0" />
+        <SidebarMenu>
           <NavUser />
         </SidebarMenu>
       </SidebarFooter>
