@@ -35,7 +35,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { DateTimeField } from "../../../ui/DateField";
+import { DateTimeField, plusHours } from "../../../ui/DateField";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { assignSurveyors, getSurvey, scheduleVisit, setLead, transitionSurvey } from "../api/surveys-util";
@@ -403,9 +403,18 @@ function ScheduleVisitDialog({
     }
   }, [open]);
 
+  /** Offers an end two hours out; see the note in NewSurveyDialog. */
+  const pickStart = (next: string) => {
+    setStart(next);
+    if (!next) return setEnd("");
+    if (!end || end <= next) setEnd(plusHours(next, 2));
+  };
+
+  const endBeforeStart = Boolean(start && end && end <= start);
+
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!start || busy) return;
+    if (!start || endBeforeStart || busy) return;
     setBusy(true);
     setError(null);
 
@@ -440,16 +449,19 @@ function ScheduleVisitDialog({
           </DialogHeader>
 
           <div className="grid gap-4 py-4">
-            <div className="flex flex-wrap gap-4">
+            <div className="grid grid-cols-2 gap-3">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="sv-start">Starts</Label>
-                <DateTimeField id="sv-start" value={start} onChange={setStart} />
+                <DateTimeField id="sv-start" value={start} onChange={pickStart} />
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="sv-end">Ends</Label>
                 <DateTimeField id="sv-end" value={end} onChange={setEnd} disabled={!start} />
               </div>
             </div>
+            {endBeforeStart ? (
+              <p className="text-destructive text-xs">The end has to come after the start.</p>
+            ) : null}
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="sv-contact">Site contact</Label>
               <Input

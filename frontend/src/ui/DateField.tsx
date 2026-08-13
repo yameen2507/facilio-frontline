@@ -50,6 +50,21 @@ function parseTimePart(value: string): string {
   return m ? m[1] : "";
 }
 
+/**
+ * `value` moved by whole hours, still local wall-clock. Used to offer a default
+ * end once a start is picked, so nobody walks the same calendar twice.
+ *
+ * Because these strings are fixed-width and zero-padded, callers can compare
+ * two of them with `<` directly — no parsing needed to check end-after-start.
+ */
+export function plusHours(value: string, hours: number): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value);
+  if (!m) return "";
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]));
+  d.setHours(d.getHours() + hours);
+  return `${formatDatePart(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 function displayDate(d: Date): string {
   return d.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
 }
@@ -94,7 +109,14 @@ function Trigger({
         variant="outline"
         disabled={disabled}
         autoFocus={autoFocus}
-        className={cn("justify-between font-normal", empty && "text-muted-foreground", className)}
+        className={cn(
+          // Full width by default: these sit in forms beside inputs and selects,
+          // and a control that sizes to its own text makes a stack of fields
+          // ragged. Call sites override with a width class when they need one.
+          "w-full justify-between font-normal",
+          empty && "text-muted-foreground",
+          className
+        )}
       >
         {label}
         <CalendarIcon className="size-4 shrink-0 opacity-60" aria-hidden="true" />
@@ -120,7 +142,7 @@ export function DateField({ id, value, onChange, disabled, autoFocus, className 
         empty={!selected}
         disabled={disabled}
         autoFocus={autoFocus}
-        className={cn("w-[13rem]", className)}
+        className={className}
       />
       <PopoverContent align="start" className="w-auto p-0">
         <Calendar
@@ -175,7 +197,7 @@ export function DateTimeField({ id, value, onChange, disabled, autoFocus, classN
         empty={!selected}
         disabled={disabled}
         autoFocus={autoFocus}
-        className={cn("w-[16rem]", className)}
+        className={className}
       />
       <PopoverContent align="start" className="w-auto p-0">
         <Calendar

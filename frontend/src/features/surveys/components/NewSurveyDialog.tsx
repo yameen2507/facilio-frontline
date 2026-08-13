@@ -25,7 +25,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { DateTimeField } from "../../../ui/DateField";
+import { DateTimeField, plusHours } from "../../../ui/DateField";
+import { Separator } from "@/components/ui/separator";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -93,9 +94,23 @@ export function NewSurveyDialog({
     };
   }, [open]);
 
+  /**
+   * Picking a start offers an end two hours later, rather than making the user
+   * walk the same calendar a second time. It only fills a blank or an end that
+   * the new start has overtaken — never an end already chosen deliberately.
+   */
+  const pickStart = (next: string) => {
+    setStart(next);
+    if (!next) return setEnd("");
+    if (!end || end <= next) setEnd(plusHours(next, 2));
+  };
+
+  /** Zero-padded fixed-width strings compare directly; no parsing needed. */
+  const endBeforeStart = Boolean(start && end && end <= start);
+
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!dealId || busy) return;
+    if (!dealId || endBeforeStart || busy) return;
     setBusy(true);
     setError(null);
 
@@ -120,21 +135,23 @@ export function NewSurveyDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <form onSubmit={submit}>
+      <DialogContent className="sm:max-w-lg">
+        <form onSubmit={submit} className="flex flex-col gap-5">
           <DialogHeader>
             <DialogTitle>New survey</DialogTitle>
             <DialogDescription>
-              A survey is raised against a deal. Pick a date to schedule the first visit now — the
-              template is copied at that moment, so later template edits never reach this survey.
+              Raised against a deal. Scheduling the first visit copies the template at that moment,
+              so later template edits never reach this survey.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid gap-4 py-4">
+          <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
-              <Label>Deal</Label>
+              <Label htmlFor="ns-deal">
+                Deal <span className="text-destructive">*</span>
+              </Label>
               <Select value={dealId} onValueChange={setDealId} disabled={loading}>
-                <SelectTrigger>
+                <SelectTrigger id="ns-deal" className="w-full">
                   <SelectValue placeholder={loading ? "Loading deals…" : "Pick the deal"} />
                 </SelectTrigger>
                 <SelectContent>
@@ -146,12 +163,17 @@ export function NewSurveyDialog({
                   ))}
                 </SelectContent>
               </Select>
+              {!loading && !deals.length ? (
+                <span className="text-muted-foreground text-xs">
+                  No deals yet — a survey is always raised against one.
+                </span>
+              ) : null}
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <Label>Template</Label>
+              <Label htmlFor="ns-template">Template</Label>
               <Select value={templateId} onValueChange={setTemplateId} disabled={loading}>
-                <SelectTrigger>
+                <SelectTrigger id="ns-template" className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -180,23 +202,73 @@ export function NewSurveyDialog({
                 placeholder="Defaults to the template or deal title"
               />
             </div>
+          </div>
 
-            <div className="flex flex-wrap gap-4">
+          <Separator />
+
+          <div className="flex flex-col gap-3">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-sm leading-none font-medium">First visit</span>
+              {start ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="text-muted-foreground -my-1 h-auto py-1"
+                  onClick={() => {
+                    setStart("");
+                    setEnd("");
+                  }}
+                >
+                  Clear
+                </Button>
+              ) : (
+                <span className="text-muted-foreground text-xs">Optional</span>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="ns-start">First visit starts</Label>
-                <DateTimeField id="ns-start" value={start} onChange={setStart} />
-                <span className="text-muted-foreground text-xs">
-                  Optional — without it the survey stays a draft.
-                </span>
+                <Label htmlFor="ns-start" className="text-muted-foreground text-xs">
+                  Starts
+                </Label>
+                <DateTimeField id="ns-start" value={start} onChange={pickStart} />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="ns-end">Ends</Label>
+                <Label htmlFor="ns-end" className="text-muted-foreground text-xs">
+                  Ends
+                </Label>
                 <DateTimeField id="ns-end" value={end} onChange={setEnd} disabled={!start} />
               </div>
             </div>
 
-            {error ? <p className="text-destructive text-sm">{error}</p> : null}
+            {!start ? (
+              <p className="text-muted-foreground text-xs">
+                Pick a start to schedule the visit — the end fills in two hours later and stays
+                editable.
+              </p>
+            ) : null}
+            {endBeforeStart ? (
+              <p className="text-destructive text-xs">The end has to come after the start.</p>
+            ) : null}
           </div>
+
+          {/* The outcome, stated before the click rather than discovered after it. */}
+          <p className="text-muted-foreground bg-muted/50 rounded-md px-3 py-2 text-xs">
+            {start ? (
+              <>
+                Creates a <span className="text-foreground font-medium">scheduled</span> survey and
+                copies the template now.
+              </>
+            ) : (
+              <>
+                Creates a <span className="text-foreground font-medium">draft</span>. You can
+                schedule the first visit later.
+              </>
+            )}
+          </p>
+
+          {error ? <p className="text-destructive text-sm">{error}</p> : null}
 
           <DialogFooter>
             <DialogClose asChild>
@@ -204,7 +276,11 @@ export function NewSurveyDialog({
                 Cancel
               </Button>
             </DialogClose>
-            <Button type="submit" disabled={!dealId || busy}>
+            <Button
+              type="submit"
+              disabled={!dealId || endBeforeStart || busy}
+              title={!dealId ? "Pick the deal this survey is for" : undefined}
+            >
               {busy ? "Creating…" : "Create survey"}
             </Button>
           </DialogFooter>
