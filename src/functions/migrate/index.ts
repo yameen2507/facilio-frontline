@@ -30,6 +30,26 @@ const TABLES = [
   "fl_deal",
   "fl_intake_session",
   "fl_intake_message",
+
+  // --- survey module (Backend Plan v1 §3) — 18 tables, imported together ----
+  "fl_form_template",
+  "fl_form_section",
+  "fl_form_question",
+  "fl_survey",
+  "fl_survey_visit",
+  "fl_survey_assignee",
+  "fl_survey_visit_assignee",
+  "fl_survey_section_instance",
+  "fl_survey_question_instance",
+  "fl_survey_section_entry",
+  "fl_survey_answer",
+  "fl_survey_observation",
+  "fl_prospect_node",
+  "fl_prospect_observation",
+  "fl_survey_recommendation",
+  "fl_survey_qualification",
+  "fl_survey_reconciliation",
+  "fl_survey_revision",
 ];
 
 /**
