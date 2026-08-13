@@ -7,7 +7,29 @@
  * | `settings-put` | SLA minutes as flat fields, or `payload` as a JSON string  |
  */
 
-import { request } from "../../../lib/request";
+import { request, requestFrom } from "../../../lib/request";
+
+// ── Survey module settings — served by the `survey` function, not `lead` ─────
+
+export type SurveySettings = {
+  /** D-e: 1_is_worst (5 = excellent, FM convention) or 5_is_worst (5 = filthy). FEEDS PRICING. */
+  conditionScaleDirection: string;
+  conditionScaleLabels: Record<string, string>;
+  requirePhotoBelowCondition: number;
+  geotagCapture: string;
+  notVisitedWarnThresholdPct: number;
+};
+
+export const getSurveySettings = () => requestFrom<SurveySettings>("survey", "settings-get");
+
+export const putSurveySettings = (fields: {
+  conditionScaleDirection?: string;
+  requirePhotoBelowCondition?: number;
+  geotagCapture?: string;
+}) =>
+  requestFrom<{ applied: string[]; settings: SurveySettings }>("survey", "settings-put", {
+    ...fields,
+  });
 
 export type ServiceLine = {
   id: string;

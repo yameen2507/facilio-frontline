@@ -16,11 +16,22 @@ import { Facts } from "../../../ui/Facts";
 import { Row, RowStat, RowTitle } from "../../../ui/Row";
 import { AccountDetailSkeleton } from "../../../ui/Skeleton";
 import { Empty, ErrorState } from "../../../ui/States";
-import { getAccount } from "../api/accounts-util";
+import { getAccount, listAccountSurveys, type AccountSurvey } from "../api/accounts-util";
 import type { AccountDetailResponse } from "../types/account";
 import { SyncChip } from "./AccountList";
 
 const STAGE_TONE: Record<string, Tone> = { open: "blue", won: "green", lost: "neutral" };
+
+/** Survey status tones, mirroring the survey feature's chips without importing them. */
+const SURVEY_STAGE_TONE: Record<string, Tone> = {
+  draft: "neutral",
+  scheduled: "blue",
+  assigned: "blue",
+  in_progress: "orange",
+  pending_review: "orange",
+  completed: "green",
+  cancelled: "red",
+};
 
 export function AccountDetail() {
   const { id = "" } = useParams();
@@ -30,15 +41,26 @@ export function AccountDetail() {
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
+  // Fetched alongside, not inside, `account-get`: surveys belong to the survey
+  // function, and widening the lead function's account view would cross the
+  // module boundary that keeps the two separately deployable.
+  const [surveys, setSurveys] = useState<AccountSurvey[] | null>(null);
+
   useEffect(() => {
     let live = true;
     setDetail(null);
     setError(null);
+    setSurveys(null);
 
     getAccount(id).then(({ data, error: err }) => {
       if (!live) return;
       if (err) setError(err);
       else setDetail(data);
+    });
+
+    listAccountSurveys(id).then(({ data }) => {
+      if (!live) return;
+      if (data) setSurveys(data.surveys);
     });
 
     return () => {
@@ -126,6 +148,52 @@ export function AccountDetail() {
               </table>
             ) : (
               <Empty title="No deals yet" body="Converting a qualified lead creates the first one." tight />
+            )}
+          </Card>
+
+          <Card
+            title="Surveys"
+            meta="condition walks on this company's deals"
+            pad={false}
+          >
+            {surveys === null ? (
+              <div className="text-muted-foreground px-4 py-3 text-sm">Loading…</div>
+            ) : surveys.length ? (
+              surveys.map((s) => (
+                <Row key={s.id} onClick={() => navigate(`/surveys/${s.id}`)}>
+                  <RowTitle
+                    title={
+                      <>
+                        <code className="mr-1.5 text-xs">{s.refNo}</code>
+                        {s.title ?? "Untitled survey"}
+                      </>
+                    }
+                    meta={s.templateName ?? "from scratch"}
+                  />
+                  <div>
+                    <Chip tone={SURVEY_STAGE_TONE[s.status] ?? "neutral"}>
+                      {s.status.replace(/_/g, " ")}
+                    </Chip>
+                  </div>
+                  <RowStat value={s.visitCount ?? 0} unit="visits" />
+                  <div className="text-muted-foreground mt-px text-xs">
+                    {s.createdAt ? ago(s.createdAt) : "—"}
+                  </div>
+                </Row>
+              ))
+            ) : (
+              <Empty
+                title="No surveys yet"
+                body="A survey is raised against one of the deals above."
+                action={
+                  deals.length ? (
+                    <LinkButton to={`/surveys?new=${deals.length === 1 ? deals[0].id : ""}`}>
+                      Raise a survey
+                    </LinkButton>
+                  ) : undefined
+                }
+                tight
+              />
             )}
           </Card>
         </Stack>

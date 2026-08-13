@@ -301,7 +301,19 @@ export function LeadDetail() {
                 },
                 { label: "Est. value", value: money(lead.estimatedValue, lead.currency ?? "AED") },
                 { label: "Owner", value: lead.ownerEmail ?? "unclaimed" },
-                { label: "Deal", value: lead.dealId ? <Chip tone="green">created</Chip> : "—" },
+                {
+                  label: "Deal",
+                  // The next step after conversion is the site walk — offer it
+                  // where the deal is, not three pages away.
+                  value: lead.dealId ? (
+                    <span className="flex items-center gap-2">
+                      <Chip tone="green">created</Chip>
+                      <Link to={`/surveys?new=${lead.dealId}`}>Raise survey</Link>
+                    </span>
+                  ) : (
+                    "—"
+                  ),
+                },
                 {
                   label: "Account",
                   value: lead.accountId ? <Link to={`/accounts/${lead.accountId}`}>Company page</Link> : "—",

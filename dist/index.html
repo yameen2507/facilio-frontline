@@ -2,8 +2,25 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- viewport-fit=cover so the walk's fixed save bar can pad itself past the
+         iPhone home indicator with env(safe-area-inset-bottom). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Frontline</title>
+
+    <!-- PWA: installable to the surveyor's home screen — the walk is a phone
+         surface first. Assets live in frontend/pwa/, copied by build-frontend. -->
+    <!-- use-credentials: manifest requests OMIT cookies by default, and this
+         whole app sits behind the platform login — without it the browser gets
+         the 302 to id.facilio.com instead of the manifest and never offers
+         install. -->
+    <link rel="manifest" href="./manifest.webmanifest" crossorigin="use-credentials" />
+    <meta name="theme-color" content="#0f1115" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="./frontline.svg" />
+    <link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Frontline" />
 
     <!-- Theme before paint, from its own file rather than an inline <script>: the
          CSP is documented to exclude CDNs but says nothing about 'unsafe-inline',
@@ -19,5 +36,7 @@
   <body>
     <div id="root"></div>
     <script src="./app.js"></script>
+    <!-- Registers the service worker; own file for CSP reasons (see theme-boot). -->
+    <script src="./pwa-boot.js" defer></script>
   </body>
 </html>

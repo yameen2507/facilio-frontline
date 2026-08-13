@@ -20,9 +20,9 @@
  * (FormRender) — that identity is the product promise, not a convenience.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Camera, Paperclip, Plus } from "lucide-react";
+import { ArrowLeft, Camera, Plus } from "lucide-react";
 import { useActor } from "../../../app/auth";
 import { PageShell } from "../../../app/shell/PageShell";
 import { vibe } from "../../../lib/vibe";
@@ -41,14 +41,12 @@ import {
 } from "../../templates/components/FormRender";
 import type { Question } from "../../templates/types/template";
 import { capture, getWalk } from "../api/surveys-util";
+import { PhotoThumb, urlCache } from "../components/PhotoGallery";
 import { SurveyStatusChip, VisitStatusChip } from "../components/SurveyChips";
 import type { WalkPhoto, WalkQuestion, WalkSection, WalkState } from "../types/survey";
 
-/**
- * Mirrors `survey.require_photo_below_condition` as seeded. The server enforces
- * the real value; this copy only makes the block visible before the round trip.
- */
-const PHOTO_BELOW = 2;
+/** Fallback while the walk loads — the real threshold rides in walk.settings. */
+const PHOTO_BELOW_FALLBACK = 2;
 
 const uid = () => crypto.randomUUID();
 
@@ -81,9 +79,6 @@ type PendingPhoto = {
   /** Set when an attachment QUESTION took it, so its control can list it. */
   questionId?: string;
 };
-
-/** Object URLs for files this session uploaded, so saved photos keep rendering. */
-const urlCache = new Map<number, string>();
 
 export function SurveyWalk() {
   const navigate = useNavigate();
@@ -195,6 +190,8 @@ export function SurveyWalk() {
   // ── Mutations (local until Save) ───────────────────────────────────────────
   const survey = walk?.survey;
   const visit = walk?.visit;
+  const photoBelow = walk?.settings?.requirePhotoBelowCondition ?? PHOTO_BELOW_FALLBACK;
+  const conditionLabels = walk?.settings?.conditionScaleLabels ?? null;
   const capturable = survey?.status === "assigned" || survey?.status === "in_progress";
   const editable = Boolean(capturable && visit && (visit.status === "planned" || visit.status === "in_progress"));
 
@@ -309,11 +306,11 @@ export function SurveyWalk() {
     const merged = mergedEntries(walk, pendingEntries);
     const blocked = merged.filter((e) => {
       const score = conditionFor(e.id);
-      return score != null && score <= PHOTO_BELOW && photosFor(e.id).length === 0;
+      return score != null && score <= photoBelow && photosFor(e.id).length === 0;
     });
     if (blocked.length) {
       setSaveError(
-        `A condition of ${PHOTO_BELOW} or below needs a photo: ${blocked
+        `A condition of ${photoBelow} or below needs a photo: ${blocked
           .map((e) => `"${e.entryLabel || "unnamed"}"`)
           .join(", ")}`
       );
@@ -449,14 +446,18 @@ export function SurveyWalk() {
                   onAddPhotos={addPhotos}
                   onRemovePhoto={removePendingPhoto}
                   visitId={visit.id}
+                  photoBelow={photoBelow}
+                  conditionLabels={conditionLabels}
                 />
               ))}
           </>
         )}
       </Stack>
 
+      {/* bottom uses max() so the pill clears the iPhone home indicator when
+          installed as a PWA (viewport-fit=cover exposes the safe-area inset). */}
       {editable ? (
-        <div className="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center">
+        <div className="pointer-events-none fixed inset-x-0 bottom-[max(1rem,env(safe-area-inset-bottom))] z-40 flex justify-center">
           <div className="bg-background pointer-events-auto flex items-center gap-3 rounded-full border px-4 py-2 shadow-lg">
             {saveError ? (
               <span className="text-destructive max-w-96 text-xs">{saveError}</span>
@@ -514,6 +515,8 @@ function WalkSectionCard({
   onAddPhotos,
   onRemovePhoto,
   visitId,
+  photoBelow,
+  conditionLabels,
 }: {
   section: WalkSection;
   walk: WalkState;
@@ -535,6 +538,8 @@ function WalkSectionCard({
   ) => void;
   onRemovePhoto: (photoId: string) => void;
   visitId: string;
+  photoBelow: number;
+  conditionLabels: Record<string, string> | null;
 }) {
   const repeatable = isOn(section.isRepeatable);
   const label = section.repeatLabel || "Entry";
@@ -585,11 +590,12 @@ function WalkSectionCard({
               onCondition={(n) => onCondition(entry.id, n)}
               onRemove={() => onRemoveEntry(entry.id)}
               attachments={attachmentsFor("section_entry", entry.id)}
+              conditionLabels={conditionLabels}
               footer={
                 <PhotoStrip
                   photos={photosFor(entry.id)}
                   editable={editable}
-                  lowCondition={(conditionFor(entry.id) ?? 6) <= PHOTO_BELOW}
+                  lowCondition={(conditionFor(entry.id) ?? 6) <= photoBelow}
                   onAdd={(files) => onAddPhotos("section_entry", entry.id, files)}
                   onRemove={onRemovePhoto}
                   inputId={`entry-photos-${entry.id}`}
@@ -677,59 +683,6 @@ function PhotoStrip({
         ) : null}
       </div>
     </div>
-  );
-}
-
-/**
- * A thumbnail that works for both lives of a photo: just-taken (local object
- * URL) and previously saved (downloaded once through the SDK, then cached).
- */
-function PhotoThumb({
-  photo,
-  onRemove,
-}: {
-  photo: { id: string; name: string; url?: string | null; vibeFileId: number };
-  onRemove?: () => void;
-}) {
-  const [url, setUrl] = useState<string | null>(photo.url ?? urlCache.get(photo.vibeFileId) ?? null);
-  const fetched = useRef(false);
-
-  useEffect(() => {
-    if (url || fetched.current) return;
-    fetched.current = true;
-    vibe
-      .downloadFile(photo.vibeFileId)
-      .then((blob) => {
-        const objectUrl = URL.createObjectURL(blob);
-        urlCache.set(photo.vibeFileId, objectUrl);
-        setUrl(objectUrl);
-      })
-      .catch(() => undefined); // falls through to the name chip
-  }, [url, photo.vibeFileId]);
-
-  if (!url) {
-    return (
-      <span className="bg-muted/40 flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs">
-        <Paperclip className="size-3" />
-        {photo.name}
-      </span>
-    );
-  }
-
-  return (
-    <span className="relative">
-      <img src={url} alt={photo.name} className="size-16 rounded-md border object-cover" />
-      {onRemove ? (
-        <button
-          type="button"
-          onClick={onRemove}
-          aria-label={`Remove ${photo.name}`}
-          className="bg-background absolute -top-1.5 -right-1.5 rounded-full border px-1 text-xs leading-4"
-        >
-          ×
-        </button>
-      ) : null}
-    </span>
   );
 }
 

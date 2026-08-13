@@ -11,9 +11,14 @@
 import type { CSSProperties, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
-/** Main text stack, status chip, score, trailing clock column. */
+/**
+ * Main text stack, status chip, score, trailing clock column. The fixed
+ * columns narrow on phones — 300px of chrome beside a title cell is a desktop
+ * luxury; at 390px wide the title keeps ~150px and nothing overflows.
+ */
 export const ROW_GRID =
-  "grid grid-cols-[minmax(0,1fr)_96px_84px_120px] items-center gap-4 border-b px-4 py-3 last:border-b-0";
+  "grid grid-cols-[minmax(0,1fr)_76px_56px_70px] items-center gap-2 border-b px-3 py-3 last:border-b-0 " +
+  "sm:grid-cols-[minmax(0,1fr)_96px_84px_120px] sm:gap-4 sm:px-4";
 
 export function Row({
   children,

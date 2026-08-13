@@ -27,8 +27,8 @@ export type NavItemEntry = {
   to: string;
   icon: LucideIcon;
   label: string;
-  /** Shows the open-lead count from the counts context. */
-  badge?: boolean;
+  /** Which number from the counts context this item's badge shows. */
+  badge?: "openLeads" | "pendingSurveys";
   /** Parks an item without deleting its config — deleting loses the work, the
       flag records that the surface exists but is not shipping. */
   hidden?: boolean;
@@ -43,15 +43,15 @@ export type NavEntry =
 export const DEFAULT_ROUTE = "/leads";
 
 export const NAV_TOP: NavEntry[] = [
-  // `badge` shows the open-lead count, fed up from the leads feature through the
-  // app-level counts context — so the sidebar still needs no feature import.
-  { type: "item", to: "/leads", icon: Inbox, label: "Lead inbox", badge: true },
+  // `badge` names a count from the app-level counts context, fed up by the
+  // owning feature — so the sidebar still needs no feature import.
+  { type: "item", to: "/leads", icon: Inbox, label: "Lead inbox", badge: "openLeads" },
   { type: "item", to: "/accounts", icon: Building2, label: "Accounts" },
   // The survey lane. Templates sit beside surveys rather than under Settings:
   // the form builder is a platform piece other modules will consume, and an Ops
   // lead authors templates far more often than an Admin touches setup.
   { type: "section", label: "Surveys" },
-  { type: "item", to: "/surveys", icon: ClipboardList, label: "Surveys" },
+  { type: "item", to: "/surveys", icon: ClipboardList, label: "Surveys", badge: "pendingSurveys" },
   { type: "item", to: "/templates", icon: FileText, label: "Templates" },
   { type: "section", label: "Customer view" },
   { type: "item", to: "/chat", icon: MessageSquare, label: "Web widget" },

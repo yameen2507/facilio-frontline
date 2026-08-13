@@ -10,8 +10,9 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { ClipboardList, Plus } from "lucide-react";
+import { useCounts } from "../../../app/counts";
 import { PageShell } from "../../../app/shell/PageShell";
 import { ago } from "../../../lib/format";
 import { Bar, Card } from "../../../ui/Card";
@@ -45,9 +46,21 @@ const COLUMNS = ["Survey", "Status", "Visits", "Created"];
 
 export function SurveyList() {
   const navigate = useNavigate();
+  const { setPendingSurveys } = useCounts();
   const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
-  const [creating, setCreating] = useState(false);
+
+  // `/surveys?new=<dealId>` opens the create dialog with the deal preselected —
+  // the deep link the lead and account pages use to raise a survey in place.
+  const [params, setParams] = useSearchParams();
+  const newParam = params.get("new");
+  const [creating, setCreating] = useState(newParam !== null);
+  const initialDealId = newParam || undefined;
+
+  const closeCreate = (open: boolean) => {
+    setCreating(open);
+    if (!open && newParam !== null) setParams({}, { replace: true });
+  };
 
   const [surveys, setSurveys] = useState<Survey[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -60,12 +73,16 @@ export function SurveyList() {
       if (!live) return;
       setLoaded(true);
       setError(err);
-      if (data) setSurveys(data.surveys);
+      if (data) {
+        setSurveys(data.surveys);
+        // Feeds the sidebar badge — the lead's review queue.
+        setPendingSurveys(data.surveys.filter((s) => s.status === "pending_review").length);
+      }
     });
     return () => {
       live = false;
     };
-  }, [reloadKey]);
+  }, [reloadKey, setPendingSurveys]);
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -79,6 +96,18 @@ export function SurveyList() {
     );
   }, [surveys, filter, search]);
 
+  // Counts appear only once the data has: a zero during the skeleton phase
+  // would claim an empty bucket before anything was fetched.
+  const tabs = useMemo(() => {
+    if (!loaded || error) return TABS;
+    const byStatus = new Map<string, number>();
+    for (const s of surveys) byStatus.set(s.status, (byStatus.get(s.status) ?? 0) + 1);
+    return TABS.map((t) => ({
+      ...t,
+      count: t.id === "all" ? surveys.length : (byStatus.get(t.id) ?? 0),
+    }));
+  }, [loaded, error, surveys]);
+
   return (
     <PageShell
       title="Surveys"
@@ -91,7 +120,7 @@ export function SurveyList() {
       }
       strip={
         <Bar className="justify-between pb-1">
-          <Tabs items={TABS} active={filter} onChange={setFilter} />
+          <Tabs items={tabs} active={filter} onChange={setFilter} />
           <Input
             type="text"
             placeholder="Search by number, account or site"
@@ -158,7 +187,7 @@ export function SurveyList() {
         )}
       </Card>
 
-      <NewSurveyDialog open={creating} onOpenChange={setCreating} />
+      <NewSurveyDialog open={creating} onOpenChange={closeCreate} initialDealId={initialDealId} />
     </PageShell>
   );
 }

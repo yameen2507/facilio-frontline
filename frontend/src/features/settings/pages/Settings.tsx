@@ -19,6 +19,7 @@ import { Row, RowTitle } from "../../../ui/Row";
 import { SettingsSkeleton } from "../../../ui/Skeleton";
 import { Empty, ErrorState } from "../../../ui/States";
 import { useToast } from "../../../ui/Toast";
+import { SurveySettingsCard } from "../components/SurveySettings";
 import {
   getSettings,
   putPrompt,
@@ -293,6 +294,10 @@ export function Settings() {
       </div>
 
       <div className="mt-4">
+        {/* Owned by the survey function — self-contained, outside this page's
+            lead-settings draft cycle. */}
+        <SurveySettingsCard />
+
         <Card title="Lead analyst agent" meta="identifiers, provider and model are CLI-managed">
           {/* The agent's identity is deliberately NOT editable here. The two
               identifier inputs this replaced only ever collected mistyped copies

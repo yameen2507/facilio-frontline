@@ -32,6 +32,7 @@ export type Contact = {
 export type DealStage = "open" | "won" | "lost" | string;
 
 export type Deal = {
+  id: string;
   refNo: string;
   title?: string | null;
   stage: DealStage;

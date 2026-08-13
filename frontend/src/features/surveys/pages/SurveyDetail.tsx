@@ -38,7 +38,15 @@ import { Input } from "@/components/ui/input";
 import { DateTimeField, plusHours } from "../../../ui/DateField";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { assignSurveyors, getSurvey, scheduleVisit, setLead, transitionSurvey } from "../api/surveys-util";
+import {
+  assignSurveyors,
+  getSurvey,
+  scheduleVisit,
+  setLead,
+  transitionSurvey,
+  transitionVisit,
+} from "../api/surveys-util";
+import { PhotoGallery } from "../components/PhotoGallery";
 import { SurveyStatusChip, VisitStatusChip } from "../components/SurveyChips";
 import {
   SURVEY_TRAIL,
@@ -46,14 +54,21 @@ import {
   type SurveyDetailResponse,
 } from "../types/survey";
 
-type TabId = "overview" | "visits" | "team" | "portfolio" | "reconciliation";
+type TabId = "overview" | "visits" | "team" | "portfolio" | "photos" | "reconciliation" | "activity";
 
-const TABS: Tab<TabId>[] = [
+/**
+ * Counts ride on the collection tabs once the detail has loaded — "Photos 12"
+ * answers whether the tab is worth opening. Overview never carries one: it is
+ * not a collection, and a number on it would be an invention.
+ */
+const buildTabs = (detail: SurveyDetailResponse | null): Tab<TabId>[] => [
   { id: "overview", label: "Overview" },
-  { id: "visits", label: "Visits" },
-  { id: "team", label: "Team" },
-  { id: "portfolio", label: "Portfolio" },
-  { id: "reconciliation", label: "Reconciliation" },
+  { id: "visits", label: "Visits", count: detail?.visits.length },
+  { id: "team", label: "Team", count: detail?.assignees.length },
+  { id: "portfolio", label: "Portfolio", count: detail?.nodes.length },
+  { id: "photos", label: "Photos", count: detail ? (detail.photos?.length ?? 0) : undefined },
+  { id: "reconciliation", label: "Reconciliation", count: detail?.reconciliation.length },
+  { id: "activity", label: "Activity", count: detail ? (detail.events?.length ?? 0) : undefined },
 ];
 
 export function SurveyDetail() {
@@ -128,7 +143,7 @@ export function SurveyDetail() {
           ) : null}
         </div>
       }
-      strip={<Tabs items={TABS} active={tab} onChange={setTab} />}
+      strip={<Tabs items={buildTabs(detail)} active={tab} onChange={setTab} />}
     >
       <Stack>
         {!loaded ? (
@@ -142,10 +157,14 @@ export function SurveyDetail() {
         ) : detail && survey ? (
           <>
             {tab === "overview" ? <OverviewTab detail={detail} /> : null}
-            {tab === "visits" ? <VisitsTab detail={detail} /> : null}
+            {tab === "visits" ? (
+              <VisitsTab detail={detail} actor={actor} terminal={terminal} onChanged={reload} />
+            ) : null}
             {tab === "team" ? <TeamTab detail={detail} /> : null}
             {tab === "portfolio" ? <PortfolioTab detail={detail} /> : null}
+            {tab === "photos" ? <PhotosTab detail={detail} /> : null}
             {tab === "reconciliation" ? <ReconciliationTab detail={detail} /> : null}
+            {tab === "activity" ? <ActivityTab detail={detail} /> : null}
           </>
         ) : null}
       </Stack>
@@ -253,7 +272,37 @@ function OverviewTab({ detail }: { detail: SurveyDetailResponse }) {
   );
 }
 
-function VisitsTab({ detail }: { detail: SurveyDetailResponse }) {
+function VisitsTab({
+  detail,
+  actor,
+  terminal,
+  onChanged,
+}: {
+  detail: SurveyDetailResponse;
+  actor: string;
+  terminal: boolean;
+  onChanged: () => void;
+}) {
+  /** The visit awaiting a no-show reason; done needs none and fires directly. */
+  const [noShowFor, setNoShowFor] = useState<string | null>(null);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const move = async (visitId: string, toStatus: string, why: string) => {
+    setBusy(true);
+    setError(null);
+    const { error: err } = await transitionVisit(visitId, toStatus, why, actor);
+    setBusy(false);
+    if (err) {
+      setError(err);
+      return;
+    }
+    setNoShowFor(null);
+    setReason("");
+    onChanged();
+  };
+
   if (!detail.visits.length) {
     return (
       <Card pad={false}>
@@ -268,28 +317,136 @@ function VisitsTab({ detail }: { detail: SurveyDetailResponse }) {
   return (
     <Card pad={false}>
       {detail.visits.map((v) => (
-        <div key={v.id} className="flex flex-wrap items-center gap-4 border-b px-4 py-3 last:border-b-0">
-          <code className="text-sm font-medium">{v.visitNumber}</code>
-          <VisitStatusChip status={v.status} />
-          <span className="text-sm">
-            {v.scheduledStart ? when(v.scheduledStart) : "Unscheduled"}
-            {v.scheduledEnd ? ` → ${when(v.scheduledEnd)}` : ""}
-          </span>
-          {v.timezone ? <span className="text-muted-foreground text-xs">{v.timezone}</span> : null}
-          {v.siteContactName ? (
-            <span className="text-muted-foreground text-xs">
-              meets {v.siteContactName}
-              {v.siteContactPhone ? ` · ${v.siteContactPhone}` : ""}
+        <div key={v.id} className="flex flex-col gap-2 border-b px-4 py-3 last:border-b-0">
+          <div className="flex flex-wrap items-center gap-4">
+            <code className="text-sm font-medium">{v.visitNumber}</code>
+            <VisitStatusChip status={v.status} />
+            <span className="text-sm">
+              {v.scheduledStart ? when(v.scheduledStart) : "Unscheduled"}
+              {v.scheduledEnd ? ` → ${when(v.scheduledEnd)}` : ""}
             </span>
+            {v.timezone ? <span className="text-muted-foreground text-xs">{v.timezone}</span> : null}
+            {v.siteContactName ? (
+              <span className="text-muted-foreground text-xs">
+                meets {v.siteContactName}
+                {v.siteContactPhone ? ` · ${v.siteContactPhone}` : ""}
+              </span>
+            ) : null}
+            {v.noShowReason ? (
+              <span className="text-destructive text-xs">no-show: {v.noShowReason}</span>
+            ) : null}
+
+            {/* The two lifecycle moves the desk makes. Marking done closes the
+                appointment; a no-show records the wasted trip WITHOUT moving
+                the survey — that distinction is F13, and it is load-bearing. */}
+            {!terminal && v.status === "in_progress" ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() => move(v.id, "done", "")}
+              >
+                Mark done
+              </Button>
+            ) : null}
+            {!terminal && v.status === "planned" ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() => setNoShowFor(noShowFor === v.id ? null : v.id)}
+              >
+                No-show
+              </Button>
+            ) : null}
+          </div>
+
+          {noShowFor === v.id ? (
+            <div className="flex flex-wrap items-center gap-2 pl-1">
+              <Input
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="Why nobody could walk — kept on the record"
+                className="max-w-96"
+              />
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={!reason.trim() || busy}
+                onClick={() => move(v.id, "no_show", reason.trim())}
+              >
+                {busy ? "Recording…" : "Record no-show"}
+              </Button>
+            </div>
           ) : null}
-          {v.noShowReason ? (
-            <span className="text-destructive text-xs">no-show: {v.noShowReason}</span>
+        </div>
+      ))}
+      {error ? <p className="text-destructive px-4 py-2 text-sm">{error}</p> : null}
+    </Card>
+  );
+}
+
+function PhotosTab({ detail }: { detail: SurveyDetailResponse }) {
+  if (!detail.photos?.length) {
+    return (
+      <Card pad={false}>
+        <Empty
+          title="No photos yet"
+          body="Every photo taken on the walk lands here with the room it evidences, the device's capture time and the geotag — the chain a qualification defence rests on."
+        />
+      </Card>
+    );
+  }
+
+  return (
+    <Card pad={false}>
+      <PhotoGallery photos={detail.photos} entryLabels={detail.entryLabels ?? []} />
+    </Card>
+  );
+}
+
+function ActivityTab({ detail }: { detail: SurveyDetailResponse }) {
+  if (!detail.events?.length) {
+    return (
+      <Card pad={false}>
+        <Empty
+          title="No activity"
+          body="Every status change, assignment, lead handover and capture lands here, newest first."
+        />
+      </Card>
+    );
+  }
+
+  return (
+    <Card pad={false}>
+      {detail.events.map((e) => (
+        <div key={e.id} className="flex flex-wrap items-baseline gap-3 border-b px-4 py-2.5 last:border-b-0">
+          <span className="text-sm font-medium">{humaniseKind(e.kind)}</span>
+          {e.body ? <span className="text-sm">{e.body}</span> : null}
+          {typeof e.meta?.reason === "string" ? (
+            <span className="text-muted-foreground text-xs">“{e.meta.reason}”</span>
           ) : null}
+          <span className="text-muted-foreground ml-auto text-xs">
+            {e.actor ? `${e.actor.split("@")[0]} · ` : ""}
+            {ago(e.occurredAt)}
+          </span>
         </div>
       ))}
     </Card>
   );
 }
+
+const humaniseKind = (kind: string): string =>
+  ({
+    created: "Created",
+    status_change: "Status change",
+    lead_handover: "Lead handover",
+    assigned: "Assigned",
+    capture: "Capture",
+    scheduled: "Visit scheduled",
+    rescheduled: "Visit rescheduled",
+    photo: "Photo attached",
+  })[kind] ?? kind.replace(/_/g, " ");
 
 function TeamTab({ detail }: { detail: SurveyDetailResponse }) {
   if (!detail.assignees.length) {

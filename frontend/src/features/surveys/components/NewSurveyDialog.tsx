@@ -49,9 +49,12 @@ const SCRATCH = "__scratch__";
 export function NewSurveyDialog({
   open,
   onOpenChange,
+  initialDealId,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Preselects the deal — the lead/account pages deep-link here with one. */
+  initialDealId?: string;
 }) {
   const navigate = useNavigate();
   const actor = useActor();
@@ -73,7 +76,7 @@ export function NewSurveyDialog({
   useEffect(() => {
     if (!open) return;
     // Fields reset on OPEN, so a half-typed value never resurfaces later.
-    setDealId("");
+    setDealId(initialDealId ?? "");
     setTemplateId(SCRATCH);
     setTitle("");
     setStart("");
@@ -92,7 +95,7 @@ export function NewSurveyDialog({
     return () => {
       live = false;
     };
-  }, [open]);
+  }, [open, initialDealId]);
 
   /**
    * Picking a start offers an end two hours later, rather than making the user

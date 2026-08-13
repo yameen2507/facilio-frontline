@@ -76,6 +76,17 @@ export function TemplateList() {
     );
   }, [templates, filter, search]);
 
+  // Counts appear only once the data has — no zeros during the skeleton phase.
+  const tabs = useMemo(() => {
+    if (!loaded || error) return TABS;
+    const byStatus = new Map<string, number>();
+    for (const t of templates) byStatus.set(t.status, (byStatus.get(t.status) ?? 0) + 1);
+    return TABS.map((t) => ({
+      ...t,
+      count: t.id === "all" ? templates.length : (byStatus.get(t.id) ?? 0),
+    }));
+  }, [loaded, error, templates]);
+
   return (
     <PageShell
       title="Templates"
@@ -88,7 +99,7 @@ export function TemplateList() {
       }
       strip={
         <Bar className="justify-between pb-1">
-          <Tabs items={TABS} active={filter} onChange={setFilter} />
+          <Tabs items={tabs} active={filter} onChange={setFilter} />
           <Input
             type="text"
             placeholder="Search templates"

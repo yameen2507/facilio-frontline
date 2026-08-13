@@ -63,6 +63,13 @@ copyFileSync("frontend/index.html", join(OUT, "index.html"));
 // would defeat its only purpose.
 copyFileSync("frontend/theme-boot.js", join(OUT, "theme-boot.js"));
 
+// The PWA layer — manifest, icons, service worker, its registration. Everything
+// in frontend/pwa/ ships verbatim at the publish root: sw.js MUST live at "/"
+// or its scope cannot cover the app.
+for (const f of readdirSync("frontend/pwa")) {
+  copyFileSync(join("frontend/pwa", f), join(OUT, f));
+}
+
 const sizes = readdirSync(OUT)
   .map((f) => `${f} ${(statSync(join(OUT, f)).size / 1024).toFixed(1)}kB`)
   .join(" · ");

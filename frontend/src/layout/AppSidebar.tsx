@@ -50,8 +50,23 @@ function toGroups(): Group[] {
   return groups.filter((g) => g.items.length > 0);
 }
 
+/* The tile is the brand dark (#0f1115) in BOTH themes, not bg-primary — the
+   lime mark is drawn for that ground, and it keeps the sidebar mark identical
+   to the home-screen icon. text-white is for the swapped-in expand glyph. */
 const BRAND_MARK =
-  "bg-primary text-primary-foreground relative flex aspect-square size-8 shrink-0 items-center justify-center rounded-lg text-sm font-semibold";
+  "relative flex aspect-square size-8 shrink-0 items-center justify-center rounded-lg bg-[#0f1115] text-white";
+
+/** The Frontline pinwheel, inlined so it needs no asset fetch. */
+function BrandMark({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 32 32" fill="none" aria-hidden="true" className={className}>
+      <path
+        d="M5.36269e-07 1.33971e-07C-0.00109738 4.24287 1.68369 8.31242 4.68376 11.3135C7.68383 14.3145 11.7534 16.0012 15.9974 16.0026L15.9974 1.33971e-07L5.36269e-07 1.33971e-07ZM15.9974 16.0026H32L32 1.33971e-07C29.8981 -0.000271818 27.8167 0.413492 25.8748 1.21765C23.9329 2.02181 22.1685 3.20061 20.6824 4.68669C19.1963 6.17278 18.0177 7.93703 17.2138 9.87865C16.4099 11.8203 15.9966 13.9012 15.9974 16.0026ZM15.9974 16.0026L15.9974 32H32C32.0001 29.8991 31.5863 27.8187 30.7821 25.8777C29.978 23.9366 28.7992 22.173 27.3132 20.6875C25.8272 19.2019 24.063 18.0236 22.1214 17.2197C20.1798 16.4159 18.0989 16.0023 15.9974 16.0026ZM15.9974 16.0026L5.36269e-07 16.0026L5.36269e-07 32C4.24324 31.9992 8.3124 30.3133 11.3124 27.3133C14.3125 24.3133 15.9977 20.2447 15.9974 16.0026Z"
+        fill="#C4FF00"
+      />
+    </svg>
+  );
+}
 
 /**
  * The brand row, which is also where the rail is collapsed and expanded — the
@@ -77,7 +92,7 @@ function BrandHeader() {
         className="group/brand"
       >
         <div className={BRAND_MARK}>
-          <span className="transition-opacity group-hover/brand:opacity-0">F</span>
+          <BrandMark className="size-[18px] transition-opacity group-hover/brand:opacity-0" />
           <PanelLeftOpen className="absolute size-4 opacity-0 transition-opacity group-hover/brand:opacity-100" />
         </div>
       </SidebarMenuButton>
@@ -88,11 +103,10 @@ function BrandHeader() {
     <div className="flex items-center gap-1">
       <SidebarMenuButton size="lg" asChild className="min-w-0 flex-1">
         <Link to={DEFAULT_ROUTE}>
-          <div className={BRAND_MARK}>F</div>
-          <div className="grid flex-1 text-left leading-tight">
-            <span className="truncate text-sm font-semibold">Frontline</span>
-            <span className="text-muted-foreground truncate text-xs">Facilio</span>
+          <div className={BRAND_MARK}>
+            <BrandMark className="size-[18px]" />
           </div>
+          <span className="flex-1 truncate text-left text-sm font-semibold">Frontline</span>
         </Link>
       </SidebarMenuButton>
       {isMobile ? null : <SidebarTrigger className="shrink-0" />}
@@ -120,8 +134,15 @@ function NavButton({ item, active, badge }: { item: NavItemEntry; active: boolea
 
 export default function AppSidebar() {
   const location = useLocation();
-  const { openLeads } = useCounts();
+  const counts = useCounts();
   const at = (path: string) => location.pathname.startsWith(path);
+  /** The number a nav item's badge shows, or nothing while it is unknown. */
+  const badgeFor = (item: NavItemEntry): number | undefined => {
+    const n = item.badge === "openLeads" ? counts.openLeads
+      : item.badge === "pendingSurveys" ? counts.pendingSurveys
+      : null;
+    return n || undefined;
+  };
 
   return (
     <Sidebar collapsible="icon">
@@ -144,7 +165,7 @@ export default function AppSidebar() {
                     key={item.to}
                     item={item}
                     active={at(item.to)}
-                    badge={item.badge && openLeads ? openLeads : undefined}
+                    badge={badgeFor(item)}
                   />
                 ))}
               </SidebarMenu>

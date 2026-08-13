@@ -50,10 +50,13 @@ export function ConditionScale({
   value,
   onChange,
   disabled,
+  labels,
 }: {
   value: number | null;
   onChange: (n: number) => void;
   disabled?: boolean;
+  /** The org's own words from `survey.condition_scale_labels`; the constant is the fallback. */
+  labels?: Record<string | number, string> | null;
 }) {
   return (
     <div className="flex flex-wrap gap-2">
@@ -74,7 +77,9 @@ export function ConditionScale({
           >
             <span className="text-base font-semibold tabular-nums">{n}</span>
             {/* Never the number alone — see the block comment above. */}
-            <span className="text-muted-foreground text-[11px]">{CONDITION_LABELS[n]}</span>
+            <span className="text-muted-foreground text-[11px]">
+              {labels?.[n] ?? CONDITION_LABELS[n]}
+            </span>
           </button>
         );
       })}
@@ -338,6 +343,7 @@ export function RepeatEntryCard({
   disabled,
   attachments,
   footer,
+  conditionLabels,
 }: {
   entry: RepeatEntry;
   index: number;
@@ -353,6 +359,7 @@ export function RepeatEntryCard({
   attachments?: AttachmentHandlers;
   /** The walk hangs the entry's photo strip here; the preview hangs nothing. */
   footer?: ReactNode;
+  conditionLabels?: Record<string | number, string> | null;
 }) {
   return (
     <div className="flex flex-col gap-4 rounded-md border p-3">
@@ -382,7 +389,12 @@ export function RepeatEntryCard({
       {showCondition ? (
         <div className="flex flex-col gap-2">
           <Label className="text-sm font-medium">Condition</Label>
-          <ConditionScale value={entry.conditionScore} onChange={onCondition} disabled={disabled} />
+          <ConditionScale
+            value={entry.conditionScore}
+            onChange={onCondition}
+            disabled={disabled}
+            labels={conditionLabels}
+          />
         </div>
       ) : null}
 
