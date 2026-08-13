@@ -79,6 +79,7 @@ export type Template = {
   parentTemplateId?: string | null;
   publishedAt?: string | null;
   createdAt?: string | null;
+  updatedAt?: string | null;
   /** Derived, never stored — a count column would go stale. */
   sectionCount?: number;
   questionCount?: number;

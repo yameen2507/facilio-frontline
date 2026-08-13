@@ -1,16 +1,14 @@
 /**
- * The form-builder data layer.
- *
- * ⚠ EVERY FUNCTION HERE IS A [SEAM]. The `form` platform function does not exist
- * yet. Written against the frozen contract (Survey Backend Plan v1 §7.1) so no
- * page changes when the handlers land, and shipped complete but UNCALLED — see
- * the note in `surveys/api/surveys-util.ts` for why a seam page makes no request.
+ * The form-builder data layer. The `form` platform function is LIVE — built
+ * 2026-08-13 to the frozen contract (Survey Backend Plan v1 §7.1) these
+ * wrappers were written against, plus one addition: `template-import`.
  *
  * | handler            | args                                          | returns                     |
  * | ------------------ | --------------------------------------------- | --------------------------- |
  * | `template-list`    | search, status, limit, offset                 | `{ templates[], total }`    |
  * | `template-get`     | templateId                                    | template + nested sections  |
  * | `template-create`  | name, description, category                   | new `draft`, version 1      |
+ * | `template-import`  | name, publish, payload:{sections[]}           | whole tree, ONE round trip  |
  * | `template-update`  | templateId, name, description, category       | blocked once published      |
  * | `template-publish` | templateId                                    | `{ template }`              |
  * | `template-clone`   | templateId                                    | new draft, version + 1      |
@@ -22,6 +20,12 @@
  * | `question-delete`  | questionId                                    | soft-delete                 |
  * | `question-reorder` | sectionId, payload:{orderedIds[]}             | as section-reorder          |
  * | `reference`        | —                                             | field types, level bindings |
+ *
+ * The builder saves through `template-import`, never through the per-row
+ * calls: it drafts locally and hands the whole tree over at once, because a
+ * handler round trip costs ~1.1s of fixed overhead and a 30-question template
+ * saved row-by-row is the adoption-risk math of Backend Plan §6.2 at the desk.
+ * The per-row calls exist for the edit-an-existing-draft surface to come.
  *
  * Reorder is ALWAYS a `sequence_no` rewrite, never an array in a JSON blob — an
  * array reorder loses a concurrent edit silently.
@@ -46,7 +50,7 @@ const payload = (body: Record<string, unknown>) => ({ payload: JSON.stringify(bo
 
 // ── Template ─────────────────────────────────────────────────────────────────
 
-/** [SEAM] `form.template-list` — with derived section/question/usage counts. */
+/** `form.template-list` — with derived section/question/usage counts. */
 export const listTemplates = (search: string, status: string) =>
   call<TemplateListResponse>("template-list", {
     limit: LIST_LIMIT,
@@ -54,33 +58,79 @@ export const listTemplates = (search: string, status: string) =>
     ...(search ? { search } : {}),
   });
 
-/** [SEAM] `form.template-get` — template + sections + nested questions, ONE batched query. */
+/** `form.template-get` — template + sections + nested questions, ONE batched query. */
 export const getTemplate = (templateId: string) =>
   call<TemplateDetailResponse>("template-get", { templateId });
 
-/** [SEAM] `form.template-create` — auto-creates a "General" section so no question is an orphan. */
+/** `form.template-create` — auto-creates a "General" section so no question is an orphan. */
 export const createTemplate = (name: string, description: string, category: string) =>
   call<{ template: Template }>("template-create", { name, description, category });
 
-/** [SEAM] `form.template-update` — rejected once published; clone instead. */
+/** What `template-import` carries per question — camelCase mirror of the handler. */
+export interface ImportQuestionBody {
+  label: string;
+  helpText?: string;
+  fieldType: string;
+  options?: string[];
+  allowMultiple?: boolean;
+  isRequired?: boolean;
+  feedsEstimation?: boolean;
+  estimationKey?: string;
+  unit?: string;
+}
+
+export interface ImportSectionBody {
+  name: string;
+  description?: string;
+  levelBinding?: string;
+  isRepeatable?: boolean;
+  repeatLabel?: string;
+  minRepeats?: number;
+  maxRepeats?: number;
+  createsPortfolioNode?: boolean;
+  nodeTypeCreated?: string;
+  questions: ImportQuestionBody[];
+}
+
+/**
+ * `form.template-import` — the whole builder tree in ONE round trip, optionally
+ * publishing. A failed publish guard does not throw: the tree is saved as a
+ * draft and the blockers come back in `publishBlockers`.
+ */
+export const importTemplate = (
+  body: {
+    name: string;
+    description?: string;
+    category?: string;
+    publish: boolean;
+    sections: ImportSectionBody[];
+  },
+  actorEmail: string
+) =>
+  call<{ template: Template; published: boolean; publishBlockers: string[] }>("template-import", {
+    ...(actorEmail ? { actorEmail } : {}),
+    ...payload(body),
+  });
+
+/** `form.template-update` — rejected once published; clone instead. */
 export const updateTemplate = (templateId: string, fields: Record<string, string>) =>
   call<{ template: Template }>("template-update", { templateId, ...fields });
 
-/** [SEAM] `form.template-publish` — guards mirror `publishBlockers` in types/template.ts. */
+/** `form.template-publish` — guards mirror `publishBlockers` in types/template.ts. */
 export const publishTemplate = (templateId: string) =>
   call<{ template: Template }>("template-publish", { templateId });
 
-/** [SEAM] `form.template-clone` — the published row is never edited in place. */
+/** `form.template-clone` — the published row is never edited in place. */
 export const cloneTemplate = (templateId: string) =>
   call<{ template: Template }>("template-clone", { templateId });
 
-/** [SEAM] `form.template-archive` — in-flight surveys are unaffected; they hold snapshots. */
+/** `form.template-archive` — in-flight surveys are unaffected; they hold snapshots. */
 export const archiveTemplate = (templateId: string) =>
   call<{ template: Template }>("template-archive", { templateId });
 
 // ── Sections and questions ───────────────────────────────────────────────────
 
-/** [SEAM] `form.section-save` — create or update in one handler. */
+/** `form.section-save` — create or update in one handler. */
 export const saveSection = (templateId: string, body: Record<string, unknown>, sectionId?: string) =>
   call<{ section: Section }>("section-save", {
     templateId,
@@ -88,14 +138,14 @@ export const saveSection = (templateId: string, body: Record<string, unknown>, s
     ...payload(body),
   });
 
-/** [SEAM] `form.section-delete` — soft-delete, cascading to its questions. */
+/** `form.section-delete` — soft-delete, cascading to its questions. */
 export const deleteSection = (sectionId: string) => call<unknown>("section-delete", { sectionId });
 
-/** [SEAM] `form.section-reorder` — one `UPDATE … CASE`, never a JSON array. */
+/** `form.section-reorder` — one `UPDATE … CASE`, never a JSON array. */
 export const reorderSections = (templateId: string, orderedIds: string[]) =>
   call<unknown>("section-reorder", { templateId, ...payload({ orderedIds }) });
 
-/** [SEAM] `form.question-save` — create or update. */
+/** `form.question-save` — create or update. */
 export const saveQuestion = (sectionId: string, body: Record<string, unknown>, questionId?: string) =>
   call<unknown>("question-save", {
     sectionId,
@@ -103,12 +153,12 @@ export const saveQuestion = (sectionId: string, body: Record<string, unknown>, q
     ...payload(body),
   });
 
-/** [SEAM] `form.question-delete` — soft-delete. */
+/** `form.question-delete` — soft-delete. */
 export const deleteQuestion = (questionId: string) => call<unknown>("question-delete", { questionId });
 
-/** [SEAM] `form.question-reorder` — as `section-reorder`. */
+/** `form.question-reorder` — as `section-reorder`. */
 export const reorderQuestions = (sectionId: string, orderedIds: string[]) =>
   call<unknown>("question-reorder", { sectionId, ...payload({ orderedIds }) });
 
-/** [SEAM] `form.reference` — enums from the server, so no caller hardcodes one. */
+/** `form.reference` — enums from the server, so no caller hardcodes one. */
 export const getReference = () => call<Record<string, string[]>>("reference");

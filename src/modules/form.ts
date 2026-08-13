@@ -481,6 +481,220 @@ export function cloneTemplate(templateId: string, actor: string | null): { templ
   };
 }
 
+export interface ImportQuestion {
+  label: string;
+  helpText?: string | null;
+  fieldType: string;
+  options?: string[];
+  allowMultiple?: boolean;
+  isRequired?: boolean;
+  feedsEstimation?: boolean;
+  estimationKey?: string | null;
+  unit?: string | null;
+}
+
+export interface ImportSection {
+  name: string;
+  description?: string | null;
+  levelBinding?: string;
+  isRepeatable?: boolean;
+  repeatLabel?: string | null;
+  minRepeats?: number | null;
+  maxRepeats?: number | null;
+  createsPortfolioNode?: boolean;
+  nodeTypeCreated?: string;
+  applicabilityServiceIds?: string[];
+  questions: ImportQuestion[];
+}
+
+/**
+ * The builder's save: the whole template tree in THREE statements, however big
+ * it is. The builder drafts locally and hands over everything at once — saving
+ * a 5-section, 30-question template as per-row handler calls would be ~37
+ * round trips at ~1.1s each, which is the §6.2 adoption-risk math all over
+ * again, just at the desk instead of on the walk.
+ *
+ * Section ids are derived as `md5(templateId || 's<index>')` so the question
+ * insert can compute its own `section_id` — same trick as `cloneTemplate`,
+ * which is what lets each copy be one set-based statement with no id
+ * round-tripping. There is no auto-'General' section on this path: the caller
+ * supplies the full section list, unlike `template-create`'s empty start.
+ *
+ * `publish: true` runs the same guard as `template-publish` but never throws
+ * on it — the tree is already saved by then, and "saved as draft, here is why
+ * it did not publish" is the honest answer, not a rollback that cannot exist.
+ */
+export function importTemplate(input: {
+  name: string;
+  description: string | null;
+  category: string | null;
+  publish: boolean;
+  sections: ImportSection[];
+  actor: string | null;
+}): { template: FormTemplate; published: boolean; publishBlockers: string[] } {
+  // The WHOLE tree validates before the first insert — there are no
+  // transactions, so a validation error after a write would strand a
+  // half-saved draft the user never asked for.
+  for (const s of input.sections) {
+    if (!s.name?.trim()) throw new Error("every section needs a name");
+    if (s.levelBinding !== undefined) inSet(s.levelBinding, LEVEL_BINDINGS, "levelBinding");
+    if (s.nodeTypeCreated !== undefined) inSet(s.nodeTypeCreated, NODE_TYPES, "nodeTypeCreated");
+    for (const q of s.questions) {
+      if (!q.label?.trim()) throw new Error(`every question needs a label (section "${s.name}")`);
+      inSet(q.fieldType, FIELD_TYPES, "fieldType");
+      if (q.options !== undefined && q.options.some((o) => typeof o !== "string")) {
+        throw new Error("options must be an array of strings");
+      }
+    }
+  }
+
+  const now = nowIso();
+  const category = input.category ?? "General";
+
+  const row = one<{ id: string }>(
+    `insert into fl_form_template
+       (id, name, description, category, status, version_no, parent_template_id,
+        created_by, updated_by, is_active, data_json, created_at, updated_at)
+     values (gen_random_uuid()::text, $1, $2, $3, 'draft', 1, null, $4, $4, 'true', '{}', $5, $5)
+     returning id`,
+    [input.name, input.description, category, input.actor, now]
+  );
+  if (!row) throw new Error("template insert returned no row");
+  const templateId = row.id;
+
+  if (input.sections.length) {
+    const sp: unknown[] = [templateId, input.actor, now];
+    const sectionRows = input.sections.map((s, i) => {
+      sp.push(`s${i}`);
+      const key = `$${sp.length}`;
+      const vals: string[] = [];
+      const add = (v: unknown) => {
+        sp.push(v);
+        vals.push(`$${sp.length}`);
+      };
+      add(s.name.trim());
+      add(s.description ?? null);
+      add(s.levelBinding ?? "per_survey");
+      add(JSON.stringify(s.applicabilityServiceIds ?? []));
+      add(String(s.isRepeatable ?? false));
+      add(s.repeatLabel ?? null);
+      add(s.minRepeats ?? null);
+      add(s.maxRepeats ?? null);
+      add(String(s.createsPortfolioNode ?? false));
+      add(s.nodeTypeCreated ?? "space");
+      return `(md5($1 || ${key})::uuid::text, $1, ${vals[0]}, ${vals[1]}, ${i + 1}, ${vals[2]},
+               ${vals[3]}, ${vals[4]}, ${vals[5]}, ${vals[6]}, ${vals[7]}, ${vals[8]}, ${vals[9]},
+               $2, $2, 'true', '{}', $3, $3)`;
+    });
+
+    mutate(
+      `insert into fl_form_section
+         (id, template_id, name, description, sequence_no, level_binding,
+          applicability_service_ids_json, is_repeatable, repeat_label, min_repeats, max_repeats,
+          creates_portfolio_node, node_type_created, created_by, updated_by, is_active,
+          data_json, created_at, updated_at)
+       values ${sectionRows.join(", ")}`,
+      sp
+    );
+  }
+
+  const qp: unknown[] = [templateId, input.actor, now];
+  const questionRows: string[] = [];
+  input.sections.forEach((s, i) => {
+    s.questions.forEach((q, qi) => {
+      qp.push(`s${i}`);
+      const key = `$${qp.length}`;
+      const vals: string[] = [];
+      const add = (v: unknown) => {
+        qp.push(v);
+        vals.push(`$${qp.length}`);
+      };
+      add(q.label.trim());
+      add(q.helpText ?? null);
+      add(q.fieldType);
+      add(JSON.stringify(q.options ?? []));
+      add(String(q.allowMultiple ?? false));
+      add(String(q.isRequired ?? false));
+      add(String(q.feedsEstimation ?? false));
+      add(q.estimationKey ?? null);
+      add(q.unit ?? null);
+      questionRows.push(
+        `(gen_random_uuid()::text, md5($1 || ${key})::uuid::text, $1, ${vals[0]}, ${vals[1]},
+          ${vals[2]}, ${vals[3]}, ${vals[4]}, ${qi + 1}, ${vals[5]}, ${vals[6]}, ${vals[7]},
+          ${vals[8]}, $2, $2, 'true', '{}', $3, $3)`
+      );
+    });
+  });
+
+  if (questionRows.length) {
+    mutate(
+      `insert into fl_form_question
+         (id, section_id, template_id, label, help_text, field_type, options_json,
+          allow_multiple, sequence_no, is_required, feeds_estimation, estimation_key, unit,
+          created_by, updated_by, is_active, data_json, created_at, updated_at)
+       values ${questionRows.join(", ")}`,
+      qp
+    );
+  }
+
+  appendEvent({
+    entityType: "form_template",
+    entityId: templateId,
+    kind: "created",
+    actor: input.actor,
+    body: input.name,
+  });
+
+  const blockers = publishBlockers(
+    input.sections.map((s) => ({
+      questions: s.questions.map((q) => ({ fieldType: q.fieldType, options: q.options ?? [] })),
+    }))
+  );
+
+  let published = false;
+  if (input.publish && !blockers.length) {
+    mutate(
+      `update fl_form_template
+          set status = 'published', published_by = $2, published_at = $3,
+              updated_by = $2, updated_at = $3
+        where id = $1 and status = 'draft' and is_active = 'true'`,
+      [templateId, input.actor, now]
+    );
+    appendEvent({
+      entityType: "form_template",
+      entityId: templateId,
+      kind: "published",
+      actor: input.actor,
+      body: `${input.name} v1`,
+    });
+    published = true;
+  }
+
+  return {
+    template: {
+      id: templateId,
+      name: input.name,
+      description: input.description,
+      category,
+      status: published ? "published" : "draft",
+      versionNo: 1,
+      parentTemplateId: null,
+      publishedBy: published ? input.actor : null,
+      publishedAt: published ? now : null,
+      archivedBy: null,
+      archivedAt: null,
+      createdBy: input.actor,
+      createdAt: now,
+      updatedAt: now,
+      sectionCount: input.sections.length,
+      questionCount: input.sections.reduce((n, s) => n + s.questions.length, 0),
+      usageCount: 0,
+    },
+    published,
+    publishBlockers: input.publish ? blockers : [],
+  };
+}
+
 /** Removed from the picker; in-flight surveys are unaffected — they hold snapshots. */
 export function archiveTemplate(templateId: string, actor: string | null): { template: FormTemplate } {
   const template = one<FormTemplate>(

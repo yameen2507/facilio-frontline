@@ -38,6 +38,7 @@ import {
   createTemplate,
   deleteQuestion,
   deleteSection,
+  importTemplate,
   listTemplates,
   publishTemplate,
   reorderQuestions,
@@ -46,6 +47,7 @@ import {
   saveSection,
   templateDetail,
   updateTemplate,
+  type ImportSection,
   type QuestionInput,
   type SectionInput,
 } from "../../modules/form";
@@ -120,6 +122,77 @@ server.addHandler({
         name: str(p, "name"),
         description: optStr(p, "description"),
         category: optStr(p, "category"),
+        actor: optStr(p, "actorEmail"),
+      });
+    }),
+});
+
+/** The nested tree arrives untyped inside `payload`; normalise it once here. */
+function importSections(raw: unknown[]): ImportSection[] {
+  const asBool = (v: unknown) => v === true || v === "true";
+  const asStr = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const asNum = (v: unknown) => {
+    if (v === undefined || v === null || v === "") return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  return raw.map((r) => {
+    const s = (r ?? {}) as Record<string, unknown>;
+    const questions = (Array.isArray(s.questions) ? s.questions : []).map((qr) => {
+      const q = (qr ?? {}) as Record<string, unknown>;
+      return {
+        label: asStr(q.label) ?? "",
+        helpText: asStr(q.helpText),
+        fieldType: asStr(q.fieldType) ?? "",
+        options: Array.isArray(q.options) ? q.options.map((o) => String(o)) : undefined,
+        allowMultiple: asBool(q.allowMultiple),
+        isRequired: asBool(q.isRequired),
+        feedsEstimation: asBool(q.feedsEstimation),
+        estimationKey: asStr(q.estimationKey),
+        unit: asStr(q.unit),
+      };
+    });
+
+    return {
+      name: asStr(s.name) ?? "",
+      description: asStr(s.description),
+      levelBinding: asStr(s.levelBinding) ?? undefined,
+      isRepeatable: asBool(s.isRepeatable),
+      repeatLabel: asStr(s.repeatLabel),
+      minRepeats: asNum(s.minRepeats),
+      maxRepeats: asNum(s.maxRepeats),
+      createsPortfolioNode: asBool(s.createsPortfolioNode),
+      nodeTypeCreated: asStr(s.nodeTypeCreated) ?? undefined,
+      applicabilityServiceIds: Array.isArray(s.applicabilityServiceIds)
+        ? s.applicabilityServiceIds.map((id) => String(id))
+        : undefined,
+      questions,
+    };
+  });
+}
+
+server.addHandler({
+  name: "template-import",
+  description:
+    "Create a whole draft template — sections and questions — in one batched call, optionally publishing it. The builder's save: pass the tree inside payload. Never throws on a failed publish guard; returns the saved draft with the blockers instead.",
+  parameters: {
+    ...ENV,
+    name: S("Template name — required"),
+    description: S("What the template is for"),
+    category: S("Free-text grouping, defaults to General"),
+    publish: S("true to publish immediately after saving"),
+    actorEmail: ACTOR,
+  },
+  execute: async (args) =>
+    handle(() => {
+      const p = parsePayload(args);
+      return importTemplate({
+        name: str(p, "name"),
+        description: optStr(p, "description"),
+        category: optStr(p, "category"),
+        publish: optBool(p, "publish") ?? false,
+        sections: importSections(optArray(p, "sections") ?? []),
         actor: optStr(p, "actorEmail"),
       });
     }),

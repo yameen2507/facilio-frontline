@@ -1,16 +1,15 @@
 /**
  * The form builder.
  *
- * ⚠ STATE IS SESSION-LOCAL AND RESETS ON RELOAD. The `form` function does not
- * exist yet, so nothing here is persisted. That is deliberate and it is the
- * honest option: the edits the user makes really do happen, they just are not
- * saved, and the header says so plainly. The alternative — showing invented
- * templates as if they were the org's — is the failure mode where a demo gets
- * approved and the gap surfaces in production.
+ * EDITS ARE LOCAL UNTIL SAVED — deliberately. The builder drafts the whole
+ * template in memory and hands it over in ONE `template-import` call (Save
+ * draft or Publish), not as per-keystroke handler calls: a round trip costs
+ * ~1.1s of fixed platform overhead, and a 30-question template saved row by
+ * row is the §6.2 adoption-risk math at the desk. The cost of the trade is
+ * stated in the header: close the tab before saving and the draft is gone.
  *
- * When `form` lands, each mutation below gains its api-util call (already
- * written, in `api/templates-util.ts`) plus the loading and error states that
- * come with actually making a request. The component tree does not change.
+ * The per-row api-utils (`section-save`, `question-save`, …) are for the
+ * edit-an-existing-draft surface to come, which starts from persisted rows.
  *
  * REORDER IS A SEQUENCE REWRITE, never an array shuffle in a blob — that is how
  * the server does it, and matching it here keeps the two honest about each other.
@@ -19,6 +18,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowDown, ArrowUp, Eye, Plus, Trash2 } from "lucide-react";
+import { useActor } from "../../../app/auth";
 import { PageShell } from "../../../app/shell/PageShell";
 import { Card, Stack } from "../../../ui/Card";
 import { Chip } from "../../../ui/Chip";
@@ -43,6 +43,7 @@ import {
   type AnswerValue,
   type RepeatEntry,
 } from "../components/FormRender";
+import { importTemplate, type ImportSectionBody } from "../api/templates-util";
 import {
   FIELD_TYPES,
   FIELD_TYPE_LABEL,
@@ -91,17 +92,74 @@ function resequence<T extends { sequenceNo: number }>(items: T[], from: number, 
 
 export function TemplateBuilder() {
   const navigate = useNavigate();
+  const actor = useActor();
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [sections, setSections] = useState<Section[]>([]);
   const [preview, setPreview] = useState(false);
+  const [saving, setSaving] = useState<"draft" | "publish" | null>(null);
+  /** The server's answer, VERBATIM — never reworded here. */
+  const [serverError, setServerError] = useState<string | null>(null);
 
   const blockers = useMemo(() => {
     const list = publishBlockers(sections);
     if (!name.trim()) list.unshift("Give the template a name");
     return list;
   }, [name, sections]);
+
+  /**
+   * The whole tree, one `template-import` call. Publish and Save draft are the
+   * same request — the server saves either way and reports why it did not
+   * publish rather than throwing, so a guard drift between this page's copy of
+   * `publishBlockers` and the server's never loses the user's work.
+   */
+  const save = async (publish: boolean) => {
+    setSaving(publish ? "publish" : "draft");
+    setServerError(null);
+
+    const body = {
+      name: name.trim(),
+      ...(description.trim() ? { description: description.trim() } : {}),
+      publish,
+      sections: [...sections]
+        .sort((a, b) => a.sequenceNo - b.sequenceNo)
+        .map<ImportSectionBody>((s) => {
+          const repeatable = isOn(s.isRepeatable);
+          return {
+            name: s.name.trim(),
+            isRepeatable: repeatable,
+            ...(repeatable ? { repeatLabel: s.repeatLabel?.trim() || "Room" } : {}),
+            createsPortfolioNode: repeatable && isOn(s.createsPortfolioNode),
+            questions: [...s.questions]
+              .sort((a, b) => a.sequenceNo - b.sequenceNo)
+              .map((q) => ({
+                label: q.label.trim(),
+                fieldType: q.fieldType,
+                ...(q.fieldType === "options" ? { options: q.options ?? [] } : {}),
+                allowMultiple: isOn(q.allowMultiple),
+                isRequired: isOn(q.isRequired),
+                ...(q.estimationKey?.trim()
+                  ? { estimationKey: q.estimationKey.trim(), feedsEstimation: true }
+                  : {}),
+              })),
+          };
+        }),
+    };
+
+    const { data, error } = await importTemplate(body, actor);
+    setSaving(null);
+
+    if (error || !data) {
+      setServerError(error ?? "The save did not reach the server");
+      return;
+    }
+    if (publish && !data.published) {
+      setServerError(`Saved as a draft, not published: ${data.publishBlockers.join("; ")}`);
+      return;
+    }
+    navigate("/templates");
+  };
 
   // ── Section mutations ──────────────────────────────────────────────────────
 
@@ -142,17 +200,29 @@ export function TemplateBuilder() {
   return (
     <PageShell
       title="New template"
-      subtitle="Not saved — the form builder API is not connected yet"
+      subtitle="Drafting locally — nothing is kept until you save or publish"
       actions={
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={() => setPreview((p) => !p)} disabled={!sections.length}>
             <Eye className="size-4" />
             {preview ? "Back to editing" : "Preview"}
           </Button>
+          <Button
+            variant="outline"
+            onClick={() => save(false)}
+            disabled={!name.trim() || saving !== null}
+            title={name.trim() ? undefined : "Give the template a name first"}
+          >
+            {saving === "draft" ? "Saving…" : "Save draft"}
+          </Button>
           {/* Disabled-until-valid, with the reasons rendered beneath — a dead
               button with no explanation is the main cost of this pattern. */}
-          <Button disabled title={blockers[0] ?? "Publishing needs the form API"}>
-            Publish
+          <Button
+            onClick={() => save(true)}
+            disabled={blockers.length > 0 || saving !== null}
+            title={blockers[0]}
+          >
+            {saving === "publish" ? "Publishing…" : "Publish"}
           </Button>
         </div>
       }
@@ -232,13 +302,16 @@ export function TemplateBuilder() {
                     <li key={b}>{b}</li>
                   ))}
                 </ul>
+                {serverError ? <SaveError message={serverError} /> : null}
               </Card>
             ) : (
-              <Card title="Before this can be published">
+              <Card title="Ready to publish">
                 <p className="text-muted-foreground text-sm">
-                  The template satisfies every publish guard. Publishing itself needs the{" "}
-                  <code className="text-xs">form</code> function, which is not built yet.
+                  Every publish guard passes. Publishing saves the template and makes it available
+                  when a survey is scheduled — after that its content is frozen, and changes mean a
+                  new version.
                 </p>
+                {serverError ? <SaveError message={serverError} /> : null}
               </Card>
             )}
           </>
@@ -253,6 +326,11 @@ export function TemplateBuilder() {
     </PageShell>
   );
 }
+
+/** The backend's message, verbatim, in the card the user is already reading. */
+const SaveError = ({ message }: { message: string }) => (
+  <p className="text-destructive mt-3 text-sm">{message}</p>
+);
 
 // ── Section editor ───────────────────────────────────────────────────────────
 
