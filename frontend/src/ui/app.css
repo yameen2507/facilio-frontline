@@ -1,0 +1,1157 @@
+/**
+ * WHY THIS IS A STYLESHEET AND NOT INLINE STYLE OBJECTS. The shared UI guidance
+ * says structure with plain divs and put every value in `style={{}}`. Its whole
+ * justification is escaping shadow DOM — a design system shipped as custom
+ * elements, where `flex: 1` and `height: 100%` die at the shadow host. There is
+ * no shadow DOM here: no design-system components, only plain divs. What this
+ * file holds is the part inline styles genuinely cannot express — `:hover`,
+ * `:focus`, `:disabled`, keyframes, `@media`, and the `[data-collapsed]` rail
+ * variants — plus base component styling that is already verified. Re-expressing
+ * 1100 verified lines as style objects would buy nothing and risk regressions
+ * everywhere. Components carry `className`; one-off layout stays inline.
+ *
+ * Frontline component styles.
+ *
+ * Moved out of index.html so the markup that uses these classes and the classes
+ * themselves live in the same folder. Every value is a token from tokens.css —
+ * the sweep is checkable: `grep -n 'px\|#[0-9a-f]' app.css` should only turn up
+ * the handful of literals called out with a comment below.
+ *
+ * Two house conventions that differ from the shared UI guidance, both because
+ * the existing code already settled them and consistency beats correctness here:
+ *
+ *   - **Borders, not inset rings.** The guidance prefers
+ *     `box-shadow: inset 0 0 0 1px …` so a ring can appear without shifting
+ *     layout. That matters in a design system whose components you cannot
+ *     restyle; here every surface is a plain div, `.card` has shipped with
+ *     `border: 1px solid` from the start, and converting them all would move
+ *     every card by a pixel for no gain. Left as borders on purpose.
+ *   - **Classes, not inline styles.** The inline-style rule exists to escape
+ *     shadow DOM, which this app has none of.
+ *
+ * Structural literals with no token, kept verbatim rather than re-derived:
+ *   232px / 60px  sidebar width, expanded and collapsed
+ *   44px 16px     empty-state pad — a deliberately large inset, no spacing step
+ *   68vh / 420px  chat viewport cap
+ *   620px         chat column max-width
+ *   0.06em etc.   optical letter-spacing on uppercase labels
+ */
+
+@import "./tokens.css";
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--colors-background-midground-medium);
+  color: var(--colors-text-main);
+  font: var(--text-body-reg-14);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+.ic {
+  flex: none;
+}
+
+/* ── Shell ──────────────────────────────────────────────────────────────────
+   `.app` owns the viewport and hides its own overflow, which is what makes
+   `.content` the only scroll region: the sidebar and page header cannot scroll
+   away, and a long list moves under them. */
+
+.app {
+  display: grid;
+  grid-template-columns: 232px 1fr;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.app[data-collapsed="true"] {
+  grid-template-columns: 60px 1fr;
+}
+
+aside {
+  background: var(--colors-background-container);
+  border-right: 1px solid var(--colors-border-neutral-base-subtle);
+  padding: var(--spacing-container-xlarge) var(--spacing-container-large);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-container-xxlarge);
+  overflow-y: auto;
+  min-width: 0;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-container-medium);
+  padding: 0 var(--numerical-nl-half);
+}
+
+.brand .mark {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--border-small);
+  background: var(--colors-background-primary-default);
+  color: var(--colors-text-inverse-default);
+  display: grid;
+  place-items: center;
+  font: var(--text-heading-med-14);
+  flex: none;
+}
+
+.brand b {
+  font: var(--text-heading-med-16);
+  letter-spacing: -0.01em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brand .icon-btn {
+  margin-left: auto;
+}
+
+.icon-btn {
+  border: 0;
+  background: none;
+  color: var(--colors-icon-neutral-main);
+  padding: var(--numerical-nl-01);
+  border-radius: var(--border-small);
+  display: inline-grid;
+  place-items: center;
+  line-height: 0;
+  flex: none;
+}
+
+.icon-btn:hover {
+  background: var(--colors-background-midground-subtle);
+  color: var(--colors-icon-neutral-dark);
+}
+
+/* ── Sidebar navigation ───────────────────────────────────────────────────── */
+
+nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--numerical-nl-half);
+  min-width: 0;
+}
+
+.nav-label {
+  font: var(--text-caption-med-10);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--colors-text-caption);
+  padding: var(--spacing-container-medium) var(--numerical-nl-02) var(--numerical-nl-01);
+}
+
+nav a {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-container-medium);
+  padding: var(--spacing-container-small) var(--spacing-container-medium);
+  border-radius: var(--border-small);
+  color: var(--colors-text-description);
+  text-decoration: none;
+  font: var(--text-body-reg-14);
+  min-width: 0;
+}
+
+nav a .lbl {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+nav a:hover {
+  background: var(--colors-background-midground-subtle);
+  color: var(--colors-text-main);
+}
+
+nav a.on {
+  background: var(--colors-background-selection);
+  color: var(--colors-text-primary-default);
+  font: var(--text-heading-med-14);
+}
+
+nav a .ct {
+  margin-left: auto;
+  font: var(--text-caption-reg-12);
+  color: var(--colors-text-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+nav a.on .ct {
+  color: var(--colors-text-primary-default);
+}
+
+/* Collapsed rail. The brand stacks so the mark and the toggle both fit, and a
+   section label becomes a divider rather than disappearing — otherwise the
+   groups run together with nothing between them. */
+
+.app[data-collapsed="true"] aside {
+  padding-left: var(--spacing-container-medium);
+  padding-right: var(--spacing-container-medium);
+}
+
+.app[data-collapsed="true"] .brand {
+  flex-direction: column;
+  gap: var(--spacing-container-small);
+  padding: 0;
+}
+
+.app[data-collapsed="true"] .brand .icon-btn {
+  margin-left: 0;
+}
+
+.app[data-collapsed="true"] .lbl,
+.app[data-collapsed="true"] nav a .ct,
+.app[data-collapsed="true"] #me {
+  display: none;
+}
+
+.app[data-collapsed="true"] nav a {
+  justify-content: center;
+}
+
+.app[data-collapsed="true"] .nav-label {
+  font-size: 0;
+  padding: 0;
+  margin: var(--spacing-container-small) var(--numerical-nl-02);
+  height: 1px;
+  background: var(--colors-border-neutral-base-subtler);
+  overflow: hidden;
+}
+
+.app[data-collapsed="true"] .foot-row {
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-container-medium);
+}
+
+.app[data-collapsed="true"] .theme-switch {
+  flex-direction: column;
+}
+
+/* ── Sidebar footer ───────────────────────────────────────────────────────── */
+
+aside .foot {
+  margin-top: auto;
+  font: var(--text-caption-reg-12);
+  color: var(--colors-text-caption);
+  padding: 0 var(--numerical-nl-02);
+}
+
+aside .foot #me b {
+  color: var(--colors-text-description);
+  font: var(--text-caption-med-ll-12);
+}
+
+.foot-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-container-small);
+  margin-top: var(--spacing-container-medium);
+}
+
+.theme-switch {
+  display: inline-flex;
+  gap: var(--numerical-nl-half);
+  padding: var(--numerical-nl-half);
+  border-radius: var(--border-small);
+  background: var(--colors-background-midground-subtle);
+  border: 1px solid var(--colors-border-neutral-base-subtler);
+}
+
+.theme-switch button {
+  border: 0;
+  background: none;
+  color: var(--colors-icon-neutral-main);
+  padding: var(--numerical-nl-01) var(--spacing-container-small);
+  border-radius: var(--border-small);
+  line-height: 0;
+}
+
+.theme-switch button:hover {
+  color: var(--colors-icon-neutral-dark);
+}
+
+.theme-switch button.on {
+  background: var(--colors-background-container);
+  color: var(--colors-text-primary-default);
+  box-shadow: var(--shadows-elevation1);
+}
+
+/* ── Page shell ───────────────────────────────────────────────────────────── */
+
+main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.top {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-container-large);
+  flex-wrap: wrap;
+  padding: var(--spacing-container-xlarge) var(--spacing-container-xxlarge) var(--spacing-container-large);
+  flex-shrink: 0;
+}
+
+.top-text {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-container-large);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.top h1 {
+  margin: 0;
+  font: var(--text-heading-smb-20);
+  letter-spacing: -0.015em;
+}
+
+.top .sub {
+  color: var(--colors-text-caption);
+  font: var(--text-body-reg-14);
+}
+
+/* Generic, not scoped to the header: action bars use a spacer too, and scoping
+   this to `.top` and `.card > header` silently stopped pushing their trailing
+   chips to the right. */
+.grow {
+  flex: 1;
+}
+
+/* Empty when a page has no tabs, so it contributes no height. */
+.page-tabs {
+  flex-shrink: 0;
+  padding: 0 var(--spacing-container-xxlarge);
+}
+
+.content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 var(--spacing-container-xxlarge) var(--numerical-nl-10);
+  min-width: 0;
+}
+
+/* ── Tabs ─────────────────────────────────────────────────────────────────── */
+
+.tabs {
+  display: flex;
+  gap: var(--numerical-nl-01);
+  border-bottom: 1px solid var(--colors-border-neutral-base-subtle);
+}
+
+.tabs button {
+  border: 0;
+  background: none;
+  color: var(--colors-text-description);
+  padding: var(--numerical-nl-02) var(--spacing-container-medium);
+  font: var(--text-body-reg-14);
+  border-bottom: 2px solid transparent;
+}
+
+.tabs button:hover {
+  color: var(--colors-text-main);
+}
+
+.tabs button.on {
+  color: var(--colors-text-primary-default);
+  border-bottom-color: var(--colors-border-primary-default);
+  font: var(--text-heading-med-14);
+}
+
+.tabs button .n {
+  font: var(--text-caption-reg-12);
+  color: var(--colors-text-caption);
+  margin-left: var(--numerical-nl-01);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Row lists ────────────────────────────────────────────────────────────── */
+
+.lead-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px 84px 120px;
+  gap: var(--spacing-container-large);
+  align-items: center;
+  padding: var(--spacing-container-large);
+  border-bottom: 1px solid var(--colors-border-neutral-base-subtler);
+  cursor: pointer;
+}
+
+/* Hover was previously the same colour as the card the row sits on, so it never
+   showed. A row that responds to the cursor is how every console signals it is
+   clickable. */
+.lead-row:hover {
+  background: var(--colors-background-midground-subtle);
+}
+
+.lead-row.on {
+  background: var(--colors-background-selection);
+}
+
+.lead-row .co {
+  font: var(--text-heading-med-14);
+  letter-spacing: -0.005em;
+}
+
+.lead-row .meta {
+  color: var(--colors-text-caption);
+  font: var(--text-caption-reg-12);
+  margin-top: 1px;
+}
+
+.lead-row .meta code {
+  font-family: var(--fl-font-mono);
+}
+
+/* Column headings. Shares the row grid, so headings and cells align by
+   construction instead of by two sets of matching numbers. */
+.lead-row.head,
+.lead-row.head:hover {
+  background: var(--colors-background-midground-subtle);
+  cursor: default;
+}
+
+.lead-row.head {
+  padding-top: var(--spacing-container-medium);
+  padding-bottom: var(--spacing-container-medium);
+  font: var(--text-caption-med-10);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--colors-text-caption);
+}
+
+.count-line {
+  padding: var(--spacing-container-medium) var(--spacing-container-large);
+  font: var(--text-caption-reg-12);
+  color: var(--colors-text-caption);
+  border-top: 1px solid var(--colors-border-neutral-base-subtler);
+}
+
+/* ── Chips ────────────────────────────────────────────────────────────────── */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--numerical-nl-01);
+  padding: var(--numerical-nl-half) var(--numerical-nl-02);
+  border-radius: var(--fl-radius-pill);
+  font: var(--text-caption-med-ll-12);
+  white-space: nowrap;
+  background: var(--colors-background-midground-subtle);
+  color: var(--colors-text-description);
+  border: 1px solid var(--colors-border-neutral-base-subtle);
+}
+
+/* Each tone pairs a `-subtle` fill with the `-medium` step of the same hue as
+   its text — see the note in tokens.css about why a green label reads from a
+   background token. */
+.chip.red {
+  background: var(--colors-background-semantic-red-subtle);
+  color: var(--colors-background-semantic-red-medium);
+  border-color: transparent;
+}
+
+.chip.orange {
+  background: var(--colors-background-semantic-orange-subtle);
+  color: var(--colors-background-semantic-orange-medium);
+  border-color: transparent;
+}
+
+.chip.green {
+  background: var(--colors-background-semantic-green-subtle);
+  color: var(--colors-background-semantic-green-medium);
+  border-color: transparent;
+}
+
+.chip.blue {
+  background: var(--colors-background-accent-blue-subtle);
+  color: var(--colors-text-primary-default);
+  border-color: transparent;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+.score {
+  font: var(--text-heading-med-16);
+  font-variant-numeric: tabular-nums;
+}
+
+.score small {
+  font: var(--text-caption-reg-10);
+  color: var(--colors-text-caption);
+  display: block;
+}
+
+.score.none {
+  color: var(--colors-text-caption);
+}
+
+/* ── Cards ────────────────────────────────────────────────────────────────── */
+
+.card {
+  background: var(--colors-background-container);
+  border: 1px solid var(--colors-border-neutral-base-subtle);
+  border-radius: var(--border-medium);
+  box-shadow: var(--shadows-elevation1);
+}
+
+.card > header {
+  padding: var(--spacing-container-medium) var(--spacing-container-large);
+  border-bottom: 1px solid var(--colors-border-neutral-base-subtler);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-container-medium);
+}
+
+.card > header h3 {
+  margin: 0;
+  font: var(--text-caption-med-l-12);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--colors-text-caption);
+}
+
+.card > header .head-meta {
+  font: var(--text-caption-reg-12);
+  color: var(--colors-text-caption);
+}
+
+.card .in {
+  padding: var(--spacing-container-large);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-section-small);
+}
+
+.split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: var(--spacing-section-small);
+  align-items: start;
+}
+
+@media (max-width: 1080px) {
+  .split {
+    grid-template-columns: 1fr;
+  }
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-container-large) var(--numerical-nl-04);
+  margin: 0;
+}
+
+.facts dt {
+  font: var(--text-caption-reg-12);
+  color: var(--colors-text-caption);
+  margin-bottom: 1px;
+}
+
+.facts dd {
+  margin: 0;
+  font: var(--text-body-reg-14);
+}
+
+.facts a,
+.link {
+  color: var(--colors-text-primary-default);
+  text-decoration: none;
+}
+
+.facts a:hover,
+.link:hover {
+  color: var(--colors-text-primary-hovered);
+  text-decoration: underline;
+}
+
+/* ── Buttons ──────────────────────────────────────────────────────────────── */
+
+.bar {
+  display: flex;
+  gap: var(--spacing-container-small);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--numerical-nl-01);
+  border: 1px solid var(--colors-border-neutral-base-subtle);
+  background: var(--colors-background-container);
+  color: var(--colors-text-main);
+  padding: var(--spacing-container-small) var(--spacing-container-large);
+  border-radius: var(--border-small);
+  font: var(--text-body-reg-14);
+  text-decoration: none;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--colors-border-primary-default);
+  color: var(--colors-text-primary-default);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn.pri {
+  background: var(--colors-background-primary-default);
+  border-color: var(--colors-background-primary-default);
+  color: var(--colors-text-inverse-default);
+}
+
+.btn.pri:hover:not(:disabled) {
+  background: var(--colors-background-primary-hovered);
+  border-color: var(--colors-background-primary-hovered);
+  color: var(--colors-text-inverse-default);
+}
+
+.btn.sm {
+  padding: var(--numerical-nl-01) var(--spacing-container-medium);
+  font: var(--text-caption-reg-12);
+}
+
+/* ── AI assessment ────────────────────────────────────────────────────────── */
+
+.verdict {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-container-large);
+  margin-bottom: var(--spacing-container-large);
+}
+
+.verdict .big {
+  font: var(--text-heading-med-32);
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.verdict .of,
+.of {
+  color: var(--colors-text-caption);
+  font: var(--text-caption-reg-12);
+}
+
+.reasons {
+  margin: 0;
+  padding-left: var(--numerical-nl-04);
+  font: var(--text-body-reg-14);
+  color: var(--colors-text-description);
+}
+
+.reasons li {
+  margin: var(--numerical-nl-01) 0;
+}
+
+.sec-t {
+  font: var(--text-caption-med-10);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--colors-text-caption);
+  margin: var(--spacing-container-large) 0 var(--numerical-nl-01);
+}
+
+/* ── Lifecycle stepper ────────────────────────────────────────────────────── */
+
+.steps {
+  display: flex;
+  gap: var(--spacing-container-small);
+  flex-wrap: wrap;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-container-medium);
+  flex: 1;
+  min-width: 128px;
+  position: relative;
+}
+
+.step i {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  flex: none;
+  border: 2px solid var(--colors-border-neutral-base-subtle);
+  background: var(--colors-background-container);
+}
+
+.step.done i {
+  background: var(--colors-background-semantic-green-medium);
+  border-color: var(--colors-background-semantic-green-medium);
+}
+
+.step.closed i {
+  background: var(--colors-background-semantic-red-medium);
+  border-color: var(--colors-background-semantic-red-medium);
+}
+
+.step.warm i {
+  background: var(--colors-background-semantic-orange-medium);
+  border-color: var(--colors-background-semantic-orange-medium);
+}
+
+.step b {
+  display: block;
+  font: var(--text-caption-med-ll-12);
+}
+
+.step span {
+  display: block;
+  font: var(--text-caption-reg-12);
+  color: var(--colors-text-caption);
+}
+
+.step:not(.done) b {
+  color: var(--colors-text-caption);
+  font: var(--text-caption-reg-12);
+}
+
+/* Skipped: reached past, but never happened. Distinct from not-yet-reached so a
+   hollow dot on a finished lead does not read as a bug. */
+.step.skip i {
+  border-style: dashed;
+  border-color: var(--colors-background-semantic-orange-medium);
+  background: transparent;
+}
+
+.step.skip b {
+  color: var(--colors-text-description);
+  font-style: italic;
+}
+
+.step.skip span {
+  color: var(--colors-background-semantic-orange-medium);
+}
+
+.step:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 11px;
+  right: -6px;
+  top: 5px;
+  height: 2px;
+  background: var(--colors-border-neutral-base-subtler);
+  z-index: -1;
+}
+
+/* ── Timeline ─────────────────────────────────────────────────────────────── */
+
+.tl {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tl li {
+  display: flex;
+  gap: var(--spacing-container-medium);
+  padding: var(--spacing-container-medium) 0;
+  border-bottom: 1px dashed var(--colors-border-neutral-base-subtler);
+}
+
+.tl li:last-child {
+  border: 0;
+}
+
+.tl .when {
+  color: var(--colors-text-caption);
+  font: var(--text-caption-reg-12);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding-top: 1px;
+}
+
+.tl .what {
+  min-width: 0;
+}
+
+.tl .kind {
+  font-family: var(--fl-font-mono);
+  font-size: 11px; /* mono runs large; matches the caption beside it optically */
+  color: var(--colors-text-primary-default);
+}
+
+.tl .body {
+  font: var(--text-body-reg-14);
+  color: var(--colors-text-description);
+}
+
+.tl .muted {
+  color: var(--colors-text-caption);
+  font: var(--text-caption-reg-12);
+}
+
+/* ── Chat ─────────────────────────────────────────────────────────────────── */
+
+.chat-shell {
+  max-width: 620px;
+  margin: 0 auto;
+}
+
+.chat-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-container-large);
+  justify-content: space-between;
+  margin-top: var(--spacing-container-medium);
+  font: var(--text-caption-reg-12);
+  color: var(--colors-text-caption);
+}
+
+.sys {
+  align-self: center;
+  text-align: center;
+  font: var(--text-caption-reg-12);
+  color: var(--colors-background-semantic-green-medium);
+  background: var(--colors-background-semantic-green-subtle);
+  padding: var(--spacing-container-small) var(--spacing-container-large);
+  border-radius: var(--fl-radius-pill);
+}
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  height: 68vh;
+  min-height: 420px;
+}
+
+.chat .site {
+  padding: var(--spacing-container-medium) var(--spacing-container-large);
+  border-bottom: 1px solid var(--colors-border-neutral-base-subtler);
+  font: var(--text-caption-reg-12);
+  color: var(--colors-text-caption);
+  display: flex;
+  align-items: center;
+  gap: var(--numerical-nl-02);
+}
+
+.msgs {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--numerical-nl-04);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-container-medium);
+}
+
+.msg {
+  max-width: 78%;
+  padding: var(--spacing-container-medium) var(--spacing-container-large);
+  border-radius: var(--border-large);
+  font: var(--text-body-reg-14);
+}
+
+.msg.a {
+  background: var(--colors-background-midground-subtle);
+  border: 1px solid var(--colors-border-neutral-base-subtler);
+  border-bottom-left-radius: var(--numerical-nl-01);
+  align-self: flex-start;
+}
+
+.msg.v {
+  background: var(--colors-background-primary-default);
+  color: var(--colors-text-inverse-default);
+  border-bottom-right-radius: var(--numerical-nl-01);
+  align-self: flex-end;
+}
+
+.typing {
+  align-self: flex-start;
+  display: flex;
+  gap: var(--numerical-nl-01);
+  padding: var(--spacing-container-medium) var(--spacing-container-large);
+}
+
+.typing i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--colors-text-caption);
+  animation: bob 1.2s infinite;
+}
+
+.typing i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.typing i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes bob {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+.composer {
+  display: flex;
+  gap: var(--numerical-nl-02);
+  padding: var(--spacing-container-large);
+  border-top: 1px solid var(--colors-border-neutral-base-subtler);
+}
+
+.composer input {
+  flex: 1;
+  border-radius: var(--fl-radius-pill);
+}
+
+/* ── Forms ────────────────────────────────────────────────────────────────── */
+
+input[type="text"],
+input[type="number"],
+select,
+textarea {
+  font: var(--text-body-reg-14);
+  width: 100%;
+  padding: var(--spacing-container-small) var(--spacing-container-medium);
+  border: 1px solid var(--colors-border-neutral-base-subtle);
+  border-radius: var(--border-small);
+  background: var(--colors-background-midground-subtle);
+  color: var(--colors-text-main);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: 2px solid var(--colors-border-primary-focused);
+  outline-offset: -1px;
+  border-color: var(--colors-border-primary-default);
+}
+
+label.f {
+  display: block;
+  font: var(--text-caption-reg-12);
+  color: var(--colors-text-caption);
+  margin: var(--spacing-container-medium) 0 var(--numerical-nl-01);
+}
+
+/* ── Response clocks / small tables ───────────────────────────────────────── */
+
+table.clocks {
+  width: 100%;
+  border-collapse: collapse;
+  font: var(--text-body-reg-14);
+}
+
+table.clocks td {
+  padding: var(--numerical-nl-01) 0;
+  border-bottom: 1px dashed var(--colors-border-neutral-base-subtler);
+}
+
+table.clocks tr:last-child td {
+  border: 0;
+}
+
+table.clocks .due {
+  color: var(--colors-text-caption);
+  font: var(--text-caption-reg-12);
+  font-variant-numeric: tabular-nums;
+}
+
+table.clocks .right {
+  text-align: right;
+}
+
+table.clocks .nowrap {
+  white-space: nowrap;
+}
+
+/* ── Empty, error ─────────────────────────────────────────────────────────── */
+
+.empty {
+  padding: 44px 16px;
+  text-align: center;
+  color: var(--colors-text-caption);
+}
+
+.empty.tight {
+  padding: var(--numerical-nl-06) var(--numerical-nl-04);
+}
+
+.empty-title {
+  font: var(--text-heading-med-14);
+  color: var(--colors-text-description);
+}
+
+.empty-title.err,
+.err {
+  color: var(--colors-text-semantic-red);
+}
+
+.empty-body {
+  font: var(--text-body-reg-14);
+  margin-top: var(--numerical-nl-01);
+}
+
+.err-msg {
+  font: var(--text-body-reg-14);
+  color: var(--colors-text-semantic-red);
+  margin-top: var(--numerical-nl-01);
+}
+
+.empty-action {
+  margin-top: var(--spacing-container-large);
+}
+
+pre.raw {
+  margin: 0;
+  padding: var(--spacing-container-medium);
+  background: var(--colors-background-midground-subtle);
+  border-radius: var(--numerical-nl-02);
+  font-family: var(--fl-font-mono);
+  font-size: 11px; /* mono runs large next to the 12px caption around it */
+  white-space: pre-wrap;
+  max-height: 240px;
+  overflow: auto;
+  color: var(--colors-text-description);
+}
+
+.mono {
+  font-family: var(--fl-font-mono);
+}
+
+.done {
+  padding: var(--spacing-container-large);
+  background: var(--colors-background-semantic-green-subtle);
+  color: var(--colors-background-semantic-green-medium);
+  font: var(--text-body-reg-14);
+  border-radius: var(--border-medium);
+}
+
+/* ── Toast ────────────────────────────────────────────────────────────────── */
+
+.toast {
+  position: fixed;
+  bottom: var(--numerical-nl-06);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--fl-toast-background);
+  color: var(--fl-toast-text);
+  padding: var(--spacing-container-medium) var(--numerical-nl-04);
+  border-radius: var(--numerical-nl-02);
+  font: var(--text-body-reg-14);
+  box-shadow: var(--shadows-elevation1);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+  z-index: 20;
+}
+
+.toast.on {
+  opacity: 1;
+}
+
+.toast.bad {
+  background: var(--colors-background-semantic-red-medium);
+  color: var(--colors-text-inverse-default);
+}
+
+/* ── Shimmer ──────────────────────────────────────────────────────────────
+   Height is in `em` so a bar takes the line box of whatever text it stands in
+   for. That is what keeps a skeleton row exactly as tall as the real row, and
+   it only works because the skeletons reuse the real classes. */
+
+.shim {
+  display: inline-block;
+  vertical-align: middle;
+  width: 100%;
+  height: 0.72em;
+  min-height: 8px;
+  border-radius: var(--border-small);
+  background: linear-gradient(
+    90deg,
+    var(--fl-shimmer-base) 25%,
+    var(--fl-shimmer-glint) 37%,
+    var(--fl-shimmer-base) 63%
+  );
+  background-size: 400% 100%;
+  animation: fl-shimmer 1.4s ease-in-out infinite;
+}
+
+.shim-pill {
+  height: 18px;
+  border-radius: var(--fl-radius-pill);
+}
+
+@keyframes fl-shimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shim {
+    animation: none;
+  }
+}
+
+.skel-lines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-container-medium);
+  font: var(--text-body-reg-14);
+}
+
+.lead-row.skel,
+.lead-row.skel:hover {
+  cursor: default;
+  background: transparent;
+}
+
+/* Must follow `.msg.v` — equal specificity, so source order is what neutralises
+   the visitor bubble's brand fill while it is a placeholder. */
+.skel-msgs .msg {
+  background: var(--colors-background-midground-subtle);
+  border: 1px solid var(--colors-border-neutral-base-subtler);
+  color: inherit;
+}

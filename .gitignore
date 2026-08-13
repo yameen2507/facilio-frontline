@@ -5,6 +5,10 @@ node_modules/
 # esbuild output — the single-file bundles uploaded to the platform
 build/
 
+# Sourcemaps for the published bundle. dist/ itself IS tracked — it is what
+# vibe.json publishes — but the maps are ~1.5MB and rebuildable.
+dist/*.map
+
 # holds the app database credentials for CLI function runs — never commit
 env.json
 

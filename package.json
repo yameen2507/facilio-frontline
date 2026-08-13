@@ -9,12 +9,19 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "bundle": "node scripts/bundle.mjs",
-    "push": "node scripts/push.mjs"
+    "push": "node scripts/push.mjs",
+    "build:frontend": "node scripts/build-frontend.mjs",
+    "typecheck:frontend": "tsc -p frontend/tsconfig.json"
   },
   "dependencies": {
-    "@facilio/vibe-sdk": "^0.3.1"
+    "@facilio/vibe-sdk": "^0.3.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-router-dom": "^7.18.2"
   },
   "devDependencies": {
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"

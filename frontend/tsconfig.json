@@ -1,0 +1,37 @@
+{
+  // The first tsconfig in this repo. `npm run typecheck` at the root has always
+  // been a no-op — `tsc --noEmit` with no project and no files just prints help —
+  // so the backend under src/ is unchecked. This one covers the React frontend
+  // only, on purpose: pulling src/ in would surface a backlog of backend errors
+  // that has nothing to do with the UI. Run it with `npm run typecheck:frontend`.
+  //
+  // `baseUrl` is NOT set: TypeScript 7 removed it (error TS5102). Use `paths` if
+  // aliases are ever needed.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+
+    // esbuild does the emitting; tsc is here purely as the checker.
+    "noEmit": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+
+    // These three are the reason this file earns its place — they catch most of
+    // what a linter would, and they are what makes the typecheck a real gate.
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": false,
+
+    // The vibe SDK ships no types; see lib/vibe.ts for how that is declared.
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.d.ts"]
+}
