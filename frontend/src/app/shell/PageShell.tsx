@@ -74,6 +74,9 @@ export function PageShell({
 }) {
   const { pathname } = useLocation();
   const back = backOf(pathname);
+  // With no tabs there is no control row to anchor: search joins the actions
+  // on the title row's right instead of sitting alone on a second line.
+  const searchInTitleRow = Boolean(search && !strip);
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -108,17 +111,21 @@ export function PageShell({
           </div>
           {/* flex-wrap, not shrink-0: a detail page carries five actions, and on
               a phone they wrap under the title instead of forcing a scroll. */}
-          {actions ? (
-            <div className="flex flex-wrap items-center justify-end gap-2">{actions}</div>
+          {actions || searchInTitleRow ? (
+            <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+              {searchInTitleRow ? search : null}
+              {actions}
+            </div>
           ) : null}
         </div>
 
-        {/* The control row: pill tabs left, search pinned right (ml-auto keeps
-            it there even when there are no tabs), one compact line that wraps
-            on phones — tabs above, search below at full width. */}
-        {strip || search ? (
+        {/* The control row: pill tabs left, search pinned right, one compact
+            line that wraps on phones — tabs above, search below at full width.
+            Rendered only when there ARE tabs; a tab-less page's search lives
+            in the title row above. */}
+        {strip ? (
           <div className="flex min-w-0 flex-wrap items-center gap-x-6 gap-y-2 pt-0.5 pb-2.5">
-            {strip ? <div className="min-w-0 flex-1">{strip}</div> : null}
+            <div className="min-w-0 flex-1">{strip}</div>
             {search ? <div className="ml-auto w-full sm:w-auto">{search}</div> : null}
           </div>
         ) : null}

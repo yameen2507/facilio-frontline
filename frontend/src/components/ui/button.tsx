@@ -9,7 +9,11 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        // A vertical highlight over the token: lighter at the top edge, the
+        // raw primary at the bottom, plus a 1px inner light line — the flat
+        // fill read as a dead sticker next to the app's otherwise flat chrome.
+        default:
+          "bg-primary text-primary-foreground bg-gradient-to-b from-white/25 to-white/0 shadow-[inset_0_1px_0_0_rgb(255_255_255/0.25)] hover:bg-primary/90",
         destructive:
           "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:bg-destructive/60 dark:focus-visible:ring-destructive/40",
         outline:

@@ -343,7 +343,7 @@ export function TemplateList() {
           placeholder="Search templates"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="h-8 w-full sm:w-56"
+          className="h-8 w-full sm:w-72"
           aria-label="Search templates"
         />
       }

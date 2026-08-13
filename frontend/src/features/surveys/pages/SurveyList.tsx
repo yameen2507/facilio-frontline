@@ -131,7 +131,7 @@ export function SurveyList() {
           placeholder="Search by number, account or site"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="h-8 w-full sm:w-56"
+          className="h-8 w-full sm:w-72"
           aria-label="Search surveys"
         />
       }
