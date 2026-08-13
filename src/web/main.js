@@ -12,6 +12,7 @@
  */
 
 import { createVibe } from "@facilio/vibe-sdk";
+import { accountViews } from "./accounts.js";
 
 const vibe = createVibe();
 const $ = (id) => document.getElementById(id);
@@ -323,6 +324,7 @@ async function renderLead(id, prefetched) {
               <div><dt>Est. value</dt><dd>${l.estimatedValue ? `${esc(l.currency ?? "AED")} ${Number(l.estimatedValue).toLocaleString()}` : "—"}</dd></div>
               <div><dt>Owner</dt><dd>${esc(l.ownerEmail ?? "unclaimed")}</dd></div>
               <div><dt>Deal</dt><dd>${l.dealId ? `<span class="chip good">created</span>` : "—"}</dd></div>
+              <div><dt>Account</dt><dd>${l.accountId ? `<a href="#account/${esc(l.accountId)}">Company page</a>` : "—"}</dd></div>
             </dl>
             ${l.dispositionReason ? `<div style="margin-top:12px" class="chip hot">closed: ${esc(l.dispositionReason)}</div>` : ""}
             ${d.duplicates.length ? `<div style="margin-top:12px" class="chip warm">${d.duplicates.length} duplicate enquir${d.duplicates.length === 1 ? "y" : "ies"} merged in</div>` : ""}
@@ -836,14 +838,21 @@ async function renderSettings() {
 
 // --- routing ----------------------------------------------------------------
 
+const accounts = accountViews({ $, call, esc, view, ago });
+
+/** A detail page lights up the list it belongs to. */
+const NAV_FOR = { lead: "inbox", account: "accounts" };
+
 async function route() {
   const hash = location.hash || "#inbox";
   const [, page, arg] = hash.match(/^#([^/]+)\/?(.*)$/) ?? [];
 
   for (const a of document.querySelectorAll("nav a")) {
-    a.classList.toggle("on", a.dataset.v === (page === "lead" ? "inbox" : page));
+    a.classList.toggle("on", a.dataset.v === (NAV_FOR[page] ?? page));
   }
 
+  if (page === "accounts") return accounts.list();
+  if (page === "account" && arg) return accounts.detail(arg);
   if (page === "lead" && arg) return renderLead(arg);
   if (page === "chat") return renderChat();
   if (page === "settings") return renderSettings();

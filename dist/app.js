@@ -626,6 +626,169 @@
     return new Vibe(cfg);
   }
 
+  // src/web/accounts.js
+  function accountViews({ $: $2, call: call2, esc: esc2, view: view2, ago: ago2 }) {
+    const state2 = { search: "", rows: [], total: 0 };
+    let searchTimer;
+    const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+    const money = (value, currency) => value === null || value === void 0 ? "\u2014" : `${esc2(currency ?? "AED")} ${Number(value).toLocaleString()}`;
+    const syncChip = (a) => a.facilioClientId ? `<span class="chip good"><span class="dot"></span>client ${esc2(a.facilioClientId)}</span>` : `<span class="chip warm"><span class="dot"></span>not in Facilio yet</span>`;
+    const STAGE_TONE = { open: "brand", won: "good", lost: "" };
+    async function list() {
+      $2("title").textContent = "Accounts";
+      $2("subtitle").textContent = "";
+      view2().innerHTML = `
+      <div class="bar" style="margin-bottom:14px">
+        <input type="text" id="acSearch" placeholder="Search name, email or domain"
+               value="${esc2(state2.search)}" style="min-width:300px">
+      </div>
+      <div class="card" id="acRows"><div class="empty">Loading\u2026</div></div>`;
+      const input = $2("acSearch");
+      input.oninput = () => {
+        state2.search = input.value.trim();
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(load, 250);
+      };
+      input.focus();
+      await load();
+    }
+    async function load() {
+      const data = await call2("account-list", {
+        limit: 100,
+        ...state2.search ? { search: state2.search } : {}
+      });
+      const box = $2("acRows");
+      if (!box) return;
+      if (!data) {
+        box.innerHTML = `<div class="empty">Could not load accounts.</div>`;
+        return;
+      }
+      state2.rows = data.accounts;
+      state2.total = data.total;
+      $2("subtitle").textContent = data.total ? `${plural(data.total, "company", "companies")}${data.truncated ? " \xB7 first page" : ""}` : "";
+      box.innerHTML = state2.rows.map(
+        (a) => `
+      <div class="lead-row" data-id="${esc2(a.id)}">
+        <div>
+          <div class="co">${esc2(a.name ?? "Unnamed account")}</div>
+          <div class="meta">
+            ${a.websiteDomain ? esc2(a.websiteDomain) : "<em>no domain</em>"}
+            ${a.email ? ` \xB7 ${esc2(a.email)}` : ""}
+          </div>
+        </div>
+        <div class="score">${a.leadCount}<small>${a.leadCount === 1 ? "lead" : "leads"}</small></div>
+        <div class="score">${a.dealCount}<small>${a.dealCount === 1 ? "deal" : "deals"}</small></div>
+        <div>${syncChip(a)}<div class="meta" style="font-size:11.5px;color:var(--ink-3)">${ago2(a.createdAt)}</div></div>
+      </div>`
+      ).join("") || `<div class="empty">${state2.search ? "No company matches that." : "No accounts yet.<br>A company appears here when a qualified lead is converted."}</div>`;
+      for (const row of box.querySelectorAll("[data-id]")) {
+        row.onclick = () => {
+          location.hash = `#account/${row.dataset.id}`;
+        };
+      }
+    }
+    async function detail(id) {
+      $2("title").textContent = "Account";
+      $2("subtitle").textContent = "";
+      view2().innerHTML = `<div class="empty">Loading\u2026</div>`;
+      const d = await call2("account-get", { accountId: id });
+      if (!d) {
+        view2().innerHTML = `<div class="empty">Account not found.
+        <div style="margin-top:12px"><a href="#accounts" style="color:var(--brand)">Back to accounts</a></div></div>`;
+        return;
+      }
+      const a = d.account;
+      $2("title").textContent = a.name ?? "Account";
+      $2("subtitle").textContent = `${plural(d.leads.length, "lead", "leads")} \xB7 ${plural(
+        d.deals.length,
+        "deal",
+        "deals"
+      )}`;
+      const addr = a.address ?? {};
+      const place = [addr.street, addr.city, addr.state].filter(Boolean).join(", ");
+      const facts = `
+      <dl class="facts">
+        <div><dt>Domain</dt><dd>${a.websiteDomain ? `<a href="https://${esc2(a.websiteDomain)}" target="_blank" rel="noreferrer">${esc2(a.websiteDomain)}</a>` : "\u2014"}</dd></div>
+        <div><dt>Email</dt><dd>${a.email ? `<a href="mailto:${esc2(a.email)}">${esc2(a.email)}</a>` : "\u2014"}</dd></div>
+        <div><dt>Phone</dt><dd>${a.phone ? `<a href="tel:${esc2(a.phone)}">${esc2(a.phone)}</a>` : "\u2014"}</dd></div>
+        <div><dt>Location</dt><dd>${place ? esc2(place) : "\u2014"}</dd></div>
+        <div><dt>Facilio client</dt><dd>${a.facilioClientId ? `<code>${esc2(a.facilioClientId)}</code>` : "queued"}</dd></div>
+        <div><dt>Customer since</dt><dd>${esc2(String(a.createdAt ?? "").slice(0, 10))}</dd></div>
+      </dl>`;
+      const contacts = d.contacts.length ? `<table class="clocks">${d.contacts.map(
+        (c) => `
+        <tr>
+          <td>
+            <b>${esc2(c.name ?? "\u2014")}</b>
+            ${String(c.isPrimary) === "true" ? ` <span class="chip">primary</span>` : ""}
+            <div class="due">${esc2(c.email ?? "")}${c.phone ? ` \xB7 ${esc2(c.phone)}` : ""}</div>
+          </td>
+        </tr>`
+      ).join("")}</table>` : `<div class="empty" style="padding:20px">No contact captured.</div>`;
+      const deals = d.deals.length ? `<table class="clocks">${d.deals.map(
+        (deal) => `
+        <tr>
+          <td>
+            <b>${esc2(deal.title ?? "Untitled deal")}</b>
+            <div class="due"><code>${esc2(deal.refNo)}</code>${deal.salesOwnerEmail ? ` \xB7 ${esc2(deal.salesOwnerEmail)}` : ""}</div>
+          </td>
+          <td class="due" style="text-align:right;white-space:nowrap">${money(deal.estimatedValue, deal.currency)}</td>
+          <td style="text-align:right"><span class="chip ${STAGE_TONE[deal.stage] ?? ""}">${esc2(deal.stage)}</span></td>
+        </tr>`
+      ).join("")}</table>` : `<div class="empty" style="padding:20px">No deals yet.</div>`;
+      const leads = d.leads.length ? d.leads.map(
+        (l) => `
+        <div class="lead-row" data-lead="${esc2(l.id)}">
+          <div>
+            <div class="co">${esc2(l.refNo)}</div>
+            <div class="meta">${esc2(l.source)}${l.serviceType ? ` \xB7 ${esc2(l.serviceType)}` : ""}</div>
+          </div>
+          <div><span class="chip ${l.status === "converted" ? "good" : ""}">${esc2(String(l.status).replace("_", " "))}</span></div>
+          <div class="score">${l.score ?? "\u2014"}<small>score</small></div>
+          <div class="meta" style="font-size:11.5px;color:var(--ink-3)">${ago2(l.createdAt)}</div>
+        </div>`
+      ).join("") : `<div class="empty" style="padding:20px">No leads linked.</div>`;
+      view2().innerHTML = `
+      <div class="bar" style="margin-bottom:14px">
+        <a class="btn" href="#accounts" style="text-decoration:none">\u2190 Accounts</a>
+        <span style="flex:1"></span>
+        ${syncChip(a)}
+      </div>
+
+      <div class="split">
+        <div class="stack">
+          <div class="card">
+            <header><h3>Enquiries</h3><span class="grow"></span>
+              <span style="font-size:11.5px;color:var(--ink-3)">every lead that resolved to this company</span>
+            </header>
+            ${leads}
+          </div>
+          <div class="card">
+            <header><h3>Deals</h3></header>
+            <div class="in">${deals}</div>
+          </div>
+        </div>
+
+        <div class="stack">
+          <div class="card">
+            <header><h3>Company</h3></header>
+            <div class="in">${facts}</div>
+          </div>
+          <div class="card">
+            <header><h3>Contacts</h3></header>
+            <div class="in">${contacts}</div>
+          </div>
+        </div>
+      </div>`;
+      for (const row of view2().querySelectorAll("[data-lead]")) {
+        row.onclick = () => {
+          location.hash = `#lead/${row.dataset.lead}`;
+        };
+      }
+    }
+    return { list, detail };
+  }
+
   // src/web/main.js
   var vibe = createVibe();
   var $ = (id) => document.getElementById(id);
@@ -858,6 +1021,7 @@
               <div><dt>Est. value</dt><dd>${l.estimatedValue ? `${esc(l.currency ?? "AED")} ${Number(l.estimatedValue).toLocaleString()}` : "\u2014"}</dd></div>
               <div><dt>Owner</dt><dd>${esc(l.ownerEmail ?? "unclaimed")}</dd></div>
               <div><dt>Deal</dt><dd>${l.dealId ? `<span class="chip good">created</span>` : "\u2014"}</dd></div>
+              <div><dt>Account</dt><dd>${l.accountId ? `<a href="#account/${esc(l.accountId)}">Company page</a>` : "\u2014"}</dd></div>
             </dl>
             ${l.dispositionReason ? `<div style="margin-top:12px" class="chip hot">closed: ${esc(l.dispositionReason)}</div>` : ""}
             ${d.duplicates.length ? `<div style="margin-top:12px" class="chip warm">${d.duplicates.length} duplicate enquir${d.duplicates.length === 1 ? "y" : "ies"} merged in</div>` : ""}
@@ -1261,12 +1425,16 @@ Reply to the visitor's last message.`
       }
     };
   }
+  var accounts = accountViews({ $, call, esc, view, ago });
+  var NAV_FOR = { lead: "inbox", account: "accounts" };
   async function route() {
     const hash = location.hash || "#inbox";
     const [, page, arg] = hash.match(/^#([^/]+)\/?(.*)$/) ?? [];
     for (const a of document.querySelectorAll("nav a")) {
-      a.classList.toggle("on", a.dataset.v === (page === "lead" ? "inbox" : page));
+      a.classList.toggle("on", a.dataset.v === (NAV_FOR[page] ?? page));
     }
+    if (page === "accounts") return accounts.list();
+    if (page === "account" && arg) return accounts.detail(arg);
     if (page === "lead" && arg) return renderLead(arg);
     if (page === "chat") return renderChat();
     if (page === "settings") return renderSettings();
