@@ -100,64 +100,62 @@ export function Inbox() {
         />
       }
     >
-      <div className="mt-4">
-        <Card pad={false}>
-          {!loaded ? (
-            <ListTableSkeleton cols={COLS} rows={6} />
-          ) : error ? (
-            <ErrorState message={error} onRetry={reload} />
-          ) : rows.length ? (
-            <>
-              <ListTable cols={COLS}>
-                {rows.map((l) => (
-                  <ClickRow key={l.id} onClick={() => navigate(`/leads/${l.id}`)}>
-                    <TableCell className="px-4 py-3">
-                      <div className="flex items-center gap-3">
-                        {/* Logo by the contact's email domain — free-mail
-                            addresses fall back to tinted initials. */}
-                        <CompanyLogo name={l.companyName} email={l.contactEmail} />
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-medium">{l.companyName}</div>
-                          <div className="text-muted-foreground truncate text-xs">
-                            <code className="font-mono">{l.refNo}</code> · {l.source}
-                            {l.serviceType ? ` · ${l.serviceType}` : ""}
-                            {l.siteCity ? ` · ${l.siteCity}` : ""} ·{" "}
-                            {l.ownerEmail ? l.ownerEmail.split("@")[0] : <em>unclaimed</em>}
-                          </div>
+      <Card pad={false}>
+        {!loaded ? (
+          <ListTableSkeleton cols={COLS} rows={6} />
+        ) : error ? (
+          <ErrorState message={error} onRetry={reload} />
+        ) : rows.length ? (
+          <>
+            <ListTable cols={COLS}>
+              {rows.map((l) => (
+                <ClickRow key={l.id} onClick={() => navigate(`/leads/${l.id}`)}>
+                  <TableCell className="px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      {/* Logo by the contact's email domain — free-mail
+                          addresses fall back to tinted initials. */}
+                      <CompanyLogo name={l.companyName} email={l.contactEmail} />
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium">{l.companyName}</div>
+                        <div className="text-muted-foreground truncate text-xs">
+                          <code className="font-mono">{l.refNo}</code> · {l.source}
+                          {l.serviceType ? ` · ${l.serviceType}` : ""}
+                          {l.siteCity ? ` · ${l.siteCity}` : ""} ·{" "}
+                          {l.ownerEmail ? l.ownerEmail.split("@")[0] : <em>unclaimed</em>}
                         </div>
                       </div>
-                    </TableCell>
-                    <TableCell className="w-32 px-4 py-3 max-sm:hidden">
-                      <StatusChip status={l.status} />
-                    </TableCell>
-                    <TableCell className="w-24 px-4 py-3 max-sm:hidden">
-                      <ScoreCell lead={l} />
-                    </TableCell>
-                    <TableCell className="w-36 px-4 py-3">
-                      <SlaChip sla={l.sla} />
-                      <div className="text-muted-foreground mt-1 text-xs">{ago(l.createdAt)}</div>
-                    </TableCell>
-                  </ClickRow>
-                ))}
-              </ListTable>
-              <CountLine>{`${plural(rows.length, "lead", "leads")} in this view`}</CountLine>
-            </>
-          ) : (
-            <Empty
-              title={tab === "open" ? "No open leads" : "Nothing in this view"}
-              body="Enquiries arrive from the website chat as unclaimed leads. One that came in by phone, by email or as a tender notice is raised here by hand."
-              action={
-                <div className="flex flex-wrap items-center justify-center gap-2">
-                  <Button variant="primary" glyph="plus" onClick={() => setCreating(true)}>
-                    New lead
-                  </Button>
-                  <LinkButton to="/chat">Try the website chat</LinkButton>
-                </div>
-              }
-            />
-          )}
-        </Card>
-      </div>
+                    </div>
+                  </TableCell>
+                  <TableCell className="w-32 px-4 py-3 max-sm:hidden">
+                    <StatusChip status={l.status} />
+                  </TableCell>
+                  <TableCell className="w-24 px-4 py-3 max-sm:hidden">
+                    <ScoreCell lead={l} />
+                  </TableCell>
+                  <TableCell className="w-36 px-4 py-3">
+                    <SlaChip sla={l.sla} />
+                    <div className="text-muted-foreground mt-1 text-xs">{ago(l.createdAt)}</div>
+                  </TableCell>
+                </ClickRow>
+              ))}
+            </ListTable>
+            <CountLine>{`${plural(rows.length, "lead", "leads")} in this view`}</CountLine>
+          </>
+        ) : (
+          <Empty
+            title={tab === "open" ? "No open leads" : "Nothing in this view"}
+            body="Enquiries arrive from the website chat as unclaimed leads. One that came in by phone, by email or as a tender notice is raised here by hand."
+            action={
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <Button variant="primary" glyph="plus" onClick={() => setCreating(true)}>
+                  New lead
+                </Button>
+                <LinkButton to="/chat">Try the website chat</LinkButton>
+              </div>
+            }
+          />
+        )}
+      </Card>
 
       {/* Stays mounted so the radix exit animation plays. A capture refreshes the
           list even when the dialog holds its ground on the duplicate outcome —

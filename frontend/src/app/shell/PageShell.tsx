@@ -146,9 +146,14 @@ export function PageShell({
       </div>
 
       <OverlayScrollbar style={{ flex: 1 }}>
-        {/* pb grows past the iPhone home indicator when installed — the last row
+        {/* pt-3 MATCHES the band's py-3, so the border sits in an even gutter.
+            The two paddings stack across it — at pt-5 the band paid 12 and the
+            body 20, and 32px of air under a row of pill tabs (which, unlike a
+            title row, has no slack of its own) read as a gap rather than a seam.
+
+            pb grows past the iPhone home indicator when installed — the last row
             must scroll clear of it, not end underneath. */}
-        <div className="min-w-0 px-4 pt-5 pb-[calc(--spacing(10)+env(safe-area-inset-bottom,0px))] sm:px-6">{children}</div>
+        <div className="min-w-0 px-4 pt-3 pb-[calc(--spacing(10)+env(safe-area-inset-bottom,0px))] sm:px-6">{children}</div>
       </OverlayScrollbar>
     </div>
   );
