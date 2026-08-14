@@ -40,7 +40,13 @@ export type Col = {
 
 export function ListTable({ cols, children }: { cols: Col[]; children: ReactNode }) {
   return (
-    <Table>
+    // table-fixed: with auto layout a long entity meta line sets the column's
+    // min-content width, pushes the table wider than the phone screen, and the
+    // trailing columns silently scroll off-screen — `truncate` in the cells
+    // never gets a constrained width to act on. Fixed layout hands the sized
+    // columns (w-24/w-36…) their width and the entity column the remainder,
+    // so the ellipsis actually happens and every column stays on screen.
+    <Table className="table-fixed">
       <TableHeader>
         {/* hover:bg-transparent: the header is not a row, it must not light up. */}
         <TableRow className="bg-muted/40 hover:bg-transparent">

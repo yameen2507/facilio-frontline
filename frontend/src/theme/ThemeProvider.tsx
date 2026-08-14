@@ -58,6 +58,12 @@ function apply(mode: ThemeMode) {
   const root = document.documentElement;
   if (root.getAttribute("data-theme") === next) return;
 
+  // Retint the browser/OS chrome with the page. Duplicated in theme-boot.js
+  // (which owns first paint) — change both together.
+  document
+    .querySelector('meta[name="theme-color"]')
+    ?.setAttribute("content", next === "dark" ? "#0a0a0a" : "#ffffff");
+
   const doc = document as Document & { startViewTransition?: (update: () => void) => void };
   if (typeof doc.startViewTransition === "function") {
     doc.startViewTransition(() => root.setAttribute("data-theme", next));

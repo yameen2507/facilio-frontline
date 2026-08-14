@@ -9,11 +9,15 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        // A vertical highlight over the token: lighter at the top edge, the
-        // raw primary at the bottom, plus a 1px inner light line — the flat
-        // fill read as a dead sticker next to the app's otherwise flat chrome.
+        // Solid primary blue at REST (a 1px inner light line is the only
+        // dressing); the gradient is the HOVER state, and it animates — the
+        // highlight is drawn at double height parked below the fold, and
+        // hover slides the background position up so the shine sweeps in.
+        // Gradients can't cross-fade, but background-position transitions.
         default:
-          "bg-primary text-primary-foreground bg-gradient-to-b from-white/25 to-white/0 shadow-[inset_0_1px_0_0_rgb(255_255_255/0.25)] hover:bg-primary/90",
+          "bg-primary text-primary-foreground shadow-[inset_0_1px_0_0_rgb(255_255_255/0.12)] " +
+          "bg-[image:linear-gradient(to_bottom,rgb(255_255_255/0.22),rgb(255_255_255/0)_55%)] bg-[length:100%_200%] bg-[position:0%_100%] " +
+          "transition-[background-position,filter] duration-300 hover:bg-[position:0%_0%] active:brightness-95",
         destructive:
           "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:bg-destructive/60 dark:focus-visible:ring-destructive/40",
         outline:

@@ -83,10 +83,13 @@ export function PageShell({
       {/* px steps down on phones — six units of gutter is a tenth of the screen.
           The mobile sidebar trigger floats at top-left (Layout), so the title
           indents past it below md. */}
-      <div className="shrink-0 border-b px-4 pt-2 max-md:pl-14 sm:px-6">
+      {/* py-3, and the rows inside add NO outer padding of their own: the band
+          breathes equally above the title and below whatever ends it — a title
+          row alone, or the control row under it. */}
+      <div className="shrink-0 border-b px-4 py-3 max-md:pl-14 sm:px-6">
         {/* The title row: one slim line. min-h rather than h so wrapped
             actions on a phone can grow it. */}
-        <div className="flex min-h-11 flex-wrap items-center gap-x-4 gap-y-1 py-1">
+        <div className="flex min-h-8 flex-wrap items-center gap-x-4 gap-y-2">
           <div className="flex min-w-0 flex-1 items-center gap-x-1.5">
             {back ? (
               <Link
@@ -124,7 +127,7 @@ export function PageShell({
             Rendered only when there ARE tabs; a tab-less page's search lives
             in the title row above. */}
         {strip ? (
-          <div className="flex min-w-0 flex-wrap items-center gap-x-6 gap-y-2 pt-0.5 pb-2.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-6 gap-y-2 pt-2.5">
             <div className="min-w-0 flex-1">{strip}</div>
             {search ? <div className="ml-auto w-full sm:w-auto">{search}</div> : null}
           </div>
@@ -132,7 +135,9 @@ export function PageShell({
       </div>
 
       <OverlayScrollbar style={{ flex: 1 }}>
-        <div className="min-w-0 px-4 pt-5 pb-10 sm:px-6">{children}</div>
+        {/* pb grows past the iPhone home indicator when installed — the last row
+            must scroll clear of it, not end underneath. */}
+        <div className="min-w-0 px-4 pt-5 pb-[calc(--spacing(10)+env(safe-area-inset-bottom,0px))] sm:px-6">{children}</div>
       </OverlayScrollbar>
     </div>
   );

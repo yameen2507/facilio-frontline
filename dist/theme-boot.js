@@ -33,4 +33,12 @@
   }
 
   document.documentElement.setAttribute("data-theme", resolved);
+
+  // Keep the browser/OS chrome (Android status bar, iOS Safari toolbar tint)
+  // on the page's own background — a hardcoded dark theme-color over a light
+  // page reads as a rendering glitch. Values mirror --background in
+  // globals.css; getComputedStyle can't be used here because this script runs
+  // before app.css loads. ThemeProvider repeats this on every toggle.
+  var meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", resolved === "dark" ? "#0a0a0a" : "#ffffff");
 })();

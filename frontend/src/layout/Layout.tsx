@@ -55,9 +55,12 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       {/* On mobile the sidebar is an offcanvas Sheet, and with no topbar there
           is nothing on the page to summon it — this floating trigger is that
           summons. Desktop never sees it; the brand row owns the control there. */}
-      <SidebarTrigger className="bg-background/80 fixed top-3 left-3 z-40 rounded-md border shadow-sm backdrop-blur md:hidden" />
+      <SidebarTrigger className="bg-background/80 fixed top-[calc(env(safe-area-inset-top,0px)+--spacing(3))] left-[calc(env(safe-area-inset-left,0px)+--spacing(3))] z-40 rounded-md border shadow-sm backdrop-blur md:hidden" />
 
-      <SidebarInset className="min-w-0 overflow-hidden">
+      {/* Installed to a home screen the app draws edge-to-edge (viewport-fit=cover
+          + black-translucent), so the inset — not the browser — must keep clear of
+          the status bar and the landscape notch. env() is 0px everywhere else. */}
+      <SidebarInset className="min-w-0 overflow-hidden pt-[env(safe-area-inset-top,0px)] pr-[env(safe-area-inset-right,0px)] pl-[env(safe-area-inset-left,0px)]">
         <div
           className="min-h-0 flex-1 overflow-hidden"
           style={{

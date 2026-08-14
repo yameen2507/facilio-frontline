@@ -187,7 +187,10 @@ function Sidebar({
           data-sidebar="sidebar"
           data-slot="sidebar"
           data-mobile="true"
-          className="w-(--sidebar-width) bg-sidebar p-0 text-sidebar-foreground [&>button]:hidden"
+          // Safe-area padding: the sheet is a viewport-fixed portal, so the
+          // shell's own inset padding (Layout) can't reach it — standalone-PWA
+          // installs would slide the brand row under the iOS status bar.
+          className="w-(--sidebar-width) bg-sidebar p-0 pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)] pl-[env(safe-area-inset-left,0px)] text-sidebar-foreground [&>button]:hidden"
           style={
             {
               "--sidebar-width": SIDEBAR_WIDTH_MOBILE,
