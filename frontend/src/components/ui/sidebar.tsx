@@ -377,7 +377,13 @@ function SidebarContent({ className, ...props }: React.ComponentProps<"div">) {
       data-slot="sidebar-content"
       data-sidebar="content"
       className={cn(
-        "flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden",
+        // `overscroll-auto` in the collapsed state is ours, not shadcn's: this is
+        // the one element in the app that carries both a scrolling overflow and
+        // a variant that turns it off. globals.css matches the class string, so
+        // without this it would keep `overscroll-behavior: none` while collapsed
+        // to icons — a box that cannot scroll and refuses to hand the gesture up,
+        // which kills the wheel over the whole rail.
+        "flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden group-data-[collapsible=icon]:overscroll-auto",
         className
       )}
       {...props}
