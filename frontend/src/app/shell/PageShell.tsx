@@ -27,6 +27,7 @@
 import type { ReactNode } from "react";
 import { ChevronLeft } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
+import { SidebarTrigger } from "@/components/ui/sidebar";
 import { NAV_TOP } from "../../layout/sidebar/nav-config";
 import OverlayScrollbar from "../../ui/OverlayScrollbar";
 
@@ -80,23 +81,27 @@ export function PageShell({
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      {/* px steps down on phones — six units of gutter is a tenth of the screen.
-          The mobile sidebar trigger floats at top-left (Layout), so the title
-          indents past it below md. */}
+      {/* px steps down on phones — six units of gutter is a tenth of the screen. */}
       {/* py-3, and the rows inside add NO outer padding of their own: the band
           breathes equally above the title and below whatever ends it — a title
           row alone, or the control row under it. */}
-      <div className="shrink-0 border-b px-4 py-3 max-md:pl-14 sm:px-6">
+      <div className="shrink-0 border-b px-4 py-3 sm:px-6">
         {/* The title row: one slim line. min-h rather than h so wrapped
             actions on a phone can grow it. */}
         <div className="flex min-h-8 flex-wrap items-center gap-x-4 gap-y-2">
           <div className="flex min-w-0 flex-1 items-center gap-x-1.5">
+            {/* The mobile sidebar summons, IN the title row rather than a
+                floating chip the title had to indent past — a boxed button
+                beside a boxed chevron read as clutter, and the row's left
+                gutter was going unused. Desktop never sees it; the sidebar's
+                brand row owns the control there. */}
+            <SidebarTrigger className="text-muted-foreground -ml-1.5 shrink-0 md:hidden" />
             {back ? (
               <Link
                 to={back.to}
                 aria-label={`Back to ${back.label}`}
                 title={`Back to ${back.label}`}
-                className="text-muted-foreground hover:bg-muted hover:text-foreground -ml-1.5 flex size-7 shrink-0 items-center justify-center rounded-md transition-colors"
+                className="text-muted-foreground hover:bg-muted hover:text-foreground flex size-7 shrink-0 items-center justify-center rounded-md transition-colors md:-ml-1.5"
               >
                 <ChevronLeft className="size-4" />
               </Link>
@@ -112,11 +117,17 @@ export function PageShell({
               ) : null}
             </div>
           </div>
+          {/* A direct row item, not part of the actions cluster: on a phone it
+              takes order-last + w-full, so the wrap drops it onto its own
+              FULL-WIDTH line under the title — squeezed beside the title it was
+              a sliver. On sm+ it sits on the right as before. */}
+          {searchInTitleRow ? (
+            <div className="min-w-0 max-sm:order-last max-sm:w-full">{search}</div>
+          ) : null}
           {/* flex-wrap, not shrink-0: a detail page carries five actions, and on
               a phone they wrap under the title instead of forcing a scroll. */}
-          {actions || searchInTitleRow ? (
+          {actions ? (
             <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
-              {searchInTitleRow ? search : null}
               {actions}
             </div>
           ) : null}

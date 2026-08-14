@@ -22,6 +22,7 @@ import { Empty, ErrorState } from "../../../ui/States";
 import { Tabs } from "../../../ui/Tabs";
 import { listLeads } from "../api/leads-util";
 import { ScoreCell, SlaChip, StatusChip } from "../components/LeadChips";
+import { NewLeadDialog } from "../components/NewLeadDialog";
 import { countBuckets, filterLeads, type TabId } from "../filters";
 import type { Lead } from "../types/lead";
 
@@ -43,6 +44,7 @@ export function Inbox() {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<TabId>("open");
   const [reloadKey, setReloadKey] = useState(0);
+  const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -75,9 +77,14 @@ export function Inbox() {
     <PageShell
       title="Leads"
       actions={
-        <Button small glyph="refresh" onClick={reload}>
-          Refresh
-        </Button>
+        <>
+          <Button small glyph="refresh" onClick={reload}>
+            Refresh
+          </Button>
+          <Button small variant="primary" glyph="plus" onClick={() => setCreating(true)}>
+            New lead
+          </Button>
+        </>
       }
       strip={
         <Tabs
@@ -138,12 +145,24 @@ export function Inbox() {
           ) : (
             <Empty
               title={tab === "open" ? "No open leads" : "Nothing in this view"}
-              body="Enquiries arrive here from the website chat and land as unclaimed leads."
-              action={<LinkButton to="/chat">Try the website chat</LinkButton>}
+              body="Enquiries arrive from the website chat as unclaimed leads. One that came in by phone, by email or as a tender notice is raised here by hand."
+              action={
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <Button variant="primary" glyph="plus" onClick={() => setCreating(true)}>
+                    New lead
+                  </Button>
+                  <LinkButton to="/chat">Try the website chat</LinkButton>
+                </div>
+              }
             />
           )}
         </Card>
       </div>
+
+      {/* Stays mounted so the radix exit animation plays. A capture refreshes the
+          list even when the dialog holds its ground on the duplicate outcome —
+          the row exists either way, and the Closed tab should show it. */}
+      <NewLeadDialog open={creating} onOpenChange={setCreating} onCreated={reload} />
     </PageShell>
   );
 }

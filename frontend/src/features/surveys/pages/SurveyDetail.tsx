@@ -15,7 +15,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, CalendarPlus, ChevronRight, Footprints, UserPlus } from "lucide-react";
+import { CalendarPlus, ChevronRight, Footprints, UserPlus } from "lucide-react";
 import { useActor } from "../../../app/auth";
 import { PageShell } from "../../../app/shell/PageShell";
 import { ago, when } from "../../../lib/format";
@@ -114,34 +114,32 @@ export function SurveyDetail() {
             }`
           : "Loading…"
       }
+      // Loose buttons, not one wrapping div: the shell's action slot wraps its
+      // ITEMS, and a single rigid flex row can't wrap — on a phone it overflowed
+      // past the left screen edge. (The old "All surveys" button duplicated the
+      // shell's back chevron and only crowded the phone header.)
       actions={
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => navigate("/surveys")}>
-            <ArrowLeft className="size-4" />
-            All surveys
-          </Button>
-          {survey && !terminal ? (
-            <>
-              <Button variant="outline" onClick={() => setScheduling(true)}>
-                <CalendarPlus className="size-4" />
-                {survey.status === "draft" ? "Schedule visit" : "Add visit"}
+        survey && !terminal ? (
+          <>
+            <Button variant="outline" onClick={() => setScheduling(true)}>
+              <CalendarPlus className="size-4" />
+              {survey.status === "draft" ? "Schedule visit" : "Add visit"}
+            </Button>
+            <Button variant="outline" onClick={() => setAssigning(true)}>
+              <UserPlus className="size-4" />
+              Assign
+            </Button>
+            {detail?.visits.length ? (
+              <Button onClick={() => navigate(`/surveys/${id}/walk`)}>
+                <Footprints className="size-4" />
+                Open walk
               </Button>
-              <Button variant="outline" onClick={() => setAssigning(true)}>
-                <UserPlus className="size-4" />
-                Assign
-              </Button>
-              {detail?.visits.length ? (
-                <Button onClick={() => navigate(`/surveys/${id}/walk`)}>
-                  <Footprints className="size-4" />
-                  Open walk
-                </Button>
-              ) : null}
-              <Button variant="outline" onClick={() => setCancelling(true)}>
-                Cancel survey
-              </Button>
-            </>
-          ) : null}
-        </div>
+            ) : null}
+            <Button variant="outline" onClick={() => setCancelling(true)}>
+              Cancel survey
+            </Button>
+          </>
+        ) : null
       }
       strip={<Tabs items={buildTabs(detail)} active={tab} onChange={setTab} />}
     >

@@ -378,15 +378,18 @@ export function SurveyWalk() {
           ? `${survey.title ?? "Untitled survey"}${visit ? ` · ${visit.visitNumber}` : ""}`
           : "Loading…"
       }
+      // Loose items so the shell's action slot can wrap them on a phone. The
+      // Survey button stays: the shell's chevron backs out to the LIST, not to
+      // this walk's survey.
       actions={
-        <div className="flex items-center gap-2">
+        <>
           {survey ? <SurveyStatusChip status={survey.status} /> : null}
           {visit ? <VisitStatusChip status={visit.status} /> : null}
           <Button variant="outline" onClick={() => navigate(`/surveys/${id}`)}>
             <ArrowLeft className="size-4" />
             Survey
           </Button>
-        </div>
+        </>
       }
     >
       <Stack>

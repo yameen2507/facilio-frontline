@@ -17,7 +17,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowDown, ArrowLeft, ArrowUp, Eye, Plus, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Eye, Plus, Trash2 } from "lucide-react";
 import { useActor } from "../../../app/auth";
 import { PageShell } from "../../../app/shell/PageShell";
 import { Card, Stack } from "../../../ui/Card";
@@ -282,16 +282,12 @@ export function TemplateBuilder() {
       <PageShell
         title={name}
         subtitle={`v${versionNo} · ${status} — content is frozen; clone it to make changes`}
+        // No wrapping div — the shell's action slot wraps its items, and a rigid
+        // row overflows a phone. The back chevron already leads to /templates.
         actions={
-          <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={() => navigate("/templates")}>
-              <ArrowLeft className="size-4" />
-              Templates
-            </Button>
-            <Button onClick={clone} disabled={cloning}>
-              {cloning ? "Cloning…" : "Clone to new draft"}
-            </Button>
-          </div>
+          <Button onClick={clone} disabled={cloning}>
+            {cloning ? "Cloning…" : "Clone to new draft"}
+          </Button>
         }
       >
         <Stack>
@@ -314,8 +310,9 @@ export function TemplateBuilder() {
           ? `Draft v${versionNo} — saving rewrites this draft in place`
           : "Drafting locally — nothing is kept until you save or publish"
       }
+      // Loose buttons so the shell's action slot can wrap them on a phone.
       actions={
-        <div className="flex items-center gap-2">
+        <>
           <Button variant="outline" onClick={() => setPreview((p) => !p)} disabled={!sections.length}>
             <Eye className="size-4" />
             {preview ? "Back to editing" : "Preview"}
@@ -337,7 +334,7 @@ export function TemplateBuilder() {
           >
             {saving === "publish" ? "Publishing…" : "Publish"}
           </Button>
-        </div>
+        </>
       }
     >
       <Stack>

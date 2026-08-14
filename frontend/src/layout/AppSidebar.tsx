@@ -63,10 +63,11 @@ function BrandMark({ className }: { className?: string }) {
       fill="none"
       aria-hidden="true"
       // The brand lime (#C4FF00) is built for dark ground and disappears on
-      // the light sidebar, so light mode wears the same hue pulled down to
-      // olive; dark mode keeps the true lime. currentColor lets one path
-      // serve both.
-      className={cn("text-[hsl(74_100%_29%)] dark:text-[#C4FF00]", className)}
+      // the light sidebar. Rather than the same hue pulled down to olive
+      // (which read as murky), light mode wears a bright orange that carries
+      // the same energy on white; dark mode keeps the true lime. currentColor
+      // lets one path serve both.
+      className={cn("text-[#F97316] dark:text-[#C4FF00]", className)}
     >
       <path
         d="M5.36269e-07 1.33971e-07C-0.00109738 4.24287 1.68369 8.31242 4.68376 11.3135C7.68383 14.3145 11.7534 16.0012 15.9974 16.0026L15.9974 1.33971e-07L5.36269e-07 1.33971e-07ZM15.9974 16.0026H32L32 1.33971e-07C29.8981 -0.000271818 27.8167 0.413492 25.8748 1.21765C23.9329 2.02181 22.1685 3.20061 20.6824 4.68669C19.1963 6.17278 18.0177 7.93703 17.2138 9.87865C16.4099 11.8203 15.9966 13.9012 15.9974 16.0026ZM15.9974 16.0026L15.9974 32H32C32.0001 29.8991 31.5863 27.8187 30.7821 25.8777C29.978 23.9366 28.7992 22.173 27.3132 20.6875C25.8272 19.2019 24.063 18.0236 22.1214 17.2197C20.1798 16.4159 18.0989 16.0023 15.9974 16.0026ZM15.9974 16.0026L5.36269e-07 16.0026L5.36269e-07 32C4.24324 31.9992 8.3124 30.3133 11.3124 27.3133C14.3125 24.3133 15.9977 20.2447 15.9974 16.0026Z"

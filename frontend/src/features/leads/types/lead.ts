@@ -22,6 +22,35 @@ export type LeadStatus =
 
 export type Verdict = "relevant" | "not_relevant" | string;
 
+/**
+ * The channels `create` accepts. `widget` is deliberately absent from the
+ * staff-facing picker (see NewLeadDialog) but stays in the type, because leads
+ * already in the queue carry it.
+ */
+export type LeadSource = "widget" | "tender" | "inapp";
+
+/** The lead `create` matched against, when it decided the new one is a repeat. */
+export type DuplicateMatch = {
+  id: string;
+  refNo: string;
+  companyName: string | null;
+  status: string;
+  matchedOn: "email" | "phone" | "domain";
+};
+
+/**
+ * What `create` answers with — NOT a `LeadDetail`. A duplicate still gets a row:
+ * it comes back `status: "closed"` with `duplicateOf` populated, and never enters
+ * the queue. A caller that ignores `duplicateOf` reports a capture that, from the
+ * inbox's point of view, did not happen.
+ */
+export type CreatedLead = {
+  leadId: string;
+  refNo: string;
+  status: LeadStatus;
+  duplicateOf: DuplicateMatch | null;
+};
+
 /** The response clocks, derived server-side when the list is read. */
 export type Sla = {
   isOverdue: boolean;
