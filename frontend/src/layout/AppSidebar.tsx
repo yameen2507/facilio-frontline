@@ -34,22 +34,15 @@ import {
 } from "@/components/ui/sidebar";
 import { NavUser } from "./NavUser";
 import {
-  NAV_TOP,
   SETTINGS_NAV,
+  navGroups,
   type NavItemEntry,
 } from "./sidebar/nav-config";
 
-type Group = { label?: string; items: NavItemEntry[] };
-
-/** Fold the flat entry list into labelled groups; group spacing is the divider. */
-function toGroups(): Group[] {
-  const groups: Group[] = [{ items: [] }];
-  for (const entry of NAV_TOP) {
-    if (entry.type === "section") groups.push({ label: entry.label, items: [] });
-    else if (!entry.hidden) groups[groups.length - 1].items.push(entry);
-  }
-  return groups.filter((g) => g.items.length > 0);
-}
+/** The whole nav, folded into labelled groups; group spacing is the divider.
+    The fold itself lives in nav-config because the phone's More sheet folds the
+    same list, just a different slice of it. */
+const GROUPS = navGroups();
 
 /** The Frontline pinwheel, inlined so it needs no asset fetch. Drawn bare —
     no tile behind it — at 20px: a shade larger than the 16px nav icons so the
@@ -153,8 +146,19 @@ function WaveDivider({ className }: { className?: string }) {
       // my-3: the wave needs air on both sides to read as a section break. The
       // groups' own py-1.5 alone left it crowded against the item above and the
       // section label below, so the three ran together as one list.
+      // w-full is LOad-BEARING, not tidiness. An <svg> with no `width` and no
+      // `viewBox` is a replaced element with no intrinsic size, so it falls back
+      // to the CSS default of 300px — `h-[5px]` pinned the height and left the
+      // width there, and `shrink-0` stopped the flex column reclaiming it. That
+      // 300px box overflowed a 256px sidebar and a 48px rail: the footer has no
+      // overflow rule, so its wave painted out past the rail's border and over
+      // the page behind it.
+      //
+      // The inset is px-2, not mx-2: with border-box, width:100% ALREADY has the
+      // padding inside it, where a horizontal margin would sit outside and put
+      // the overflow straight back.
       className={cn(
-        "text-sidebar-foreground/35 mx-2 my-3 h-[5px] shrink-0 [mask-image:linear-gradient(to_right,black,transparent)]",
+        "text-sidebar-foreground/35 my-3 h-[5px] w-full shrink-0 px-2 [mask-image:linear-gradient(to_right,black,transparent)]",
         className
       )}
       aria-hidden="true"
@@ -199,6 +203,7 @@ function NavButton({ item, active, badge }: { item: NavItemEntry; active: boolea
 export default function AppSidebar() {
   const location = useLocation();
   const counts = useCounts();
+  const { isMobile } = useSidebar();
   const at = (path: string) => location.pathname.startsWith(path);
   /** The number a nav item's badge shows, or nothing while it is unknown. */
   const badgeFor = (item: NavItemEntry): number | undefined => {
@@ -207,6 +212,13 @@ export default function AppSidebar() {
       : null;
     return n || undefined;
   };
+
+  // Below `md` the rail is not the navigation — MobileTabBar is. Shadcn's
+  // Sidebar answers `isMobile` by rendering itself as an offcanvas Sheet, and
+  // leaving that mounted would keep a second, unreachable copy of the whole nav
+  // one ⌘B away from sliding over the tab bar. Nothing is lost visually: the
+  // desktop branch is `hidden md:block`, so this width never showed it anyway.
+  if (isMobile) return null;
 
   return (
     <Sidebar collapsible="icon">
@@ -221,7 +233,7 @@ export default function AppSidebar() {
       {/* gap-0: the wave is the divider now, and the default gap on top of
           each group's padding was reading as dead space between sections. */}
       <SidebarContent className="gap-0">
-        {toGroups().map((group, i) => (
+        {GROUPS.map((group, i) => (
           <Fragment key={group.label ?? i}>
             {i > 0 ? <WaveDivider /> : null}
             <SidebarGroup className="py-1.5">
@@ -251,7 +263,7 @@ export default function AppSidebar() {
         <SidebarMenu>
           <NavButton item={SETTINGS_NAV} active={at(SETTINGS_NAV.to)} />
         </SidebarMenu>
-        <WaveDivider className="mx-0 my-0" />
+        <WaveDivider className="my-0 px-0" />
         <SidebarMenu>
           <NavUser />
         </SidebarMenu>

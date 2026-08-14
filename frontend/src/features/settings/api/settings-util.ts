@@ -62,28 +62,16 @@ export type Settings = {
 
 export const getSettings = () => request<Settings>("settings-get");
 
-/** The response targets travel as flat numeric fields. */
-export const putSla = (sla: Settings["sla"]) => request<unknown>("settings-put", { ...sla });
+// putSla is gone with its card (removed 2026-08-14): the response targets run
+// on the seeded defaults and stay editable via `lead.settings-put` without UI.
+// The `sla` field stays on the Settings type because `settings-get` returns it
+// and createLead stamps due dates from it.
 
-/**
- * The prompt fields go through the `payload` envelope rather than as flat
- * fields, and that is not a style choice: clearing the scope notes means sending
- * `""`, and a blank flat field is dropped upstream as an unresolved
- * connection-action template — so the clear would silently never happen.
- *
- * The agent identifiers (`analystAgent`, `analystAgentLink`) are accepted by the
- * same handler but are no longer sent from the console — they are CLI-managed,
- * and the UI inputs for them only ever collected mistyped copies. An absent key
- * leaves the saved value alone, like resetAnalystTask's partial payload.
- */
-export const putPrompt = (fields: { scopeNotes: string; analystTask: string }) =>
-  request<unknown>("settings-put", { payload: JSON.stringify(fields) });
-
-/**
- * An empty task restores the shipped default server-side, so the default wording
- * lives in exactly one place instead of being copied into this client.
- */
-export const resetAnalystTask = () => request<unknown>("settings-put", { payload: JSON.stringify({ analystTask: "" }) });
+// The analyst-brief wrappers (putPrompt, resetAnalystTask) moved with their
+// card to the widget playground and live in features/chat/api/analyst-util.ts —
+// its own thin copy, since features never import each other's internals. The
+// `prompt`/`brief`/`agent` fields stay on the Settings type above because
+// `settings-get` still returns them.
 
 /**
  * Service-line saves travel through the payload envelope for the same reason

@@ -29,6 +29,7 @@ import {
   publishBlockers,
   publishStatusBlocker,
   TEMPLATE_STATUSES,
+  UNITS,
   type FieldType,
   type LevelBinding,
   type TemplateStatus,
@@ -547,6 +548,12 @@ export function importTemplate(input: {
       if (q.options !== undefined && q.options.some((o) => typeof o !== "string")) {
         throw new Error("options must be an array of strings");
       }
+      // The VALUE is validated whenever one is given; its PRESENCE on a
+      // `number` is a publish blocker, not a save error. A draft mid-authoring
+      // legitimately has a number question whose unit is not chosen yet.
+      if (q.unit !== undefined && q.unit !== null && q.unit !== "") {
+        inSet(q.unit, UNITS, "unit");
+      }
     }
   }
 
@@ -685,7 +692,12 @@ export function importTemplate(input: {
 
   const blockers = publishBlockers(
     input.sections.map((s) => ({
-      questions: s.questions.map((q) => ({ fieldType: q.fieldType, options: q.options ?? [] })),
+      questions: s.questions.map((q) => ({
+        fieldType: q.fieldType,
+        options: q.options ?? [],
+        unit: q.unit ?? null,
+        estimationKey: q.estimationKey ?? null,
+      })),
     }))
   );
 

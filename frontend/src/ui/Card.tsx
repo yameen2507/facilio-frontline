@@ -32,6 +32,11 @@ export function Card({
 }) {
   return (
     <UICard className={cn("gap-0 overflow-hidden py-0", className)} style={style}>
+      {/* Both sides WRAP rather than truncate, and deliberately: `title` and
+          `meta` both carry tenant text at some call sites (a survey section's
+          name and description), and an ellipsis there hides content the header
+          exists to show. The cost is that a long meta in a narrow card wraps
+          the title beside it — keep metas here to a few words. */}
       {title ? (
         <header className="flex items-center gap-3 border-b px-4 py-2.5">
           <h3 className="text-muted-foreground text-xs font-medium tracking-[0.06em] uppercase">

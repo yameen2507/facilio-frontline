@@ -30,8 +30,8 @@
  * wants the full view navigates to it.
  */
 
-import { request } from "../../../lib/request";
-import type { CreatedLead, Lead, LeadDetail, LeadSource, TranscriptMessage } from "../types/lead";
+import { request, requestFrom } from "../../../lib/request";
+import type { CreatedLead, DealSurvey, Lead, LeadDetail, LeadSource, TranscriptMessage } from "../types/lead";
 
 /** The page size the inbox asks for. The handler has no cursor; this is the cap. */
 export const LIST_LIMIT = 100;
@@ -114,3 +114,13 @@ export const storeAnalysis = (leadId: string, replyJson: string) =>
 
 export const getTranscript = (sessionToken: string) =>
   request<{ messages: TranscriptMessage[] }>("intake-transcript", { sessionToken });
+
+/**
+ * Surveys raised against this lead's deal — `survey.list` filtered by dealId.
+ * Calls the `survey` function directly rather than importing the surveys
+ * feature's api-util: features do not import each other's internals, and this
+ * thin duplicate is the cheapest honest boundary (the same pattern the surveys
+ * module uses for `form.template-list`).
+ */
+export const listDealSurveys = (dealId: string) =>
+  requestFrom<{ surveys: DealSurvey[]; total: number }>("survey", "list", { dealId, limit: 50 });

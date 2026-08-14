@@ -25,6 +25,8 @@
  */
 
 import { getSetting } from "./settings";
+import { restampCompleteness } from "./survey";
+import { ANCESTRY_SEPARATOR } from "../domain/ancestry";
 import { many, mutate, nowIso, one } from "../shared/db";
 import { appendEvent } from "../shared/events";
 
@@ -78,7 +80,7 @@ export interface CaptureObservation {
 
 export interface CapturePhoto {
   id?: string;
-  /** What the photo evidences: survey, survey_visit, section_entry, answer, observation, prospect_node. */
+  /** What the photo evidences: survey, survey_visit, section_entry, answer, observation, prospect_location. */
   entityType: string;
   entityId: string;
   vibeFileId: number;
@@ -99,6 +101,10 @@ const PHOTO_ENTITY_TYPES = [
   "section_entry",
   "answer",
   "observation",
+  "prospect_location",
+  // `prospect_node` is purged vocabulary (§0a) but stays ACCEPTED, not emitted:
+  // fl_photo rows written before the rename carry it in `entity_type`, and this
+  // list is what validates them on read. Dropping it would orphan real photos.
   "prospect_node",
 ];
 
@@ -176,7 +182,7 @@ export function walkState(surveyId: string, visitId?: string | null): Record<str
               or entity_id in (select id from fl_survey_section_entry where survey_id = $1)
               or entity_id in (select id from fl_survey_answer where survey_id = $1)
               or entity_id in (select id from fl_survey_observation where survey_id = $1)
-              or entity_id in (select id from fl_prospect_node where survey_id = $1)
+              or entity_id in (select id from fl_prospect_location where survey_id = $1)
            limit 1000
         ) x) as photos_arr,
 
@@ -264,7 +270,7 @@ export function captureBatch(input: CaptureInput): Record<string, unknown> {
   // status, which instances exist, which entries exist, and which entries the
   // existing answers belong to.
   const ctx = one<{
-    survey: { id: string; status: string; dealId: string } | null;
+    survey: { id: string; status: string; dealId: string; prospectSiteId: string | null } | null;
     visit: { id: string; status: string } | null;
     sectionIds: { id: string; createsPortfolioNode: string; nodeTypeCreated: string | null }[];
     questionIds: { id: string }[];
@@ -273,7 +279,8 @@ export function captureBatch(input: CaptureInput): Record<string, unknown> {
   }>(
     `select
        (select row_to_json(x) from (
-          select id, status, deal_id from fl_survey where id = $1 and is_active = 'true'
+          select id, status, deal_id, prospect_site_id
+            from fl_survey where id = $1 and is_active = 'true'
         ) x) as survey_obj,
        (select row_to_json(x) from (
           select id, status from fl_survey_visit
@@ -431,20 +438,37 @@ export function captureBatch(input: CaptureInput): Record<string, unknown> {
       .map((e) => e.id as string);
 
     if (nodeEntryIds.length) {
-      const marks = nodeEntryIds.map((_, i) => `$${i + 4}`).join(", ");
+      // C3, the ancestry rule. This used to write `parent_id = null` and
+      // set `ancestry_path` to the node's own id, which made every room the
+      // walk discovered a parentless root — `F-03`. A record missing a level
+      // saves and then silently disappears from the tree, from site-scoped work
+      // orders and from dashboards, so the damage surfaces only after the
+      // promotion has already written it into the CMMS.
+      //
+      // The survey's site is the root. It cannot be null: C32 makes it
+      // mandatory at creation, and this guard is what stops a survey created
+      // before C32 from quietly resuming the old behaviour.
+      if (!survey.prospectSiteId) {
+        throw new Error(
+          `survey ${input.surveyId} has no site, so a space cannot be placed in the portfolio — ` +
+            "set its site before walking (C32)"
+        );
+      }
+
+      const marks = nodeEntryIds.map((_, i) => `$${i + 5}`).join(", ");
       written.nodes = mutate(
-        `insert into fl_prospect_node
-           (id, deal_id, survey_id, node_type, parent_node_id, ancestry_path, name,
+        `insert into fl_prospect_location
+           (id, deal_id, survey_id, type, parent_id, ancestry_path, name,
             provenance, verdict, created_by, updated_by, is_active, data_json, created_at, updated_at)
          select md5('node:' || e.id)::uuid::text, $1, $2, coalesce(i.node_type_created, 'space'),
-                null, md5('node:' || e.id)::uuid::text, e.entry_label,
+                $4, $4 || '${ANCESTRY_SEPARATOR}' || md5('node:' || e.id)::uuid::text, e.entry_label,
                 'survey', 'added_on_site', $3, $3, 'true', '{}', e.created_at, e.created_at
            from fl_survey_section_entry e
            join fl_survey_section_instance i on i.id = e.section_instance_id
           where e.survey_id = $2 and e.id in (${marks})
-            and not exists (select 1 from fl_prospect_node n
+            and not exists (select 1 from fl_prospect_location n
                              where n.id = md5('node:' || e.id)::uuid::text)`,
-        [survey.dealId, input.surveyId, input.actor, ...nodeEntryIds]
+        [survey.dealId, input.surveyId, input.actor, survey.prospectSiteId, ...nodeEntryIds]
       );
 
       mutate(
@@ -537,6 +561,17 @@ export function captureBatch(input: CaptureInput): Record<string, unknown> {
     actor: input.actor,
     meta: { visitId: input.visitId, ...written },
   });
+
+  // Capture is the ONLY thing that moves completeness — every answer written
+  // above is a required question that may just have been satisfied. Restamped
+  // here rather than left to the next transition, because otherwise the number
+  // the list and the record page print would be stale for the entire walk,
+  // which is exactly the stretch anyone is watching it.
+  //
+  // Deliberately after the writes and outside their failure path: a survey
+  // whose percentage is a batch behind is a cosmetic problem, and losing the
+  // capture to fix it would not be.
+  restampCompleteness(input.surveyId, now);
 
   return { written, ...walkState(input.surveyId, input.visitId) };
 }

@@ -190,3 +190,34 @@ export function stampColumnsFor(to: SurveyStatus): readonly string[] {
 export function incrementsRework(from: SurveyStatus, to: SurveyStatus): boolean {
   return from === "pending_review" && to === "in_progress";
 }
+
+/**
+ * C32: a survey names the property it is for, and the caller gives exactly one
+ * of an existing site or a new site's name. Returns why the pair is unusable,
+ * or null.
+ *
+ * This is the pure half of `resolveSurveySite` — the half that does not need the
+ * database — and it is here rather than inline in the module so it can be
+ * tested. There is no db harness in this repo, so a rule left inside a function
+ * that calls `one()` is a rule with no test.
+ *
+ * Both-given is rejected rather than silently preferring one. The two answers
+ * mean different things ("use that property" vs "there is a new property"), so
+ * picking one for the caller would create a site nobody asked for, or ignore the
+ * one they named.
+ */
+export function siteSelectionBlocker(input: {
+  prospectSiteId?: string | null;
+  siteName?: string | null;
+}): string | null {
+  const id = (input.prospectSiteId ?? "").trim();
+  const name = (input.siteName ?? "").trim();
+
+  if (id && name) {
+    return "give either an existing site or a new site name, not both";
+  }
+  if (!id && !name) {
+    return "a survey needs the property it is for — pick an existing site or name a new one";
+  }
+  return null;
+}

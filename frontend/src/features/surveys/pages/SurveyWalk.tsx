@@ -22,7 +22,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Camera, Plus } from "lucide-react";
+import { Camera, Plus } from "lucide-react";
 import { useActor } from "../../../app/auth";
 import { PageShell } from "../../../app/shell/PageShell";
 import { vibe } from "../../../lib/vibe";
@@ -57,6 +57,37 @@ const asQuestion = (q: WalkQuestion): Question => ({
   fieldType: q.fieldType as Question["fieldType"],
   options: q.options ?? [],
 });
+
+/**
+ * Which column an answer belongs in. A `number` question writes `value_number`,
+ * which is what the handoff's `value_type` is computed from and what the
+ * estimator prices — that is the whole point of C31.
+ *
+ * Two deliberate fallbacks, both §6 #2 (never block on a missing field, record
+ * best-available and flag it):
+ *
+ *  - **Blank** sends neither column, so nothing was captured. It must NOT send
+ *    `valueNumber: 0` — a zero quantity prices as a real service costing
+ *    nothing, which is worse than an honest gap.
+ *  - **Unparseable** ("about 4.5k") falls back to `value_text` rather than
+ *    being dropped. The estimator then reports that the key cannot be priced,
+ *    which is true, instead of the answer vanishing between the walk and the
+ *    quote.
+ */
+function answerValueFields(
+  value: AnswerValue,
+  fieldType: string | undefined
+): { valueJson?: string[]; valueText?: string; valueNumber?: number } {
+  if (Array.isArray(value)) return { valueJson: value };
+  if (fieldType !== "number") return { valueText: value };
+
+  const trimmed = value.trim();
+  if (!trimmed) return {};
+
+  // Strip grouping commas only — a stray unit or word still fails, on purpose.
+  const parsed = Number(trimmed.replace(/,/g, ""));
+  return Number.isFinite(parsed) ? { valueNumber: parsed } : { valueText: value };
+}
 
 type PendingEntry = { id: string; sectionInstanceId: string; entryLabel: string };
 type PendingAnswer = {
@@ -150,6 +181,13 @@ export function SurveyWalk() {
   const questionLabelById = useMemo(() => {
     const map = new Map<string, string>();
     for (const s of walk?.sections ?? []) for (const q of s.questions) map.set(q.id, q.label);
+    return map;
+  }, [walk]);
+
+  /** Which answers belong in `value_number` rather than `value_text` (C31). */
+  const questionTypeById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const s of walk?.sections ?? []) for (const q of s.questions) map.set(q.id, q.fieldType);
     return map;
   }, [walk]);
 
@@ -334,7 +372,7 @@ export function SurveyWalk() {
         id: a.id,
         questionInstanceId: a.questionInstanceId,
         sectionEntryId: a.sectionEntryId,
-        ...(Array.isArray(a.value) ? { valueJson: a.value } : { valueText: a.value }),
+        ...answerValueFields(a.value, questionTypeById.get(a.questionInstanceId)),
       })),
       observations: Object.entries(pendingConditions).map(([entryId, c]) => ({
         id: c.id,
@@ -378,17 +416,22 @@ export function SurveyWalk() {
           ? `${survey.title ?? "Untitled survey"}${visit ? ` · ${visit.visitNumber}` : ""}`
           : "Loading…"
       }
-      // Loose items so the shell's action slot can wrap them on a phone. The
-      // Survey button stays: the shell's chevron backs out to the LIST, not to
-      // this walk's survey.
+      // The chevron goes to THIS walk's survey, not to the survey list — which
+      // is what retires the "← Survey" button that used to sit in the actions.
+      // Two controls pointing backwards, one of them a full-width labelled
+      // button, was the header saying "go back" twice.
+      back={{ label: survey?.refNo ?? "the survey", to: `/surveys/${id}` }}
+      // Loose items so the shell's action slot can wrap them on a phone.
+      //
+      // BOTH chips name their object. A survey and its visit are different
+      // records with overlapping vocabularies, and unlabelled they came out as
+      // "Scheduled" beside "Planned" — two blue pills, near-synonyms, reading
+      // as one fact printed twice. The survey's state is why capture may be
+      // read-only; the visit's is the trip the surveyor is standing in.
       actions={
         <>
-          {survey ? <SurveyStatusChip status={survey.status} /> : null}
-          {visit ? <VisitStatusChip status={visit.status} /> : null}
-          <Button variant="outline" onClick={() => navigate(`/surveys/${id}`)}>
-            <ArrowLeft className="size-4" />
-            Survey
-          </Button>
+          {survey ? <SurveyStatusChip status={survey.status} of="Survey" /> : null}
+          {visit ? <VisitStatusChip status={visit.status} of="Visit" /> : null}
         </>
       }
     >
@@ -457,13 +500,19 @@ export function SurveyWalk() {
         )}
       </Stack>
 
-      {/* bottom uses max() so the pill clears the iPhone home indicator when
-          installed as a PWA (viewport-fit=cover exposes the safe-area inset). */}
+      {/* The pill is viewport-fixed, so it has to step over both things that
+          own the bottom edge: the phone tab bar (--bottom-nav, 0 above `md`)
+          and, on a PWA install, the iPhone home indicator under it. This is the
+          page a technician works on a phone all day — the save control landing
+          behind the navigation is the one that would actually cost work. */}
       {editable ? (
-        <div className="pointer-events-none fixed inset-x-0 bottom-[max(1rem,env(safe-area-inset-bottom))] z-40 flex justify-center">
-          <div className="bg-background pointer-events-auto flex items-center gap-3 rounded-full border px-4 py-2 shadow-lg">
+        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(var(--bottom-nav)+env(safe-area-inset-bottom,0px)+--spacing(4))] z-40 flex justify-center px-4">
+          {/* Wraps rather than overflows: a long save error beside the button is
+              wider than a phone, and a pill that runs off both edges hides the
+              message it exists to deliver. */}
+          <div className="bg-background pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-x-3 gap-y-1.5 rounded-2xl border px-4 py-2 shadow-lg sm:rounded-full">
             {saveError ? (
-              <span className="text-destructive max-w-96 text-xs">{saveError}</span>
+              <span className="text-destructive min-w-0 text-xs">{saveError}</span>
             ) : (
               <span className="text-muted-foreground text-sm">
                 {uploading

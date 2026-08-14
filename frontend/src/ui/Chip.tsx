@@ -28,14 +28,29 @@ export function Chip({
   children,
   tone = "neutral",
   dot = false,
+  small = false,
 }: {
   children: ReactNode;
   tone?: Tone;
   /** The leading bullet, for a chip that reports a live state. */
   dot?: boolean;
+  /** Compact, for a chip that annotates a line of text (a "primary" tag
+      beside a name) — full size next to 14px text reads as a second title. */
+  small?: boolean;
 }) {
   return (
-    <Badge variant="outline" className={cn("rounded-full font-medium whitespace-nowrap", TONES[tone])}>
+    <Badge
+      variant="outline"
+      className={cn(
+        "rounded-full font-medium whitespace-nowrap",
+        // The leading is set, not left to inherit: 10px text in the parent's
+        // 16px line box gave the pill dead space above and below the words,
+        // which read as a full-size chip that had been squashed. Sized to its
+        // own text, it hugs.
+        small && "px-1.5 py-0 text-[10px] leading-[13px]",
+        TONES[tone]
+      )}
+    >
       {dot ? <span className="size-1.5 shrink-0 rounded-full bg-current" aria-hidden="true" /> : null}
       {children}
     </Badge>

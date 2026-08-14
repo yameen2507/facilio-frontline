@@ -1,0 +1,34 @@
+{
+  // The BACKEND typecheck — CLAUDE.md §12 G11, and `Prospect Portfolio Module
+  // v1.1.md` §14 step 2 puts it before any table work for a reason.
+  //
+  // Until this file existed, `src/` was typechecked by nothing at all: the root
+  // tsconfig.json includes exactly one ambient declaration (it is there for the
+  // shadcn CLI's "@/*" alias) and its own comment records that the root
+  // typecheck "has always been a no-op". Nothing caught a type error in 13,000
+  // lines of service layer, and nothing caught a SQL comment whose backtick
+  // closed a template literal — that only surfaced at `npm run bundle`.
+  //
+  // It is a SEPARATE file rather than a change to tsconfig.json because the root
+  // config is load-bearing for the shadcn CLI and points its path alias at
+  // `frontend/src`. Two roots, two jobs; `npm run typecheck` runs this one.
+  //
+  // `lib` carries "dom" for `fetch` only — `shared/facilio.ts` is its single
+  // caller and the function host provides it. Everything else the backend needs
+  // from its environment is declared in `src/env.d.ts`, deliberately narrowly:
+  // see that file for why @types/node would make the check dishonest.
+  "compilerOptions": {
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "target": "es2022",
+    "lib": ["es2022", "dom"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": false,
+    "verbatimModuleSyntax": false,
+    "forceConsistentCasingInFileNames": true,
+    "noUncheckedIndexedAccess": false
+  },
+  "include": ["src/**/*.ts"]
+}

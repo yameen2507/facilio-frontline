@@ -28,8 +28,10 @@ import {
 import { vibe } from '@/lib/vibe'
 import { ThemeSwitcher } from '@/theme/ThemeSwitcher'
 
-/** "Mohamed Yameen" → "MY"; falls back to the email's first letter. */
-function initials(name: string | undefined, email: string | undefined): string {
+/** "Mohamed Yameen" → "MY"; falls back to the email's first letter. Exported
+    for the phone's More sheet, which carries the same identity block without
+    the sidebar chrome this one is wrapped in. */
+export function initials(name: string | undefined, email: string | undefined): string {
   const source = (name ?? '').trim()
   if (source) {
     const parts = source.split(/\s+/)

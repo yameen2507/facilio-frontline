@@ -2,31 +2,36 @@
  * The survey data layer.
  *
  * LIVE: the desk slice (`create`, `list`, `get`, `schedule`, `transition`,
- * `deal-list`, `reference` — built 2026-08-13) and the WALK slice (`assign`,
- * `set-lead`, `walk`, `capture`, `attach` — built 2026-08-14, photos included).
- * The wrappers still marked [SEAM] below — update, visit-transition,
- * node-verdict, reconciliation and submit — await the review slice and stay
- * uncalled; their surfaces keep real empty states rather than firing at
- * missing handlers. On failure every call returns `{ data: null, error }` like
- * the rest of the app, and the page renders that error verbatim.
+ * `deal-list`, `reference` — built 2026-08-13), the WALK slice (`assign`,
+ * `set-lead`, `walk`, `capture`, `attach` — built 2026-08-14, photos included)
+ * the COMPLETION slice (2026-08-14): `get` now carries `readiness` and
+ * `transition` enforces the T5/T7 count guards, which is what makes Send for
+ * review, Send back for rework and Complete real rather than decorative; and
+ * the CLOSE-OUT slice (2026-08-14): `update`, `node-verdict`, `reconcile` and
+ * `reconcile-decide`, which retires the last of this file's seams — every
+ * wrapper below now has a handler behind it.
+ *
+ * On failure every call returns `{ data: null, error }` like the rest of the
+ * app, and the page renders that error verbatim.
  *
  * | handler            | args                                            | returns                          |
  * | ------------------ | ----------------------------------------------- | -------------------------------- |
  * | `list`             | status, dealId, leadUserEmail, search, limit    | `{ surveys[], total, truncated }` |
- * | `get`              | surveyId                                        | full detail, one batched query   |
+ * | `get`              | surveyId                                        | full detail + readiness          |
  * | `create`           | dealId, scheduledStart?, templateId?, actorEmail| `{ survey }`                     |
- * | `update`           | surveyId, title, targetCompletionDate, notes    | `{ survey }`                     |
- * | `transition`       | surveyId, toStatus, reason, actorEmail          | `{ survey }`                     |
+ * | `update`           | surveyId, title, targetCompletionDate, notes…   | `{ survey }`                     |
+ * | `transition`       | surveyId, toStatus, reason, actorEmail          | `{ survey, warnings[] }`         |
  * | `schedule`         | surveyId, visitId?, scheduledStart, ...         | `{ visit }`                      |
  * | `visit-transition` | visitId, toStatus, reason                       | `{ visit }`                      |
  * | `assign`           | surveyId, payload:{assignees[]}                 | `{ assignees[] }`                |
  * | `set-lead`         | surveyId, assigneeId, reason                    | `{ survey }`                     |
  * | `walk`             | surveyId, visitId?                              | the whole walk state             |
  * | `capture`          | payload:{entries[],answers[],observations[]...} | refreshed walk state             |
- * | `node-verdict`     | nodeId, verdict, verdictNote, visitId           | `{ node }`                       |
- * | `reconcile`        | surveyId                                        | `{ items[] }`                    |
+ * | `node-import`      | surveyId, payload:{nodes[]}, actorEmail         | `{ nodes, observations }`        |
+ * | `node-verdict`     | nodeId, verdict, verdictNote, actorEmail        | `{ node }`                       |
+ * | `qualification-*`  | surveyId/qualificationId, text, actorEmail      | `{ qualifications[] }`           |
+ * | `reconcile`        | surveyId, actorEmail                            | `{ items[], written, unreachable }` |
  * | `reconcile-decide` | itemId, decision, manualValue, actorEmail       | `{ item }`                       |
- * | `submit`           | surveyId, actorEmail                            | `{ survey, checksum }`           |
  *
  * Complex input travels inside `payload` as a JSON string: handler parameters
  * may only be `string` or `number`, so arrays cannot be sent as flat fields.
@@ -35,6 +40,8 @@
 import { requestFrom, type Result } from "../../../lib/request";
 import type {
   Assignee,
+  ProspectNode,
+  Qualification,
   ReconciliationItem,
   Survey,
   SurveyDetailResponse,
@@ -76,11 +83,18 @@ export const getWalk = (surveyId: string, visitId?: string) =>
 
 // ── Desk mutations ───────────────────────────────────────────────────────────
 
-/** `survey.create` — asks three things; only `dealId` is mandatory. */
+/**
+ * `survey.create` — the deal AND the property are mandatory (C32). Pass
+ * `prospectSiteId` for a site already on the deal, or `siteName` to create one.
+ * Sending neither is rejected by the server, not silently defaulted: a survey
+ * with no site is what made every room the walk found an orphan (`F-03`).
+ */
 export const createSurvey = (
   dealId: string,
   actorEmail: string,
   opts: {
+    prospectSiteId?: string;
+    siteName?: string;
     scheduledStart?: string;
     scheduledEnd?: string;
     templateId?: string;
@@ -89,6 +103,22 @@ export const createSurvey = (
     targetCompletionDate?: string;
   } = {}
 ) => call<{ survey: Survey }>("create", { dealId, actorEmail, ...opts });
+
+/** A site as the create-survey picker needs it. */
+export type SiteOption = {
+  id: string;
+  name: string;
+  code: string | null;
+  facilioId: string | null;
+};
+
+/**
+ * `survey.site-list` — sites on ONE deal. Deal-scoped rather than
+ * account-scoped: with no `previous_pursuit_id` column, a building cannot yet be
+ * carried forward between pursuits, and sharing one row across two would break
+ * §3b's point-in-time rule.
+ */
+export const listSites = (dealId: string) => call<{ sites: SiteOption[] }>("site-list", { dealId });
 
 /** A deal as the create-survey picker needs it. */
 export type DealOption = {
@@ -126,21 +156,50 @@ export const listPublishedTemplates = () =>
     limit: 100,
   });
 
-/** [SEAM] `survey.update` — status is rejected here; use `transition`. */
-export const updateSurvey = (surveyId: string, fields: Record<string, string>) =>
-  call<{ survey: Survey }>("update", { surveyId, ...fields });
+/**
+ * `survey.update` — the record's own fields. Status is rejected here by the
+ * handler, not merely omitted by this wrapper: a status that could be typed
+ * into an update is a state machine with a back door.
+ */
+export const updateSurvey = (
+  surveyId: string,
+  fields: {
+    title?: string;
+    targetCompletionDate?: string;
+    contractIntent?: string;
+    notes?: string;
+  },
+  actorEmail: string
+) => call<{ survey: Survey }>("update", { surveyId, actorEmail, ...fields });
 
 /**
- * `survey.transition` — guards live server-side in `domain/survey-state.ts`,
- * not in this client. Cancelling and rework both require a reason; T5/T6/T7 are
- * lead-only. The UI disables what it can, but the function is the authority.
+ * `survey.transition` — EVERY lifecycle move, including the three that finish a
+ * survey: T5 send for review, T6 bounce back for rework, T7 complete. There is
+ * no separate `submit` handler; completing IS a transition to `completed`.
+ *
+ * Guards live server-side and are the authority — the shape rules in
+ * `domain/survey-state.ts`, the count rules (open visits, unverdicted nodes,
+ * unanswered required questions, undecided reconciliation rows) in
+ * `domain/survey-completeness.ts`. Cancelling and rework require a reason;
+ * T5/T6/T7 are lead-only, matched against the recorded lead. The UI disables
+ * what it can and shows `readiness` from `get` so a person sees what is owed
+ * BEFORE clicking, but a refusal here is still the last word.
+ *
+ * `warnings` come back on success: things the move proceeded PAST rather than
+ * things that stopped it.
  */
 export const transitionSurvey = (
   surveyId: string,
   toStatus: string,
   reason: string,
   actorEmail: string
-) => call<{ survey: Survey }>("transition", { surveyId, toStatus, reason, actorEmail });
+) =>
+  call<{ survey: Survey; warnings?: string[] }>("transition", {
+    surveyId,
+    toStatus,
+    reason,
+    actorEmail,
+  });
 
 /** `survey.schedule` — schedule AND reschedule; always re-runs conflict-warn. */
 export const scheduleVisit = (surveyId: string, body: Record<string, unknown>) =>
@@ -198,21 +257,140 @@ export const attachPhoto = (
   actorEmail: string
 ) => call<{ photo: WalkPhoto }>("attach", { surveyId, actorEmail, ...payload(photo) });
 
-/** [SEAM] `survey.node-verdict` — a note is mandatory for not_found / not_visited / changed. */
+/** A frozen revision, as the handoff needs to describe it. */
+export type SurveyRevision = {
+  id: string;
+  surveyId?: string;
+  revisionNo: number;
+  frozenAt?: string | null;
+  frozenBy?: string | null;
+  checksum?: string | null;
+  triggerKind?: string | null;
+  isCurrent?: string | null;
+  surveyRefNo?: string | null;
+  surveyTitle?: string | null;
+  completenessPct?: number | null;
+  notVisitedPct?: number | null;
+};
+
+/** `survey.revision-list` — what a proposal may be priced from, by survey or deal. */
+export const listRevisions = (by: { surveyId?: string; dealId?: string }) =>
+  call<{ revisions: SurveyRevision[] }>("revision-list", by);
+
+/**
+ * Raise a proposal against this survey's frozen revision — THE HANDOFF the
+ * proposal module exists for ("a Proposal turns a frozen survey revision into
+ * priced lines using a rate card", Proposal Spec §1).
+ *
+ * Calls the `proposal` function directly rather than importing the proposals
+ * feature's api-util, for the same reason `listPublishedTemplates` above calls
+ * `form` directly: features do not import each other's internals, and a thin
+ * duplicate at the boundary is cheaper than a dependency between two lanes
+ * that are meant to be owned separately.
+ *
+ * The revision id is what makes this different from raising a bare proposal —
+ * without it `line-generate` stays disabled and the estimator prices from
+ * nothing.
+ */
+export const createProposalFromSurvey = (
+  dealId: string,
+  surveyRevisionId: string,
+  actorEmail: string,
+  title?: string
+) =>
+  requestFrom<{ proposal: { id: string; refNo: string } }>("proposal", "create", {
+    dealId,
+    surveyRevisionId,
+    actorEmail,
+    ...(title ? { title } : {}),
+  });
+
+/** One row of the tender documents' building list, as the import dialog collects it. */
+export type NodeImport = {
+  name: string;
+  nodeType?: string;
+  /** Another node's name IN THE SAME BATCH — ids derive from names, so order
+      does not matter and a parent may be listed after its children. */
+  parentName?: string;
+  areaSqft?: number;
+  floorCount?: number;
+  roomCount?: number;
+  restroomCount?: number;
+  floorLabel?: string;
+};
+
+/**
+ * `survey.node-import` — seed the portfolio with what the tender documents
+ * CLAIMED, before anybody walks it.
+ *
+ * This is the handler the rest of the module assumes. Without seeded nodes a
+ * verdict has nothing to be recorded against, coverage has no denominator, and
+ * the value-level reconciliation diffs have no claimed side to compare — which
+ * is why every numeric attribute is stored as an observation too, not just as
+ * a column on the node.
+ *
+ * Re-importing a corrected list updates in place; a node's verdict is never
+ * overwritten, because the documents may be re-read but what a surveyor found
+ * on site is not theirs to revise.
+ */
+export const importNodes = (surveyId: string, nodes: NodeImport[], actorEmail: string) =>
+  call<{ nodes: number; observations: number }>("node-import", {
+    surveyId,
+    actorEmail,
+    ...payload({ nodes }),
+  });
+
+/** `survey.qualification-add` — an exclusion that prints on the proposal. */
+export const addQualification = (surveyId: string, text: string, actorEmail: string) =>
+  call<{ qualifications: Qualification[] }>("qualification-add", {
+    surveyId,
+    text,
+    actorEmail,
+  });
+
+/** `survey.qualification-remove` — soft; a withdrawn exclusion is still history. */
+export const removeQualification = (qualificationId: string, actorEmail: string) =>
+  call<{ qualifications: Qualification[] }>("qualification-remove", {
+    qualificationId,
+    actorEmail,
+  });
+
+/**
+ * `survey.node-verdict` — what the surveyor found at a node the tender
+ * documents claimed. A note is mandatory for changed / not_found / not_visited,
+ * and the handler REFUSES a verdict on a capture-created node: that node's
+ * `added_on_site` records how it came to exist, and the completion guard counts
+ * on the distinction.
+ */
 export const setNodeVerdict = (
   nodeId: string,
   verdict: string,
   verdictNote: string,
-  visitId: string
-) => call<unknown>("node-verdict", { nodeId, verdict, verdictNote, visitId });
+  actorEmail: string
+) => call<{ node: ProspectNode }>("node-verdict", { nodeId, verdict, verdictNote, actorEmail });
 
 // ── Review and handoff ───────────────────────────────────────────────────────
 
-/** [SEAM] `survey.reconcile` — deterministic diff; suggests, never decides. */
-export const runReconcile = (surveyId: string) =>
-  call<{ items: ReconciliationItem[] }>("reconcile", { surveyId });
+/**
+ * `survey.reconcile` — the deterministic diff; suggests, never decides.
+ *
+ * Idempotent: item ids are derived from the disagreement itself, so pressing
+ * the button twice updates rather than duplicates, and a row somebody has
+ * already closed is left exactly as they left it.
+ *
+ * `unreachable` names the diff types this run COULD NOT have found. The
+ * value-level comparisons need the tender documents' own figures, which arrive
+ * through an RFP import that does not exist in this build — so an empty result
+ * means "nothing found among what we can check", not "nothing disagrees", and
+ * the surface says so.
+ */
+export const runReconcile = (surveyId: string, actorEmail: string) =>
+  call<{ items: ReconciliationItem[]; written: number; unreachable: string[] }>("reconcile", {
+    surveyId,
+    actorEmail,
+  });
 
-/** [SEAM] `survey.reconcile-decide` — lead only. Every row is closed by a person. */
+/** `survey.reconcile-decide` — every row is closed by a person (D-S2). */
 export const decideReconcileItem = (
   itemId: string,
   decision: string,
@@ -228,6 +406,7 @@ export const decideReconcileItem = (
     actorEmail,
   });
 
-/** [SEAM] `survey.submit` — T7. Freezes the revision and notifies the deal owner. */
-export const submitSurvey = (surveyId: string, actorEmail: string) =>
-  call<{ survey: Survey; checksum: string }>("submit", { surveyId, actorEmail });
+// T7 is `transitionSurvey(id, "completed", …)`, not a handler of its own — see
+// the note there. The `submit` wrapper this replaced was a seam that never had
+// a handler behind it, and keeping it would have offered two ways to complete
+// a survey where the server only has one.

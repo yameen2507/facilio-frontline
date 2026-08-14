@@ -17,7 +17,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Paperclip, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { Question } from "../types/template";
+import { UNIT_LABEL, type Question, type Unit } from "../types/template";
 
 /** One question's answer. An array only when `allowMultiple` is on. */
 export type AnswerValue = string | string[];
@@ -193,6 +193,27 @@ export function QuestionField({
           rows={3}
           placeholder="Type the answer"
         />
+      ) : question.fieldType === "number" ? (
+        /* The unit sits INSIDE the field, not beside the label: the surveyor is
+           typing a quantity and needs to see what it is measured in at the
+           moment of typing. `inputMode="decimal"` gets the numeric keypad on a
+           phone, which is where the walk happens. */
+        <div className="relative">
+          <Input
+            type="text"
+            inputMode="decimal"
+            value={text}
+            disabled={disabled}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="0"
+            className={question.unit ? "pr-16" : undefined}
+          />
+          {question.unit ? (
+            <span className="text-muted-foreground pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs">
+              {UNIT_LABEL[question.unit as Unit] ?? question.unit}
+            </span>
+          ) : null}
+        </div>
       ) : question.fieldType === "options" ? (
         (question.options?.length ?? 0) >= 2 ? (
           <OptionPicker
@@ -349,7 +370,8 @@ export function RepeatEntryCard({
   index: number;
   repeatLabel: string;
   questions: Question[];
-  /** The walk scores condition per entry; a template preview does not. */
+  /** The per-entry condition scale — scored for real on the walk, rehearsed
+      in the builder's preview. */
   showCondition?: boolean;
   onRename: (label: string) => void;
   onAnswer: (questionId: string, v: AnswerValue) => void;

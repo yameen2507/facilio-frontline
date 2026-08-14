@@ -9,9 +9,11 @@
  * visitor saw) — it applies when the next conversation starts, and the panel
  * says so.
  *
- * The conversation brain is deliberately NOT configurable here: the intake
- * agent's instructions, provider and model are fixed when the agent is created
- * (CLI-managed), same as the analyst. What this page owns is presentation.
+ * This page owns the WHOLE intake pipeline: the widget a visitor talks to
+ * (presentation, saved in this browser) and the lead analyst's briefing (the
+ * scope notes and task appended to every assessment — a real settings read,
+ * in its own card). The agents' identities stay CLI-managed either way; the
+ * intake agent's instructions, provider and model are fixed at creation.
  */
 
 import { useState } from "react";
@@ -27,6 +29,7 @@ import {
   WIDGET_DEFAULTS,
   type WidgetConfig,
 } from "../api/widget-config";
+import { AnalystCard } from "../components/AnalystCard";
 import { WidgetPreview } from "../components/WidgetPreview";
 
 const FIELD_LABEL = "text-muted-foreground mb-1 block text-xs";
@@ -50,7 +53,7 @@ export function Playground() {
   };
 
   return (
-    <PageShell title="Web widget" subtitle="Configure the site widget and try it, in one place">
+    <PageShell title="Web widget" subtitle="The intake pipeline: the widget, and the analyst that assesses what comes in">
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
         <div className="flex flex-col gap-5">
           <Card title="Widget">
@@ -117,19 +120,15 @@ export function Playground() {
             </Bar>
 
             <div className="text-muted-foreground mt-3 text-xs">
-              Saved in this browser for now — the settings endpoint the embed script will read is not built
-              yet, so this styles the playground only.
+              Saved in this browser — the embed script's settings endpoint is not built yet, so this
+              styles the playground only.
             </div>
           </Card>
 
-          <Card title="Conversation brain" meta="CLI-managed">
-            <div className="text-muted-foreground text-xs">
-              The conversation runs on the <span className="font-mono">intake</span> agent; its
-              instructions, provider and model are fixed when the agent is created — change them with{" "}
-              <span className="font-mono">facilio vibe agent update</span>. What gets appended to the lead
-              analyst's briefing lives in Settings.
-            </div>
-          </Card>
+          {/* The analyst's briefing, under the widget it assesses for. Its own
+              fetch and states — the widget column is localStorage and cannot
+              fail; this can, and must say so without taking the page with it. */}
+          <AnalystCard />
         </div>
 
         {/* The dotted canvas the reference tools preview on — it reads as "the

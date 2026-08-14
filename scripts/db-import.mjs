@@ -258,6 +258,48 @@ const tables = {
   },
 
   // ==========================================================================
+  // ACCESS LANE — 2 tables. roles&response spec §5–§9.
+  //
+  // The permission matrix deliberately has NO table: it rides in
+  // fl_role.data_json.permissions ({ module: [action, ...] }), because it is
+  // read whole, written whole, and enforcement is client-side (the functions
+  // runtime carries no caller identity). `org_id` is provisioned now for the
+  // coming Organization module — the run body already carries orgId, and a
+  // column can never be added later.
+  // ==========================================================================
+
+  fl_user: {
+    ...common,
+    org_id: "org-0", // text on purpose: ids that look numeric are strings here
+    name: "Seed User",
+    email: "seed@example.com",
+    email_norm: "seed@example.com", // lowercased lookup key — bootstrap matches on it
+    role_id: SEED_ID,
+    team: "Seed Team",
+    region: "Seed Region",
+    department: "Seed Dept",
+    manager_email: "seed@example.com",
+    status: "inactive", // live values: active | inactive
+    job_title: "Seed Title",
+    phone: "+971500000000",
+    created_by: "seed@example.com",
+    updated_by: "seed@example.com",
+  },
+
+  fl_role: {
+    ...common,
+    org_id: "org-0",
+    code: "ROLE-000", // seeded ROLE-001…009 per spec §5; fl_sequence 'role' mints ROLE-010+
+    name: "Seed Role",
+    description: "Seed row - safe to delete",
+    active: "false",
+    is_system: "false", // System Admin immutability is data, not a name-string check
+    sort_order: 0,
+    created_by: "seed@example.com",
+    updated_by: "seed@example.com",
+  },
+
+  // ==========================================================================
   // SURVEY LANE — 18 tables. Survey Backend Plan v1 §3.
   //
   // Three seed rules apply to everything below, and a violation of any of them
@@ -634,6 +676,100 @@ const tables = {
     geo_accuracy_m: 0,
   },
 
+  // ---- the prospect portfolio, as its own product area ---------------------
+  //
+  // `Prospect Portfolio Module v1.1.md` §5.1. This SUPERSEDES fl_prospect_node:
+  // §0a purged "node" from the vocabulary, `node_type` becomes `type`, and v1.1
+  // adds the address block, the bid/no-bid decision, the convert state machine
+  // and `previous_pursuit_id`. The old table is left in place because nothing is
+  // ever hard-deleted; `migrate.copy-prospect-locations` walks its rows forward.
+  //
+  // ⚠ EVERY COLUMN IS HERE ON PURPOSE. §12 F-6: there is no ALTER, so a
+  // forgotten column means a new table and a data migration. The spec's own
+  // instruction is "cut screens, never columns" — so screens are cut below and
+  // this list is complete even where no screen reads it yet.
+  //
+  // Two ledger items answered from the shipped repo rather than by a throwaway
+  // import (v1.1 §14 step 1):
+  //   L15 — `tags` is `tags_json`, TEXT holding a JSON string. Inference makes
+  //         everything non-numeric text anyway, and the repo already stores
+  //         every structured value this way (`options_json`, `value_json`,
+  //         `buildings_in_scope_json`). Nothing here depends on real jsonb.
+  //   L17 — `fl_prospect_attachment` does NOT ship. fl_photo already carries
+  //         `kind`, `captured_at` and the geo triple inside `data_json`, which
+  //         is precisely §5.3's stated condition for the table not existing.
+  //         `entity_type` takes 'prospect_location'.
+  fl_prospect_location: {
+    ...common,
+    deal_id: SEED_ID,
+    // Kept although §5.1 omits it: the walk needs to know which survey created
+    // a location, and F-6 says be generous now rather than migrate later.
+    survey_id: SEED_ID,
+    type: "space",
+    parent_id: SEED_ID,
+    ancestry_path: "/seed",
+    name: "Seed Location",
+    code: "SEED",
+    client_level_label: "facility",
+    tags_json: "[]",
+    // ADDRESS — the v1.0 miss. First thing an RFP contains.
+    address_line: "1 Seed Street",
+    city: "Seedville",
+    region: "Seed Region",
+    country: "AE",
+    postcode: "00000",
+    latitude: 0,
+    longitude: 0,
+    // SIZE AND SHAPE
+    area_sqft: 0,
+    floor_count: 0,
+    room_count: 0,
+    restroom_count: 0,
+    floor_label: "Ground",
+    ceiling_height_band: "standard_8_10ft",
+    space_category: "none",
+    // DECISION AND ORIGIN
+    pursuit_decision: "undecided",
+    pursuit_decision_note: "seed",
+    provenance: "manual",
+    source_attachment_id: SEED_ID,
+    verdict: "unverified",
+    verdict_note: "seed",
+    verdict_by: "seed@example.com",
+    verdict_at: NOW,
+    verdict_visit_id: SEED_ID,
+    // FACILIO AND REPEAT PURSUITS
+    facilio_id: "none",
+    facilio_module: "none",
+    previous_pursuit_id: SEED_ID,
+    convert_state: "not_converted",
+    created_by: "seed@example.com",
+    updated_by: "seed@example.com",
+    is_active: "false",
+  },
+
+  // §5.5. Nobody writes this from a handler except the convert run itself, and
+  // §9's override is explicit: not even Admin may write it. An audit trail an
+  // admin can edit is not an audit trail.
+  fl_prospect_convert_log: {
+    ...common,
+    location_id: SEED_ID,
+    deal_id: SEED_ID,
+    target_module: "site",
+    target_parent_facilio_id: "none",
+    // `location:{id}:{target_module}` — read before every write. A CHECK, not a
+    // constraint: §3a P1 forbids the unique index that would make it one, and
+    // §5.5 says to state that residual risk rather than claim idempotency.
+    dedup_key: "location:seed:site",
+    status: "pending",
+    facilio_id_created: "none",
+    error_text: "none",
+    run_id: SEED_ID,
+    attempted_by: "seed@example.com",
+    attempted_at: NOW,
+    is_active: "false",
+  },
+
   // ---- review, submit, handoff --------------------------------------------
 
   fl_survey_recommendation: {
@@ -711,15 +847,25 @@ const tables = {
   },
 
   // ==========================================================================
-  // QUOTE LANE — 4 tables. C10 (optional lines excluded from totals),
+  // PROPOSAL LANE — 5 tables. C10 (optional lines excluded from totals),
   // C11 (condition-adjusted rates), C12 (one-time + recurring), C14 (semi-comp
   // liability threshold). Consumes the survey lane's frozen §5 payload.
+  //
+  // TERMINOLOGY: the word "quote" does not appear in this lane. These tables
+  // replace the never-imported fl_quote / fl_quote_line / fl_rate_card_entry
+  // drafts; the platform never had them, so this is a redraw, not a migration.
   //
   // The survey lane's three seed rules apply unchanged. Two columns are C23
   // landmines if seeded wrong: `facilio_service_id` is a Facilio Services id —
   // a numeric string in the wild, seeded "none" so it stays text, and NULLABLE
   // until the G1 pass answers L10. `service_code` is OUR catalogue code
-  // (fl_service_line.code), never a copied Facilio name.
+  // (fl_service_line.code), never a copied Facilio name. `client_account_id`
+  // on the rate card is the same shape and the same trap.
+  //
+  // MONEY: every amount column is numeric(14,2) holding MAJOR units. JS holds
+  // integer MINOR units end to end (ARCHITECTURE.md §7) and converts at the db
+  // boundary in src/modules/proposal.ts — never inside src/domain, which stays
+  // pure and integer-only.
   // ==========================================================================
 
   fl_rate_card: {
@@ -727,12 +873,20 @@ const tables = {
     name: "Seed Rate Card",
     description: "Seed row - safe to delete",
     currency: "AED",
+    // Resolution inputs (spec §1.2 step 2). Both nullable in life — null means
+    // "applies to all" — and most specific wins: region+client, then client,
+    // then region, then neither. `priority` breaks a tie.
+    region: "none",
+    client_account_id: "none",
+    priority: 0,
+    status: "archived",
+    effective_from: NOW,
+    effective_to: NOW,
     // The direction this card's condition multipliers were authored in. D-e is
     // unsettled and both conventions live in this product; stamping the card's
     // assumption is what makes a later flip detectable instead of a mispriced
     // contract (src/domain/pricing.ts).
     condition_scale_direction: "1_is_worst",
-    status: "archived",
     version_no: 0,
     parent_rate_card_id: SEED_ID,
     published_by: "seed@example.com",
@@ -744,18 +898,29 @@ const tables = {
     is_active: "false",
   },
 
-  fl_rate_card_entry: {
+  fl_rate_card_row: {
     ...common,
     rate_card_id: SEED_ID,
     facilio_service_id: "none",
     service_code: "SEED",
-    description: "Seed entry - safe to delete",
+    description: "Seed row - safe to delete",
     // Joins §5 payload `estimation_values` to a price. The KEY is the contract
-    // between the lanes (§5 rule 2), so it lives on the rate entry, not on any
-    // question wording.
+    // between the lanes (§5 rule 2), so it lives on the rate row, not on any
+    // question wording. This is also the ONLY automatic survey->line path in
+    // P1: the spec's Service x Basis x Unit lookup needs a Service, and
+    // deriving one from a survey answer is deferred to the P2 AI layer (§7).
     estimation_key: "seed_key",
+    // Unit | Hour | Visit. `uom` depends on it (roles&response §4.3): unit ->
+    // sq_ft / sq_m / washroom / room / person / site, hour -> hour,
+    // visit -> per_visit. Both are enum-likes: text here, validated in domain/.
+    pricing_basis: "unit",
     uom: "unit",
-    unit_rate: 0,
+    // ONE price per row (spec §3). Cost rate, minimum sell rate and the
+    // criteria engine are all cut. `min_charge` survives the cut because the
+    // built priceLine() floors on it — see proposal-pricing.ts for the order:
+    // the floor applies AFTER the pricing mode, so a discount cannot price a
+    // job below the cost of mobilising a crew.
+    price: 0,
     min_charge: 0,
     condition_multipliers_json: "{}",
     default_frequency: "one_time",
@@ -766,70 +931,151 @@ const tables = {
     is_active: "false",
   },
 
-  fl_quote: {
+  fl_proposal: {
     ...common,
-    ref_no: "QTE-0000",
+    ref_no: "PRP-0000",
     deal_id: SEED_ID,
     account_id: SEED_ID,
-    // Both nullable in life: C22 says a simple customer is quoted straight
+    // Both nullable in life: C22 says a simple customer is priced straight
     // from a call, with no survey at all.
     survey_id: SEED_ID,
     survey_revision_id: SEED_ID,
     rate_card_id: SEED_ID,
-    title: "Seed Quote",
+    // Which card won and why. Spec §3 requires the resolution to be VISIBLE on
+    // the proposal — an unexplained price is an unauditable one.
+    rate_card_resolved_reason: "seed",
+    title: "Seed Proposal",
     status: "superseded",
     currency: "AED",
     contract_type: "non_comprehensive",
     liability_threshold_amount: 0,
-    // Stamped at pricing time from the org setting, so a quote is auditable
+    // Stamped at pricing time from the org setting, so a proposal is auditable
     // even if D-e's answer later changes the org default.
     condition_scale_direction: "1_is_worst",
+    // Commercial shape (spec §1.1 TERMS).
+    payment_terms: "seed",
+    expected_programme: "seed",
     one_time_subtotal: 0,
     recurring_monthly_subtotal: 0,
     optional_one_time_total: 0,
     optional_recurring_monthly_total: 0,
+    // DELIBERATELY PRESENT AND UNWIRED. Tax is out of this build (spec §11) —
+    // a named fast-follow, not an oversight. The columns are drawn now because
+    // under no-DDL they cannot be added later. Do not wire them without a
+    // decision; an unasked-for VAT line on a proposal is a commercial error.
     tax_pct: 0,
     tax_one_time: 0,
     tax_recurring_monthly: 0,
     total_one_time: 0,
     total_recurring_monthly: 0,
     valid_until: NOW,
-    revision_no: 0,
-    parent_quote_id: SEED_ID,
-    superseded_by_quote_id: SEED_ID,
+    // The document (spec §6). `document_json` is the template SNAPSHOT taken at
+    // first render — an admin editing a template on Friday must not change a
+    // proposal already with a client. Same problem and same solution as the
+    // survey question snapshot (src/modules/snapshot.ts).
+    template_id: SEED_ID,
+    document_json: "{}",
+    // Approval (spec §4). Keys off deviation from card price, not margin —
+    // with cost cut from the rate card, margin is not visible anywhere.
+    deviation_pct: 0,
+    approved_by: "seed@example.com",
+    approved_at: NOW,
+    // Freeze on send (spec §5). `frozen_json` + `checksum` reuse
+    // src/domain/survey-revision.ts's canonicalJson + fnv1a verbatim.
+    sent_by: "seed@example.com",
     sent_at: NOW,
+    frozen_json: "{}",
+    checksum: "seedchecksum",
+    // Revision: a new row with a parent link, exactly the survey re-walk
+    // pattern (v1.8 T9). Lines belong to the revision, so revising COPIES them
+    // — which is what makes "their copy never changes" structurally true
+    // instead of a rule people have to remember.
+    revision_no: 0,
+    parent_proposal_id: SEED_ID,
+    superseded_by_proposal_id: SEED_ID,
+    decision: "seed",
+    decision_reason: "seed",
+    decided_at: NOW,
     accepted_at: NOW,
     rejected_at: NOW,
     reject_reason: "seed",
+    withdrawn_at: NOW,
+    withdraw_reason: "seed",
     notes: "Seed row - safe to delete",
     created_by: "seed@example.com",
     updated_by: "seed@example.com",
     is_active: "false",
   },
 
-  fl_quote_line: {
+  fl_proposal_line: {
     ...common,
-    quote_id: SEED_ID,
+    proposal_id: SEED_ID,
     sequence_no: 0,
     description: "Seed line - safe to delete",
     facilio_service_id: "none",
     service_code: "SEED",
     scope_node_id: SEED_ID,
     estimation_key: "seed_key",
+    // survey_entry | recommendation | manual | external_schedule.
+    source: "survey_entry",
+    source_ref_id: "none",
     source_answer_id: "none",
     source_observation_id: "none",
-    source_role: "finding",
     qty: 0,
+    pricing_basis: "unit",
     uom: "unit",
-    unit_rate: 0,
+    frequency: "one_time",
+    // THE DERIVATION IS THE POINT (spec §2.2). Exactly one price column is
+    // authoritative at each stage, and `unit_rate` from the old draft is gone
+    // so nothing can read a stale third number:
+    //   card_price    - copied from the rate row at creation, NEVER looked up
+    //                   again. This is what makes a sent proposal immune to a
+    //                   later rate change.
+    //   applied_price - card_price after the pricing mode.
+    //   line_total    - applied_price x qty x condition_multiplier.
+    rate_card_id: SEED_ID,
+    rate_card_row_id: SEED_ID,
+    card_price: 0,
+    // standard | discount | markup | custom. Discount and markup are ONE field
+    // with a sign — two mechanisms would mean two rounding bugs. `delta_reason`
+    // is mandatory for discount, markup and custom; free text in P1, and a
+    // seeded list later, because structured reasons are what make the P2 AI
+    // markup suggestions worth having.
+    pricing_mode: "standard",
+    delta_type: "pct",
+    delta_value: 0,
+    delta_reason: "seed",
+    applied_price: 0,
+    line_total: 0,
     condition_score: 0,
     condition_multiplier: 0,
-    frequency: "one_time",
     per_occurrence_amount: 0,
     monthly_equivalent_amount: 0,
     one_time_amount: 0,
     is_optional: "false",
     notes: "seed",
+    created_by: "seed@example.com",
+    updated_by: "seed@example.com",
+    is_active: "false",
+  },
+
+  // The only genuinely new table in this lane. A template is an ORDERED LIST OF
+  // SECTIONS, not an uploaded file. `sections_json` holds
+  // [{ type: "system" | "text", key, title, body }] — system sections render
+  // from proposal data (pricing table, optional services, exclusions), text
+  // sections are authored with {{tokens}} merged BY A FUNCTION, never a model.
+  fl_proposal_template: {
+    ...common,
+    name: "Seed Template",
+    description: "Seed row - safe to delete",
+    status: "archived",
+    version_no: 0,
+    sections_json: "[]",
+    is_default: "false",
+    published_by: "seed@example.com",
+    published_at: NOW,
+    archived_by: "seed@example.com",
+    archived_at: NOW,
     created_by: "seed@example.com",
     updated_by: "seed@example.com",
     is_active: "false",

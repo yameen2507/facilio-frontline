@@ -1,0 +1,2 @@
+id,data_json,created_at,updated_at,location_id,deal_id,target_module,target_parent_facilio_id,dedup_key,status,facilio_id_created,error_text,run_id,attempted_by,attempted_at,is_active
+00000000-0000-0000-0000-000000000000,{},2000-01-01T00:00:00Z,2000-01-01T00:00:00Z,00000000-0000-0000-0000-000000000000,00000000-0000-0000-0000-000000000000,site,none,location:seed:site,pending,none,none,00000000-0000-0000-0000-000000000000,seed@example.com,2000-01-01T00:00:00Z,false

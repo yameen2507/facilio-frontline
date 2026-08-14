@@ -9,27 +9,49 @@
  * has no boolean column. `if (s.isRepeatable)` is true for `"false"`.
  */
 
-/** Four types. That is the whole set in P1. */
-export type FieldType = "short_text" | "long_text" | "options" | "attachment";
+/**
+ * Five types. Mirrors `src/domain/form-template.ts` — that copy decides, this
+ * one exists so the builder can show blockers before the round trip. Keep them
+ * in step by hand.
+ */
+export type FieldType = "short_text" | "long_text" | "number" | "options" | "attachment";
 
-export const FIELD_TYPES: FieldType[] = ["short_text", "long_text", "options", "attachment"];
+export const FIELD_TYPES: FieldType[] = [
+  "short_text",
+  "long_text",
+  "number",
+  "options",
+  "attachment",
+];
 
 export const FIELD_TYPE_LABEL: Record<FieldType, string> = {
   short_text: "Short text",
   long_text: "Long text",
+  number: "Number",
   options: "Options",
   attachment: "Attachment",
 };
 
+/** Fixed list, so `sqft` and `sq ft` can never both exist (§8 C31). */
+export type Unit = "sqft" | "sqm" | "each" | "linear_m" | "hours";
+
+export const UNITS: Unit[] = ["sqft", "sqm", "each", "linear_m", "hours"];
+
+export const UNIT_LABEL: Record<Unit, string> = {
+  sqft: "sq ft",
+  sqm: "sq m",
+  each: "each",
+  linear_m: "linear m",
+  hours: "hours",
+};
+
 /**
- * ⚠ `number` is deliberately absent (decision D-k, still open). With only
- * `short_text`, "approximate total square footage" — the single most
- * load-bearing captured value — reaches the estimator as free text: "~4,500 sq
- * ft", "4500sqft", "about 4.5k". Adding `number` + `unit` is a code change, not
- * a migration: the column is already imported and `field_type` is validated in
- * `domain/`, not by the database.
+ * Only these two can carry an estimation key. A key on free text is what made
+ * `total_sqft` look wired up while pricing as nothing.
  */
-export const NUMBER_TYPE_IS_PENDING_DECISION = true;
+export const ESTIMABLE_TYPES: FieldType[] = ["number", "options"];
+
+export const isEstimable = (fieldType: FieldType) => ESTIMABLE_TYPES.includes(fieldType);
 
 export type TemplateStatus = "draft" | "published" | "archived";
 
@@ -104,12 +126,29 @@ export function publishBlockers(sections: Section[]): string[] {
   if (!sections.length) blockers.push("Add at least one section");
   else if (!sections.some((s) => s.questions.length)) blockers.push("Add at least one question");
 
-  const thinOptions = sections
-    .flatMap((s) => s.questions)
-    .filter((q) => q.fieldType === "options" && (q.options?.length ?? 0) < 2);
+  const questions = sections.flatMap((s) => s.questions);
 
+  const thinOptions = questions.filter(
+    (q) => q.fieldType === "options" && (q.options?.length ?? 0) < 2
+  );
   if (thinOptions.length) {
     blockers.push(`${thinOptions.length} options question(s) need at least two choices`);
+  }
+
+  const unitless = questions.filter(
+    (q) => q.fieldType === "number" && !UNITS.includes((q.unit ?? "") as Unit)
+  );
+  if (unitless.length) {
+    blockers.push(`${unitless.length} number question(s) need a unit`);
+  }
+
+  const misplacedKeys = questions.filter(
+    (q) => (q.estimationKey ?? "").trim() !== "" && !isEstimable(q.fieldType)
+  );
+  if (misplacedKeys.length) {
+    blockers.push(
+      `${misplacedKeys.length} question(s) carry an estimation key on a type that cannot be priced — move it to Number or Options`
+    );
   }
 
   return blockers;

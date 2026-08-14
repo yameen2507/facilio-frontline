@@ -26,15 +26,45 @@ export type TemplateStatus = "draft" | "published" | "archived";
 
 export const TEMPLATE_STATUSES: readonly TemplateStatus[] = ["draft", "published", "archived"];
 
-/** Four types. That is the whole set in P1 — `number` awaits decision D-k. */
-export type FieldType = "short_text" | "long_text" | "options" | "attachment";
+/**
+ * Five types. `number` closed decision D-k per CLAUDE.md §8 C31: without it,
+ * "approximate total square footage" — the most load-bearing value the walk
+ * captures — reached the estimator as free text ("~4,500 sq ft", "about 4.5k")
+ * and priced as nothing.
+ */
+export type FieldType = "short_text" | "long_text" | "number" | "options" | "attachment";
 
 export const FIELD_TYPES: readonly FieldType[] = [
   "short_text",
   "long_text",
+  "number",
   "options",
   "attachment",
 ];
+
+/**
+ * The unit list is fixed and short on purpose (§8 C31). A free-text unit
+ * reintroduces the exact ambiguity `number` exists to remove — "sqft" and "sq
+ * ft" and "SF" would all price differently.
+ */
+export type Unit = "sqft" | "sqm" | "each" | "linear_m" | "hours";
+
+export const UNITS: readonly Unit[] = ["sqft", "sqm", "each", "linear_m", "hours"];
+
+export function isUnit(value: unknown): value is Unit {
+  return typeof value === "string" && (UNITS as readonly string[]).includes(value);
+}
+
+/**
+ * Only these two types may carry an `estimationKey` (§8 C31). A key on free
+ * text is what made `total_sqft` unpriceable while looking wired up — the
+ * estimator read the key, found prose, and fell through to `unpriced`.
+ */
+export const ESTIMABLE_TYPES: readonly FieldType[] = ["number", "options"];
+
+export function isEstimable(fieldType: string): boolean {
+  return (ESTIMABLE_TYPES as readonly string[]).includes(fieldType);
+}
 
 export type LevelBinding = "per_survey" | "per_building" | "per_space";
 
@@ -76,6 +106,10 @@ export function archiveBlocker(status: TemplateStatus): string | null {
 export interface PublishQuestion {
   fieldType: string;
   options: unknown[] | null;
+  /** Required on `number`, meaningless elsewhere. */
+  unit?: string | null;
+  /** Allowed only on an estimable type — see `ESTIMABLE_TYPES`. */
+  estimationKey?: string | null;
 }
 
 export interface PublishSection {
@@ -83,10 +117,16 @@ export interface PublishSection {
 }
 
 /**
- * A template is publishable only when all three hold: at least one section,
- * at least one question somewhere, and every `options` question offers a real
- * choice. Returns every blocker at once — a builder that reveals them one
- * save at a time is a worse builder.
+ * A template is publishable only when all of these hold: at least one section,
+ * at least one question somewhere, every `options` question offers a real
+ * choice, every `number` question names its unit, and no estimation key sits on
+ * a type that cannot carry one. Returns every blocker at once — a builder that
+ * reveals them one save at a time is a worse builder.
+ *
+ * The last two are publish blockers rather than save errors on purpose. A draft
+ * written before `number` existed can hold an estimation key on `short_text`
+ * (the `F-02` shape); throwing on save would strand it with no way forward,
+ * whereas a blocker names the problem and still lets the author fix it.
  */
 export function publishBlockers(sections: PublishSection[]): string[] {
   const blockers: string[] = [];
@@ -94,12 +134,27 @@ export function publishBlockers(sections: PublishSection[]): string[] {
   if (!sections.length) blockers.push("Add at least one section");
   else if (!sections.some((s) => s.questions.length)) blockers.push("Add at least one question");
 
-  const thinOptions = sections
-    .flatMap((s) => s.questions)
-    .filter((q) => q.fieldType === "options" && (q.options?.length ?? 0) < 2);
+  const questions = sections.flatMap((s) => s.questions);
 
+  const thinOptions = questions.filter(
+    (q) => q.fieldType === "options" && (q.options?.length ?? 0) < 2
+  );
   if (thinOptions.length) {
     blockers.push(`${thinOptions.length} options question(s) need at least two choices`);
+  }
+
+  const unitless = questions.filter((q) => q.fieldType === "number" && !isUnit(q.unit));
+  if (unitless.length) {
+    blockers.push(`${unitless.length} number question(s) need a unit`);
+  }
+
+  const misplacedKeys = questions.filter(
+    (q) => (q.estimationKey ?? "").trim() !== "" && !isEstimable(q.fieldType)
+  );
+  if (misplacedKeys.length) {
+    blockers.push(
+      `${misplacedKeys.length} question(s) carry an estimation key on a type that cannot be priced — move it to Number or Options`
+    );
   }
 
   return blockers;

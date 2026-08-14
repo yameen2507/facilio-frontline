@@ -195,8 +195,11 @@ async function createClientContact(task: SyncTask): Promise<TaskOutcome> {
 
 export function syncStatus(): {
   counts: Record<string, number>;
-  failures: Array<Record<string, unknown>>;
+  failures: SyncTask[];
 } {
+  // `SyncTask[]`, not `Record<string, unknown>[]`: the rows really are tasks, and
+  // an interface without an index signature is not assignable to a Record — the
+  // first error the backend typecheck found once it started running at all (G11).
   return { counts: statusCounts(), failures: recentFailures(10) };
 }
 

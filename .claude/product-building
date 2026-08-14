@@ -1,0 +1,861 @@
+# Product Blueprint — portable, single file
+
+> **If you are an agent working in the repo this file was authored in, this is not the file to
+> read.** Read `.claude/skills/product-blueprint/SKILL.md` plus that repo's map instead — this
+> file deliberately omits every repo-specific fact, so following it here loses the token names,
+> the landmines and the house literals. This file exists only to be copied into a *different*
+> product.
+
+Everything needed to build an **agent console** — a product where a small operations team
+configures autonomous agents, watches what they did, and works the records that come out — with
+**no reference to any specific repo, design system or library**. Drop this one file into a new
+project and the whole system travels with it.
+
+> **This is a snapshot, deliberately forked.** It duplicates the multi-file skill it came from.
+> The moment you copy it into a new product, **this copy is canonical there** and the original is
+> canonical where it lives. Don't try to keep them in sync — they describe different products.
+
+**Install into a new project** (three steps, in order):
+
+1. Save this file as `.claude/skills/product-blueprint/SKILL.md` in the new repo, and give it the
+   YAML frontmatter in Appendix A. Parts 0–6 below are the skill.
+2. Split Part 7 into four files under `.claude/agents/` — one per agent, frontmatter included.
+   Each already refers to "this skill", so nothing needs rewiring.
+3. **Write your repo map before the second feature** using the template in Part 8. Until it
+   exists, every agent derives conventions by reading your code — which works, but slowly, and
+   it re-derives them every session.
+
+---
+
+## Part 0 — The one rule, if you only keep one
+
+**Copy the nearest working precedent. A new module that looks different is a new convention** —
+and a second way to do the same thing costs more than the feature earned. Before writing
+anything: find the closest existing surface, read it *in full* (the comments carry the
+constraints), and match its structure, spacing rhythm and comment density. Name the file you
+copied from when you report.
+
+**If the product is new and there is no precedent**, that rule has nothing to bite on — so the
+first move is instead to **classify the surface** (Part 1). The classification fixes the shell,
+the state model and which states you owe the user; everything else follows from it.
+
+Corollary, and the one that saves the most wasted work: **the code outranks every doc, including
+this one.** Where a written rule and the dominant pattern in the codebase disagree, the doc is
+stale. Before flagging a violation, grep how often the "violation" appears — if it is the
+dominant pattern, it is the convention.
+
+---
+
+## Part 1 — Three surface types
+
+Nearly everything is one of these. Get it right first.
+
+| Surface | Shape | Typical |
+|---|---|---|
+| **Config** | Sectioned form, saved as one object | agent setup, channel fallback, templates |
+| **Log / inbox** | List + detail, read-mostly, filtered by time | calls, chats, emails |
+| **Record** | Table + create dialog + detail, full CRUD | tickets, contacts, webhooks |
+
+If a feature is two surfaces wearing one name, say so and split it.
+
+---
+
+## Part 2 — Architecture
+
+**1. One router, providers outermost-first.** A single router at a fixed basename. The provider
+stack nests widest-scope first — toast → user → app → tenant/project → network status — because
+each inner one may read the outer. Anything that must be true before the first paint (API base
+URL, request interceptors) is configured at **module scope**, not in an effect.
+
+**2. Gate before you mount.** Onboarding and auth checks live in a component that short-circuits
+with a redirect *before* the authenticated route tree mounts. Do not render the real chrome
+behind a modal and hope nobody opens devtools — if the user is not through the gate, those routes
+do not exist yet.
+
+**3. Interceptors carry cross-cutting policy**, not each call site. Request side: inject app and
+tenant headers. Response side, **in this order** — the order is the whole point:
+
+1. **Rule out caller-aborted requests first.** They reject with no response, so checking "no
+   response" before "was it cancelled" makes ordinary unmount-cancellation look like an outage.
+2. **Retry no-response failures** with exponential backoff plus jitter — **idempotent reads
+   only**. A POST that got no response may already have applied server-side; retrying duplicates
+   the side effect.
+3. Then classify the rest: auth failure → login (production only); sustained no-response →
+   surface a connectivity state product-wide; 5xx → leave it to the page.
+
+**4. Navigation is data, not JSX.** One typed array of entries — `item`, `accordion`, `divider`,
+`section` — each carrying route, label and icon. Give entries an optional `hidden` flag so a
+surface can be **parked without deleting its config**: deleting loses the work, and the flag
+documents that the surface exists but isn't shipping. Settings gets its own grouped array,
+sectioned by concern (General, Channels, Integrations…).
+
+Count your registries before you assume there are two. A command palette, a mobile nav or a
+search index is a **third** place a new route must be registered, and it will be silently
+incomplete.
+
+**5. Feature-module anatomy.** A module is a folder owning its whole vertical:
+
+```
+<feature>/
+  index.tsx              sub-router; the only file the app shell imports
+  pages/                 one file per route
+  components/            module-local components + an index.ts barrel
+  api/<feature>-util.ts  typed async functions + error helper
+  types/                 domain types
+  context/               only if state genuinely spans pages/tabs
+  data/                  static catalogs (channel lists, event schemas)
+```
+
+The app shell mounts `<FeatureRouter />` at one splat route and knows nothing else about it. A
+module needing a sibling's helper gets **its own copy** — cross-feature imports are how modules
+stop being deletable.
+
+**6. Data layer: thin, hand-rolled, typed.** No query library. Each module's `api/` file exports
+async functions over the shared HTTP adapter. Two patterns make them robust:
+
+- **`withDefaults(partial)`** — merge every response over a complete defaults object, so a
+  partial or absent payload still renders a usable surface instead of crashing on `undefined`.
+- **`errMessage(e, fallback)`** — pull the server's message and use it **verbatim**. Fall back to
+  your own string only when there is genuinely nothing. Never reword a backend error in a catch
+  block: the user sees one thing, the logs say another, and the real fix (better copy at the API)
+  never gets made.
+
+Loading and error are `useState` next to the data. Reach for a query library only when you have
+real cache-invalidation problems.
+
+**Where state lives.** For each piece: local, module context, or global — decide explicitly.
+Default to local; context only when it spans pages or tabs.
+
+---
+
+## Part 3 — The seam convention
+
+This is what makes UI-ahead-of-backend safe. Design finishes before the service exists; the seam
+is how you ship that without lying.
+
+**7. Tag the boundary `[SEAM]`** in a doc comment on every function touching an endpoint that
+isn't live, saying what happens on failure.
+
+**8. Write the endpoint table now**, in the module's data or catalog file — the routes the
+handlers will map onto when the service lands, and the shape each returns. This is the handoff to
+whoever builds the API and it is worth more than a ticket.
+
+**The data file's table is canonical**; the `[SEAM]` comment names its own route in one line and
+nothing more. Two copies of a spec drift and the reader can't tell which is current.
+
+**The api-util ships complete and uncalled.** Write the real functions, then don't wire them up.
+Exports don't trip unused-symbol checks, so the module typechecks; the page makes no request and
+renders the real empty state, so **there is no loading or error state to write yet** — a
+`loading` flag nothing reads is an unused local and fails a strict build. When the service lands,
+the page grows the effect and both states together, and the api-util needs no change.
+
+**9. Never fabricate data at a seam.** Show the **real** empty state and keep any action needing
+the absent service **disabled**. Three boundaries decide the ambiguous cases:
+
+- **Session-local state is fine.** A list in `useState` that resets on reload is honest — the
+  change really happened, it just isn't persisted. Say so in the comment.
+- **A success toast is honest iff the change it announces actually occurred**, including in
+  session-only state. It is dishonest when it claims a *remote* effect that did not happen — a
+  delivery sent, a test fired, a record persisted that a reload will lose.
+- **A labelled example is not fabrication.** A payload preview or schema sample shown *as* an
+  example, the way API docs do, is legitimate — fixed value, comment saying it's an illustration.
+  What's forbidden is invented data presented as *the tenant's own*: fake rows in their list,
+  fake history, fake metrics.
+
+A demo with fake rows gets approved, and the gap surfaces in production.
+
+**10. Gate an unfinished integration behind an exported `const` flag**, with a comment saying
+what to flip and what else must change with it. Keep the machinery, disable the entry point.
+
+---
+
+## Part 4 — UI system
+
+### Why plain divs and inline styles
+
+If your design system ships as custom elements (Stencil, Lit, any web-component build), it
+renders into **shadow DOM**. Three consequences drive nearly every rule here:
+
+1. **Layout doesn't propagate.** `flex: 1`, `height: 100%` and `min-height: 0` stop at a shadow
+   host. A full-height flex column built from design-system containers collapses, and no CSS on
+   the host fixes it.
+2. **CSS custom properties *do* cross the boundary.** This is the escape hatch: to override
+   something baked into a component's internals, redefine the variable it reads, scoped to that
+   one host — `style={{ ['--radius-token' as string]: 'var(--radius-round)' }}`.
+3. **Slotted children behave differently from props.** A prop the component doesn't fully
+   implement fails silently; a child flowing into the default slot is laid out by the component's
+   internal flex — often the working alternative when a prop is broken.
+
+**Token names in the examples below are illustrative.** Substitute your own design system's — and
+record the real ones in your repo map (Part 8), because that is the fact people get wrong most.
+
+**11. Token-only values.** No hex, no raw px for spacing, radius or colour. If the semantic token
+you want doesn't exist, **reuse the nearest one** rather than inventing a value — an invented
+value is invisible to theming and survives forever. Let tokens handle light/dark; never branch on
+theme in component code.
+
+**Verify a token exists in the design system's compiled stylesheet, not in a hand-written token
+doc.** The two drift, and an *undefined* token is worse than a wrong one: it silently resolves to
+nothing, so a gap becomes 0 and a `font:` shorthand falls back to inherited type — which reads as
+"the token is mis-sized" and sends you to patch the symptom. Grep the stylesheet, list what
+actually exists, and record the real names in your repo map (Part 8).
+
+One exception, and it must be *shared* rather than local: where the scale genuinely has no step
+for a one-off structural inset (a large empty-state pad, a viewport-relative cap), the codebase
+settles on a literal and repeats it verbatim. Copy the existing literal exactly; never re-derive
+a nearby value. If you're the second use, hoist it to a named constant.
+
+**A new semantic colour belongs in the app's own token layer**, defined for both themes, not
+inline at a call site.
+
+**12. Plain `<div>` for layout. Inline `style={{}}` for everything.** Use the design system for
+*controls* (buttons, inputs, selects, icons) and plain divs for *structure*. Stylesheets stay for
+genuine keyframes and third-party overrides only.
+
+**The card and row ring is an inset box-shadow, not a `border`:**
+
+```ts
+boxShadow: 'inset 0 0 0 1px var(--colors-border-neutral-base-subtle)'
+```
+
+The ring draws **inside** the box. Three things follow, and together they make this the house
+card language rather than a preference: a ringed row can't push past its container (a border adds
+2px and overflows a fixed-width column); nothing shifts when the ring appears on hover or
+selection; and it composes with elevation on one property. Reach for `border: 1px solid` and new
+surfaces are subtly wrong everywhere — hard to see in isolation, obvious beside an existing card.
+Dividers inside a surface follow the same logic: a 1px background-coloured div, not a border edge.
+
+**These rules govern code you write, not components you reuse.** Older shared components built
+from design-system containers predate the convention and are **still the right thing to
+import** — don't rewrite them, and don't treat their internals as licence to build new surfaces
+that way.
+
+**13. Text is a plain `<span>`**, not the design system's text component (its shadow host brings
+shorthand and line-clamp quirks). Two ways to style it, and the choice is mechanical:
+
+```tsx
+// Default — the `font:` shorthand token: family, size, weight, line-height in one property.
+<span style={{ font: 'var(--text-body-reg-14)', color: 'var(--colors-text-main)' }}>{title}</span>
+```
+
+```ts
+// When you must override size or line-height, or for a shared row primitive many callers spread:
+export const bodyRegStyle: React.CSSProperties = {
+  fontFamily: '<your stack>', fontSize: '14px', fontWeight: 400, lineHeight: '20px',
+}
+```
+
+- **Never both in one style object.** A `font:` shorthand beside a `fontSize` warns on every
+  render. Easy to hit, because the shorthand arrives from a token and the override is added later
+  by someone who can't see it. Needing an override is the signal to switch that element to
+  longhand **entirely** — don't patch the shorthand.
+- **The shorthand bakes in line-height**, so it can't be overridden alongside. Move to longhand,
+  or redefine the whole token for that scope.
+- **Colour at the call site**, both ways. The scale is size and weight; colour is semantic.
+
+**14. Page shell = fixed header + exactly one scroll region.**
+
+```
+┌─────────────────────────────────────────┐
+│ header: title / subtitle / action  FIXED│  outside the scroller
+├─────────────────────────────────────────┤
+│ below-header slot (tabs)           FIXED│  optional, outside the scroller
+├─────────────────────────────────────────┤
+│ ░░ body — the ONLY scroll region ░░░░░░ │  centred max-width column
+└─────────────────────────────────────────┘
+```
+
+```tsx
+<div style={{ height: '100%', display: 'flex', flexDirection: 'column',
+              overflow: 'hidden', boxSizing: 'border-box' }}>
+  <div style={{ flexShrink: 0, padding: HEADER_PAD }}>
+    <div style={{ maxWidth, width: '100%', margin: '0 auto' }}>{header}</div>
+  </div>
+
+  <Scroller style={{ flex: 1, minHeight: 0 }}>
+    <div style={{ padding: BODY_PAD,
+                  ...(fillBody ? { height: '100%', display: 'flex',
+                                   flexDirection: 'column' } : null) }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: SECTION_GAP,
+                    maxWidth, width: '100%', margin: '0 auto',
+                    ...(fillBody ? { flex: 1, minHeight: 0 } : null) }}>
+        {children}
+      </div>
+    </div>
+  </Scroller>
+</div>
+```
+
+- `minHeight: 0` on the scroller is what lets a flex child actually shrink; without it the body
+  grows and the whole page scrolls instead.
+- The **same `maxWidth` and inset** on header and body is why nothing jumps as you scroll.
+- **`fillBody` must be static per page, never derived from content.** Toggle it when the first
+  row arrives and you remount the height constraint underneath a table's measuring effect, and
+  the table mis-sizes. A page with a table is always filled, even when empty.
+
+**15. Section → header → body.** Collapse the header-to-body gap to zero when a section has no
+children, or empty sections reserve visible whitespace (`React.Children.toArray` filters
+`null`/`false`, so it detects "renders nothing" correctly). If sections animate their height:
+measure the inner node with `ResizeObserver` and transition the outer height — and **guard nested
+animations**, because a child running its own height transition fires the observer at frame rate.
+Time-detect it: if a fire lands within ~80ms of the last, track the height with **no** transition
+and `overflow: visible`, so your lag doesn't clip the child.
+
+**Dividers separate sections and nothing else** — never between rows inside one section.
+Whitespace groups rows; a divider inside a group reads as a section break and fragments the page.
+
+**16. A setting is a row:** text stack left, control right. On a narrow container the control
+**wraps beneath** the text rather than crushing it.
+
+```tsx
+<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              flexWrap: 'wrap', gap: 'var(--gap-row) var(--gap-col)', width: '100%' }}>
+  <div style={{ display: 'flex', flexDirection: 'column', gap: TIGHT,
+                flex: '1 1 240px', minWidth: 0 }}>
+    <span style={{ ...bodyRegStyle, color: TEXT_MAIN }}>{title}</span>
+    {subtitle && <span style={{ ...captionRegStyle, color: TEXT_CAPTION }}>{subtitle}</span>}
+  </div>
+  <div style={{ flexShrink: 0 }}>{control}</div>
+</div>
+```
+
+`flex: 1 1 240px` + `flexWrap` is the whole trick; `minWidth: 0` lets the text truncate rather
+than force the row wider.
+
+**17. The record triad** — list page, create/edit dialog, detail view.
+
+```tsx
+const [items, setItems] = useState<Item[]>([])
+const [dialogOpen, setDialogOpen] = useState(false)
+const [editing, setEditing] = useState<Item | null>(null)   // null = create
+
+// Visibility split from the record so the body renders through the close animation.
+const [detail, setDetail] = useState<Item | null>(null)
+const [detailOpen, setDetailOpen] = useState(false)
+
+const [pendingDelete, setPendingDelete] = useState<Item | null>(null)
+```
+
+Four state shapes, four jobs; `editing: null` doubling as "create mode" keeps one dialog serving
+both. Keep an open detail view in step with an edit:
+`setDetail(prev => prev && prev.id === id ? { ...prev, ...values } : prev)`.
+
+Five details that are always wrong the first time:
+
+- **Split modal visibility from the record** *when the body is a form or an expensive tree*, or
+  the body unmounts the instant you clear the record and the close animation plays on an empty
+  box. For a confirmation whose copy is **static**, deriving visibility from the record
+  (`visible={pending !== null}`) is fine — the cost is a brief cosmetic blank. **But if the copy
+  interpolates the record, snapshot it or split visibility**, or a destructive confirmation
+  spends its exit reading "We'll stop sending events to **.**" — losing the identity of the thing
+  it names at the moment the user decides.
+- **A clickable row's action menu must swallow its clicks** —
+  `<span onClick={e => e.stopPropagation()}>`. Needed even for menu items rendered through a
+  portal: React events bubble through the component tree, not the DOM tree.
+- **A whole-row toggle wrapping an interactive control needs a keyboard guard.** If the row is
+  `role="button" tabIndex={0}` with an `onKeyDown` and contains a focusable checkbox, Space fires
+  the toggle *twice* — once via `onChange`, once as the keydown bubbles. With functional updaters
+  the two compose to a no-op and the control looks dead. Stopping the *click* does not cover the
+  keyboard path: guard with `if (e.target !== e.currentTarget) return`.
+- **A disabled primary action must say why.** Render the missing requirement beside it, in the
+  order the form asks for things. A dead button with no explanation is the main cost of
+  disabled-until-valid, and it is cheap to avoid.
+- **A create that returns a one-time credential needs a second view**, not a toast. Morph the
+  modal from form to credential and disable escape-to-close while it shows — an unrecoverable
+  value must not be dismissible by reflex.
+
+**18. Overlay decision rule.**
+
+| Use | When | Note |
+|---|---|---|
+| **Modal** | A focused task owns the screen | Create/edit forms, multi-step |
+| **Side sheet** | Context alongside what's behind | Detail you compare against the list |
+| **Popover** | Anchored menu or small detail | Re-measure after async content loads |
+| **Tooltip** | A label, nothing more | Never put actions in one |
+| **Confirmation** | Destructive action | Name the consequence, not "are you sure?" |
+
+**A tall modal scrolls its own body.** Hand scrolling to a scroller inside the body and set
+`overflow: hidden` on the modal's content wrapper so the two don't nest. Clamp with
+`maxHeight: 'calc(100vh - <chrome>px)'` and **hoist that literal to one shared constant** — both
+halves of a create/detail pair need the identical value and two copies drift. Reset scroll when
+the content identity changes (a `scrollResetKey`), or the second record opens halfway down.
+
+Two overlay bugs worth pre-empting: **async content breaks positioning** (a popover measured
+before its icons load hangs off the viewport edge — re-measure with a `ResizeObserver`), and
+**tooltips stick** (focus restored to a trigger re-shows its tooltip; a missed `mouseleave`
+leaves it up — show on keyboard focus only, plus a `pointermove` watchdog). A tooltip on a
+*disabled* control needs its own wrapper to receive pointer events; that is how a disabled action
+explains itself.
+
+**19. Write the three states before the happy path** — *once the surface fetches*.
+
+- **Empty** — illustration, a title, one line on what will appear here and why, and the primary
+  action. State what the surface *will* hold, not that it's blank.
+- **Loading** — a skeleton shaped like the final content, not a centred spinner, so the layout
+  doesn't jump when data lands.
+- **Error** — the backend's message verbatim, with a retry.
+
+Most surfaces spend most of their early life empty, and a list built happy-path-first gets an
+empty state bolted on badly. At a seam that makes **no request**, only the empty state applies —
+absent loading/error states are correct there, not an omission.
+
+**Icons, if they load from a CDN by name:** they resolve asynchronously and a wrong name fails
+silently — the glyph is simply absent. Probe a new name before using it (`curl` the URL) and
+**check the real success condition** — a CDN answering a miss with `403` rather than `404` will
+make a `404`-testing script conclude every missing icon exists. Try a different group when a name
+misses. Set the non-interactive flag on decorative icons so they don't carry click-target
+padding. And distinguish the animated spinner glyph from a static "in progress" one — they have
+different names, and the animated one spins forever in a badge.
+
+### Motion
+
+Motion is part of the design system, not decoration added at the end. It also fails differently
+from layout: a wrong duration is invisible in a screenshot, in a typecheck and in a code review,
+and only shows up as "this feels cheap". Nine rules cover nearly all of it.
+
+**20. Two easings do almost everything, and they are not interchangeable.** A standard curve for
+*state changes* — colour, hover, focus, small position shifts: `cubic-bezier(0.4, 0, 0.2, 1)`. A
+hard-decelerating curve for *entrances and size changes*: `cubic-bezier(0.22, 1, 0.36, 1)`
+(out-quart) or `cubic-bezier(0.16, 1, 0.3, 1)` (out-expo). Overshoot
+(`cubic-bezier(0.34, 1.56, 0.64, 1)`) is for a deliberate pop and nothing else — on a panel it
+reads as a bug. **Hoist them as named constants.** An easing copied inline across dozens of call
+sites can never be retuned, which is the same failure as an untokenised colour.
+
+**21. Duration bands, not arbitrary numbers.**
+
+| Band | For | Note |
+|---|---|---|
+| ~150ms | hover, colour, focus ring | below ~100ms reads as instant; above ~200ms feels laggy under a pointer |
+| ~280–320ms | panels, section height, modal open, smart resize | the structural band — most of the product lives here |
+| ~360ms | overlay exit | the longest thing a user waits through before the UI is idle |
+| 1.2–2.4s, looping | shimmer, pulse, breathing dots | **ambient only** — never a blocking transition |
+
+**22. Open and close are not mirror images.** Open decelerates hard and lands (out-expo); close
+wants a symmetric s-curve (ease-in-out cubic). **Reusing the open curve on the close is the
+default mistake** — an in-expo close keeps the element nearly stationary for ~70% of its duration
+and then snaps, which doesn't read as smooth.
+
+The *duration* asymmetry has no universal direction — it follows the gesture. Something that
+**scales in place** wants a close slightly *longer* than its open, because the shrink has to stay
+visible the whole way. Something that **translates off-screen** wants a close *shorter* than its
+open, because once it's leaving the viewport there is nothing left to watch. Pick per overlay
+type, and keep both profiles in named constants so the difference is legible.
+
+**23. Layers that leave together must finish together.** A backdrop fade and its card share one
+duration, or a single frame shows an opaque card sitting on an already-cleared backdrop. And
+unmount on the **slower** of the two — otherwise the fade is yanked mid-dissolve. Scale gently in,
+further out (≈0.94 → 1 on enter, → ≈0.85 on exit): the exit can be a pure scale-down because the
+backdrop fade carries the dissolve, so it needs more travel to read.
+
+**24. The exit animation is where data bugs surface.** Whatever the exit renders must still have
+its data for the *whole* duration. This is the mechanism behind rule 17's visibility split: for
+~360ms a confirmation with interpolated copy reads "We'll stop sending events to **.**" — losing
+the name of the thing it names, exactly as the user decides. Any animation that outlives the state
+it renders has this bug; the modal is just where you meet it first.
+
+**25. Reduced motion is a hard requirement, honoured through one shared helper.** Every animated
+component checks `matchMedia('(prefers-reduced-motion: reduce)')` and skips to the end state
+rather than shortening the duration. **Write the helper once and import it everywhere.** It is the
+single most-copied function in a codebase like this, and once a dozen local copies exist the
+policy can no longer be changed at all — you cannot even audit who honours it.
+
+**26. Animate a *measured* height, never `height: auto`.** `auto` doesn't interpolate. Measure the
+content with `ResizeObserver` and transition the container — plus the nested-animation guard in
+rule 15, without which a child's own height transition drives the observer at frame rate.
+
+**27. Streaming and appended content animate opacity only.** For text that arrives token by token,
+wrap **only the growing tail** and animate opacity — no blur, no transform. Blur on every
+animating word forces a per-frame repaint of the whole block and a long reply will hang the page;
+transforms break inline wrapping. Keys must be stable so already-shown words never re-animate, and
+the whole effect must be scoped to the streaming state — reopening a saved thread renders its
+answer instantly.
+
+**28. A looping glyph is not a progress indicator.** A spinner that spins forever in a badge tells
+the user nothing and implies the system is stuck. Ambient loops signal *liveness*; state changes
+signal *progress*. Don't substitute one for the other.
+
+For a whole-document swap (theme, locale) reach for the platform's view-transition API where it
+exists, with a plain synchronous fallback for unsupported browsers **and** for reduced motion —
+that fallback is not optional, it's the same rule 25 path.
+
+---
+
+## Part 5 — Code style and copy
+
+**29. Banner comments divide a file:** `// ── Mutations ─────────`. Cheap structure, scannable in
+a 400-line page.
+
+**Match the file you're next to for quotes and semicolons.** If a codebase has no formatter
+config it will have drifted — different eras use different styles. Check the *sibling* files
+you're editing alongside, not the repo majority, and never reformat a file you're only partially
+touching.
+
+**30. Comment the *why*, never the *what*.** Every non-obvious line should carry the constraint
+that forced it — the measuring effect that remounts, the portal that still bubbles, the retry
+that would duplicate a POST. Someone deletes an unexplained workaround within a month. Match the
+surrounding density: comment heavily where behaviour is subtle, not at all where it's plain.
+
+**31. Copy.** End users are **occupants, requesters, callers** — never "customer". Prefer
+agent-centric phrasing: describe what the system did, not what the user should feel. Say what a
+control does, not that it's easy. Confirmations name the consequence and what can't be recovered.
+
+---
+
+## Part 6 — Verification
+
+- **Typecheck is the fast loop.** Find the project's own script — read `package.json` (root and
+  the app workspace) rather than guessing the command. With `strict`, `noUnusedLocals` and
+  `noUnusedParameters` it catches most of what a linter would.
+- **If a lint script fails on a missing dependency or a broken config rather than on the code,
+  say so and move on.** A toolchain failure is not a finding.
+- **Shadow-DOM components can't be typechecked into correctness.** Icon props, slot behaviour and
+  radius overrides fail silently and only show on screen. Anything touching them needs a real
+  browser check — hand that back to the human rather than claiming done.
+- **Never spin up a mock API or browser automation to "verify" UI.** Typecheck, then the human's
+  own browser.
+
+---
+
+## Part 7 — The four agents
+
+Split each block into its own file under `.claude/agents/`. They are already portable: they refer
+to "this skill" and to "the repo map", never to a named product.
+
+### 7.1 `product-architect.md`
+
+```markdown
+---
+name: product-architect
+description: >
+  Use when the STRUCTURE of an agent-console feature must be decided before any code exists —
+  a new feature module, a new product's shape, how routes and sub-routes divide, where state
+  lives, what the data layer and types look like, and which backend boundaries are seams.
+  Produces a written design and writes no files. Delegate here when the question is "how
+  should this be built"; delegate to module-scaffolder once the design is settled.
+tools: Read, Grep, Glob, Bash
+---
+
+Invoke the `product-blueprint` skill and follow it — Parts 1–3 especially.
+
+**Then orient to the repo.** If it has a map (`references/<repo>-map.md` beside the skill, or the
+repo's `CLAUDE.md`), read it before designing: it records which surfaces already exist, so a
+design doesn't propose a second way to do something the product already does. With no map,
+establish that by reading the nav config and the existing modules. **A map named for a different
+repo is not a fallback.**
+
+You design; you do not implement. You have no write tools by design — your output is a document
+someone else executes.
+
+## Method
+
+1. **Classify the surface first** — config, log/inbox, or record. This determines the shell, the
+   state model and the required states. State your classification and why; if a feature is two
+   surfaces wearing one name, say so and split it.
+2. **Read before designing.** Find the closest existing module and read it. A design that ignores
+   a working precedent creates a second way to do the same thing. Name the precedent you follow
+   and any place you deliberately diverge, with the reason. **If the product is genuinely new and
+   there is no precedent, say so** — then the surface classification carries the whole design.
+3. **Draw the module skeleton** — every file, its responsibility, one line each.
+4. **Specify the data layer concretely** — types, api-util signatures, what `withDefaults` must
+   fill, every endpoint. For each endpoint say whether it **exists today**. Verify rather than
+   assume: grep for the route.
+5. **Mark the seams explicitly.** For every endpoint that isn't live, write the endpoint table and
+   state what the UI does meanwhile — which empty state shows, which actions stay disabled.
+   Nothing may fabricate data.
+6. **Place state.** For each piece: local, module context, or global — with the reason. Default to
+   local; context only when it spans pages or tabs.
+7. **List the registration edits** — route, nav entry, settings entry, and any third registry
+   (command palette, search index).
+8. **Name the risks.** Where this design is likely wrong, what you couldn't verify, and the
+   decisions the human should make rather than you.
+
+## Output
+
+Surface classification · file skeleton · types · api-util signatures · endpoint table with
+live/seam status · state placement · registration steps · open questions. Concrete enough that a
+scaffolder invents nothing, short enough to read in one pass. No prose about how good it is.
+```
+
+### 7.2 `module-scaffolder.md`
+
+```markdown
+---
+name: module-scaffolder
+description: >
+  Use when a design is settled and a NEW feature module, page, or settings surface needs its
+  wired-up skeleton created: folders, sub-router, types, api-util with seam markers, nav and
+  route registration, and placeholder page bodies that typecheck. Creates the stub and STOPS —
+  it does not build real UI. Delegate to ui-builder to fill the stub in, or to
+  product-architect if the structure has not been decided yet.
+tools: Read, Write, Edit, Grep, Glob, Bash
+model: sonnet
+---
+
+Invoke the `product-blueprint` skill and follow it — Parts 2–3 especially.
+
+**Then orient to the repo.** If it has a map (`references/<repo>-map.md` beside the skill, or the
+repo's `CLAUDE.md`), read it before creating files: it names the registration files and the import
+conventions. With no map, find those by reading the nearest existing module. **A map named for a
+different repo is not a fallback.**
+
+You create the skeleton and stop. Success is: **the module is registered, reachable in the nav,
+and typechecks — with obviously-placeholder bodies.** Building the real UI is `ui-builder`'s job;
+doing it here produces half-considered screens.
+
+## Method
+
+1. **Copy the nearest existing module's shape.** Read it first. Match its file layout, naming and
+   import style exactly — a new module that looks different is a new convention.
+2. **Never assume a barrel export.** Grep for how a component is actually imported elsewhere and
+   copy that path — in most codebases the barrel covers a minority of components, and assuming it
+   produces a build error.
+3. **Create the skeleton**: `index.tsx` sub-router, `pages/`, `components/index.ts`,
+   `api/<feature>-util.ts`, `types/`.
+4. **Write the api-util for real** — types, `withDefaults`, `errMessage`, the async functions.
+   Every function whose endpoint isn't live gets a `[SEAM]` doc comment, and the endpoint table
+   goes in the module's data or types file. This is the one part that ships complete, because it
+   is the handoff to the backend.
+5. **Placeholder bodies must be honestly empty.** Render the real empty state, or a single line
+   naming what will go here. **No lorem, no sample rows, no fake metrics** — a stub with invented
+   data gets screenshotted and mistaken for progress.
+6. **Register it**: route in the app shell, entry in the nav config (or settings config). Verify
+   the route path and the nav target match. Check whether a third registry needs it too.
+7. **Typecheck before reporting**, using the project's own script — read `package.json` rather
+   than guessing. A strict config is normal here, so an unused placeholder import fails the
+   build. If a lint script fails on a missing dependency rather than on your code, say so and
+   move on.
+
+## Output
+
+Files created, registration edits made, typecheck result, and an explicit list of what is still a
+placeholder for `ui-builder`. If you guessed at anything the design didn't specify, say what and
+where.
+```
+
+### 7.3 `ui-builder.md`
+
+```markdown
+---
+name: ui-builder
+description: >
+  Use when real UI must be built into files that ALREADY EXIST — filling in a scaffolded stub,
+  building out a page body, adding a dialog or detail view, or changing a live surface in an
+  agent-console SPA. Works within the established design system: token-only values, plain divs
+  for layout, plain spans for text. Delegate to module-scaffolder when the files and
+  registration don't exist yet, and to design-reviewer to audit the result.
+tools: Read, Write, Edit, Grep, Glob, Bash
+---
+
+Invoke the `product-blueprint` skill and follow it — Part 4 is the whole job.
+
+**Then orient to the repo.** If it has a map (`references/<repo>-map.md` beside the skill, or the
+repo's `CLAUDE.md`), read it before writing anything: its landmine list and house literals will
+save you a wasted pass. With no map, the nearest existing surface is the specification. **A map
+named for a different repo is not a fallback.**
+
+You build screens that look like the rest of the product. The bar is that a reviewer cannot tell
+your file from the ones already there.
+
+## Method
+
+1. **Read the nearest equivalent surface first, in full.** Not a skim — the comments carry the
+   constraints. Match its structure, spacing rhythm and comment density. Name the file you copied
+   from in your report.
+2. **Reuse before creating.** Grep the component directory before writing any primitive. In a
+   mature codebase the row, the empty state, the confirm dialog, the truncating text and the
+   shimmer all already exist. A second implementation of an existing primitive is the most common
+   failure here.
+3. **Check how a component is imported elsewhere** and copy that path exactly. Never assume a
+   barrel export.
+4. **Write the three states before the happy path.** If the data comes from a seam that makes no
+   request, the empty state is the real one, dependent actions stay disabled, and there is no
+   loading or error state to write yet.
+5. **Structure with plain divs, style inline with tokens.** No hex, no design-system container
+   for layout, no text component for body copy. Ring surfaces with the inset box-shadow, not a
+   `border`. For text, either the `font:` shorthand token or a spread longhand type-scale object
+   when you must override size or line-height — never both in one style object. Colour at the
+   call site. Raw px only where an established house literal exists; grep before introducing one.
+6. **Verify a token exists before using it** — check the design system's compiled stylesheet, not
+   a hand-written token doc. An undefined token silently resolves to nothing.
+7. **Match the motion vocabulary; don't invent one.** Reuse the named easing and duration
+   constants and the **shared** reduced-motion helper — never add a local copy. Open and close are
+   asymmetric, a backdrop and its card co-terminate, and a height must be measured, never `auto`.
+8. **Comment the why.** Every non-obvious line gets the constraint that forced it. Skip comments
+   that restate the code.
+9. **Copy discipline.** Never "customer" — occupants, requesters, callers, or agent-centric
+   phrasing. Confirmations name the consequence and what can't be recovered. Backend errors are
+   surfaced verbatim, never reworded in a catch block.
+10. **Typecheck before reporting**, using the project's own script.
+
+## Report honestly
+
+Typecheck cannot verify anything rendered into shadow DOM — icon props, slot behaviour, radius
+overrides and async icon layout fail silently and only show on screen. Say plainly which parts
+need a browser check rather than calling them done. Never spin up a mock API or browser
+automation to self-verify; hand that back. If you couldn't find a token, an icon name, or a
+component the design assumed, say so instead of inventing a value.
+```
+
+### 7.4 `design-reviewer.md`
+
+```markdown
+---
+name: design-reviewer
+description: >
+  Use when UI work needs auditing against this product's conventions — a diff, a branch, a set
+  of new files, or a page someone just built. Checks token discipline, layout and text
+  primitives, required empty/loading/error states, seam honesty, copy rules and comment
+  quality. Reports findings and changes nothing. Delegate to ui-builder to apply fixes.
+tools: Read, Grep, Glob, Bash
+---
+
+Invoke the `product-blueprint` skill and follow it.
+
+**Orient to the repo before you report.** If it has a map (`references/<repo>-map.md` beside the
+skill, or the repo's `CLAUDE.md`), read it first — it records which committed docs are superseded,
+the design-system landmines, and the house literals that have no token. Reviewing against stale
+docs produces confident false findings, which is the main way a reviewer becomes ignorable. With
+no map, derive conventions from the two or three surfaces nearest the diff. **A map named for a
+different repo is not a fallback.**
+
+You have no write tools by design. You report; a human or `ui-builder` decides.
+
+## Before you flag anything
+
+Verify every finding against the actual file. A confident false positive costs more than a missed
+nit.
+
+**Grep before flagging a convention violation.** Count how often the "violation" appears. If it is
+the dominant pattern, the doc is stale and the code is the convention — report it as a
+documentation problem or not at all. That single rule pre-empts most false positives: plain spans
+for text and plain divs for layout, the `font:` shorthand token, the inset ring instead of a
+border, a repeated pad with no token step, a hand-rolled divider div. Each contradicts some
+written rule somewhere and is in fact the house style. Where the repo map settles one of these,
+treat that list as closed and do not relitigate it.
+
+**Three calibrations counting won't give you:**
+
+- **Absence is only a defect where the mechanism exists.** No loading or error state on a surface
+  that makes no request is correct — a `loading` flag nothing reads would fail a strict build.
+- **A labelled example is not fabricated data.** Fabrication is invented data presented as the
+  tenant's own — fake rows, fake history, invented metrics.
+- **Derived modal visibility is conditional, not wrong.** Fine with **static** copy; **flag it
+  when the copy interpolates the record** — the sentence loses the name of the thing it is about,
+  mid-exit, exactly as the user decides.
+
+## Checklist
+
+**Tokens and style** — hardcoded hex or `rgb()` · raw px for spacing/radius unless it matches an
+established house literal (grep the exact string first) · `font:` shorthand and `fontSize` in the
+same style object (warns every render) · `lineHeight` beside a shorthand token (silently ignored)
+· an invented token — confirm it exists in the compiled stylesheet, not a token doc · a
+theme-flipping colour token over a fixed-colour asset where a fixed one exists · `border: 1px
+solid` where the inset ring is the convention.
+
+**Primitives and structure** — design-system container used for layout or full-height flex ·
+design-system text component for body copy · a primitive reimplemented when one exists (grep to
+confirm) · barrel import assumed for a component that isn't barrelled · a divider between rows
+inside one section · a design-system prop the version doesn't implement (these fail silently) ·
+`fillBody` derived from content · a shared literal copied to a third site instead of hoisted.
+
+**States and data** — missing empty/loading/error **on a surface that fetches** · **fabricated
+data at a seam** (highest severity) · an action needing an absent service left enabled · a
+backend error reworded client-side · a seam with no `[SEAM]` marker or endpoint table.
+
+**Interaction** — clickable row whose action menu doesn't stop propagation (portalled children
+still bubble) · a `role="button" tabIndex={0}` row containing a focusable control with no
+`e.target !== e.currentTarget` guard · modal visibility not split from its record where the body
+is a form or expensive tree · a disabled primary action with nothing saying what's missing · a
+create returning a one-time credential with no second view, or escape-to-close left on · physical
+`left`/`right` where a logical property belongs, in a product shipping an RTL locale.
+
+**Motion** — an animation with no reduced-motion path, or one shortening the duration instead of
+skipping to the end state · a new local copy of the reduced-motion helper where one exists to
+import · `height: auto` in a transition · an inline `cubic-bezier` where a named constant exists ·
+an overshoot curve on a structural element · a backdrop and card with mismatched durations, or
+unmount on the shorter of the two · a duration outside the house bands · a looping glyph standing
+in for progress · streaming content animating blur or transform rather than opacity.
+
+**Copy and comments** — "customer" anywhere in UI copy · a confirmation asking "are you sure?"
+instead of naming the consequence · comments restating the code · a non-obvious workaround with
+no explanation.
+
+## Output
+
+Findings most-severe first. Each: `file:line`, what's wrong, the concrete fix. Separate
+**must-fix** from **nits**. If the diff is clean, say so and name what you checked — do not
+manufacture findings to look thorough. Run the project's own typecheck, not a guessed command; a
+lint script failing on a missing dependency is toolchain noise, not a finding.
+```
+
+---
+
+## Part 8 — Your repo map template
+
+Save as `.claude/skills/product-blueprint/references/<your-repo>-map.md`. **This is the only file
+that may contain paths, library names or token names.** Everything above stays portable; every
+concrete fact goes here. Write it as you learn each fact — a map written from memory months later
+is the one that goes stale silently.
+
+```markdown
+# <Repo> map
+
+Where every rule in the blueprint actually lives here, plus the landmines.
+**Read this whenever the work is inside `<repo>/`.** Paths are relative to `<app package>/`.
+
+## ⚠ Superseded docs
+Any committed doc that the newest code deliberately contradicts, quoted, with the file that
+overrides it and why. Reviewing against a stale doc is the top source of false findings.
+
+## Where tokens actually come from
+The **compiled stylesheet** that defines them (usually inside a design-system package under
+`node_modules`), how it reaches the app (which import pulls it in), and the app's own
+override/extension layer. Include a grep command so the list is self-verifying, plus the real
+token names that exist — especially any the hand-written docs get wrong.
+
+## Pattern → implementation
+A table: rule → the file that implements it. Then name the three-to-five files to **imitate**
+when building something new. Locate by symbol or comment banner, not line number — line numbers
+in an actively developed repo rot within weeks.
+
+## Product surfaces
+What exists today, by nav section, plus anything mounted outside the nav. This is what stops a
+new design proposing a second way to do something the product already does.
+
+## Design-system landmines
+Every prop that doesn't work, every token whose name lies, every component whose internals
+resist. **Each one earned the hard way — write it down the day you lose the afternoon.** Include
+the shape of the failure, not just the fix, so the next person recognises the symptom.
+
+## Do not flag these — settled conventions
+The false positives a reviewer produces here, each with why the code is right. Keep this list
+closed: re-raising a settled convention is how a review loses credibility.
+
+## Established house values — copy verbatim
+Literals with no token step, their exact string, and their call-site count. Copy the literal;
+never re-derive a nearby value.
+
+## House conventions not visible in the code
+The rules nothing enforces: error-copy policy, forbidden words, the fabrication ban, how UI
+gets verified.
+
+## Commands
+The typecheck command (THE feedback loop), dev, build — and any script that is **broken**, with
+why, so nobody reads its failure as a code problem. Path aliases.
+```
+
+---
+
+## Appendix A — Frontmatter for this file as a skill
+
+```yaml
+---
+name: product-blueprint
+description: >
+  Use when building or extending an agent-console SPA — config surfaces, inbox and log views,
+  record tables, settings pages — or when standing up a new product that should share this
+  architecture and visual language. Covers the app shell, data-driven navigation, feature-module
+  anatomy, the backend-seam convention (shipping UI ahead of the API), and a token-only
+  inline-style UI system. Load it before designing a module, adding a page, or reviewing UI work.
+---
+```

@@ -25,42 +25,68 @@ import { Card } from "../../../ui/Card";
 import { Input } from "@/components/ui/input";
 import { TableCell } from "@/components/ui/table";
 import { CountLine } from "../../../ui/Row";
-import { ClickRow, ListTable, ListTableSkeleton, type Col } from "../../../ui/DataTable";
+import {
+  ClickRow,
+  ListTable,
+  ListTableSkeleton,
+  MobileFact,
+  MobileList,
+  MobileRow,
+  PHONE_BLEED,
+  PHONE_BLEED_TOP,
+  type Col,
+} from "../../../ui/DataTable";
 import { CompanyLogo } from "../../../ui/CompanyLogo";
 import { Empty, ErrorState } from "../../../ui/States";
 import { LinkButton } from "../../../ui/Button";
 import { listAccounts } from "../api/accounts-util";
 import type { Account, AccountListResponse } from "../types/account";
 
-// The counts hide on phones — a 390px row keeps the company and its sync
-// state, which is what triage needs. Each col's className must be repeated on
-// its body cells below; DataTable.tsx owns the rule.
-const NUM_COL = "max-sm:hidden w-24";
+// No phone visibility classes — below `sm` the table yields to the MobileList,
+// which carries every column's content as a card. Created still steps aside on
+// tablet, where the table is real but narrow. Each col's className must be
+// repeated on its body cells below; DataTable.tsx owns the rule.
 const COLS: Col[] = [
   { label: "Company", icon: Building2, skel: "entity" },
-  { label: "Leads", icon: Users, className: NUM_COL, skel: "num" },
-  { label: "Deals", icon: Handshake, className: NUM_COL, skel: "num" },
+  { label: "Leads", icon: Users, className: "w-24", skel: "num" },
+  { label: "Deals", icon: Handshake, className: "w-24", skel: "num" },
   { label: "In Facilio", className: "w-44", skel: "chip" },
   { label: "Created", icon: Clock3, className: "max-md:hidden w-28", skel: "text" },
 ];
+
+/** The entity cell's second line, shared by the table cell and the phone card
+    so the two can never describe an account differently. */
+const AccountMeta = ({ account: a }: { account: Account }) => (
+  <>
+    {a.websiteDomain ?? <em>no domain</em>}
+    {a.email ? ` · ${a.email}` : ""}
+  </>
+);
 
 /**
  * An account exists here before it exists in Facilio — the outbox writes it later —
  * so the client id doubles as the sync state. Showing "pending" as a warning would
  * be wrong; it is the normal state for the first minute.
  */
-export const SyncChip = ({ account }: { account: Pick<Account, "facilioClientId"> }) =>
+export const SyncChip = ({
+  account,
+  small = false,
+}: {
+  account: Pick<Account, "facilioClientId">;
+  /** Compact, for the detail rail's meta line — full size is for table cells. */
+  small?: boolean;
+}) =>
   account.facilioClientId ? (
-    <Chip tone="green" dot>{`client ${account.facilioClientId}`}</Chip>
+    <Chip tone="green" dot small={small}>{`client ${account.facilioClientId}`}</Chip>
   ) : (
-    <Chip tone="orange" dot>
+    <Chip tone="orange" dot small={small}>
       not in Facilio yet
     </Chip>
   );
 
 /** A count cell: tabular so columns of numbers align digit-for-digit. */
 const NumCell = ({ value }: { value: number }) => (
-  <TableCell className="w-24 px-4 py-3 text-sm font-medium tabular-nums max-sm:hidden">
+  <TableCell className="w-24 px-4 py-3 text-sm font-medium tabular-nums">
     {value}
   </TableCell>
 );
@@ -103,7 +129,13 @@ export function AccountList() {
   return (
     <PageShell
       title="Accounts"
-      subtitle={total ? `${plural(total, "company", "companies")}${result?.truncated ? " · first page" : ""}` : undefined}
+      // What the page IS, not how many rows it holds — the count (and the
+      // first-page hint) already live on the table's footer line below.
+      subtitle="Companies from converted leads"
+      // …except on phones, where the footer is gone with the full-bleed list
+      // and the TOTAL sits beside the title. The truncation hint doesn't
+      // survive the move — a phone header has room for one number.
+      count={!loading && !error && result ? total : undefined}
       // No tabs on this page — the shell still pins search to the row's right,
       // where it lives on every other page.
       search={
@@ -112,19 +144,19 @@ export function AccountList() {
           placeholder="Search name, email or domain"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="h-8 w-full sm:w-72"
+          className="w-full"
           aria-label="Search companies"
         />
       }
     >
-      <Card pad={false}>
+      <Card pad={false} className={`${PHONE_BLEED} ${PHONE_BLEED_TOP}`}>
         {loading ? (
           <ListTableSkeleton cols={COLS} rows={5} />
         ) : error ? (
           <ErrorState message={error} onRetry={() => setReloadKey((k) => k + 1)} />
         ) : rows.length ? (
           <>
-            <ListTable cols={COLS}>
+            <ListTable cols={COLS} className="max-sm:hidden">
               {rows.map((a) => (
                 <ClickRow key={a.id} onClick={() => navigate(`/accounts/${a.id}`)}>
                   <TableCell className="px-4 py-3">
@@ -133,8 +165,7 @@ export function AccountList() {
                       <div className="min-w-0">
                         <div className="truncate text-sm font-medium">{a.name ?? "Unnamed account"}</div>
                         <div className="text-muted-foreground truncate text-xs">
-                          {a.websiteDomain ?? <em>no domain</em>}
-                          {a.email ? ` · ${a.email}` : ""}
+                          <AccountMeta account={a} />
                         </div>
                       </div>
                     </div>
@@ -150,6 +181,35 @@ export function AccountList() {
                 </ClickRow>
               ))}
             </ListTable>
+            <MobileList>
+              {rows.map((a) => (
+                <MobileRow
+                  key={a.id}
+                  onClick={() => navigate(`/accounts/${a.id}`)}
+                  leading={<CompanyLogo name={a.name} domain={a.websiteDomain} email={a.email} />}
+                  title={a.name ?? "Unnamed account"}
+                  // Sync state on the title line — it is the one thing this
+                  // list exists to answer. Full size, not `small`: the 10px
+                  // variant beside a 14px title read as shrunken, and the
+                  // title's truncation is the right thing to give way.
+                  trailing={<SyncChip account={a} />}
+                  meta={<AccountMeta account={a} />}
+                  // Same glyphs as the table columns, so a fact is findable
+                  // across the two forms by its icon.
+                  facts={
+                    <>
+                      <MobileFact icon={Users} value={a.leadCount}>
+                        {a.leadCount === 1 ? "lead" : "leads"}
+                      </MobileFact>
+                      <MobileFact icon={Handshake} value={a.dealCount}>
+                        {a.dealCount === 1 ? "deal" : "deals"}
+                      </MobileFact>
+                      <MobileFact icon={Clock3}>{ago(a.createdAt)}</MobileFact>
+                    </>
+                  }
+                />
+              ))}
+            </MobileList>
             <CountLine>
               {result?.truncated
                 ? `Showing ${rows.length} of ${plural(total, "company", "companies")}`

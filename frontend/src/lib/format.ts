@@ -17,6 +17,10 @@ export function ago(iso: string | null | undefined): string {
 export const when = (at: string | null | undefined): string =>
   at ? new Date(at).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "—";
 
+/** Date alone, for deadlines that carry no time of day: "13 Sep". */
+export const onDay = (at: string | null | undefined): string =>
+  at ? new Date(at).toLocaleDateString([], { day: "numeric", month: "short" }) : "—";
+
 /** Minor-unit-free money for display only; the domain does the real maths. */
 export const money = (value: number | string | null | undefined, currency = "AED"): string =>
   value === null || value === undefined || value === "" ? "—" : `${currency} ${Number(value).toLocaleString()}`;

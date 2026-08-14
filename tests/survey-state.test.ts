@@ -6,6 +6,7 @@ import {
   isTerminal,
   requiresLead,
   requiresReason,
+  siteSelectionBlocker,
   stampColumnsFor,
   SURVEY_STATUSES,
   transitionCode,
@@ -185,5 +186,39 @@ describe("input hygiene", () => {
     for (const s of SURVEY_STATUSES) {
       expect(Array.isArray(allowedNext(s as SurveyStatus))).toBe(true);
     }
+  });
+});
+
+describe("C32 — a survey names the property it is for", () => {
+  it("rejects neither, which is what the create form used to send", () => {
+    // Before C32 the dialog asked for a deal and nothing else, so every survey
+    // arrived here with no site. That is the root of F-03: walk.ts then had no
+    // root to parent a discovered room to.
+    expect(siteSelectionBlocker({})).toMatch(/needs the property/);
+    expect(siteSelectionBlocker({ prospectSiteId: null, siteName: null })).toMatch(
+      /needs the property/
+    );
+  });
+
+  it("treats a blank or whitespace name as no answer", () => {
+    expect(siteSelectionBlocker({ siteName: "" })).toMatch(/needs the property/);
+    expect(siteSelectionBlocker({ siteName: "   " })).toMatch(/needs the property/);
+  });
+
+  it("accepts an existing site", () => {
+    expect(siteSelectionBlocker({ prospectSiteId: "site-1" })).toBeNull();
+  });
+
+  it("accepts a new site's name", () => {
+    expect(siteSelectionBlocker({ siteName: "Al Bayt Grill — Downtown" })).toBeNull();
+  });
+
+  it("rejects both rather than quietly preferring one", () => {
+    // The two answers mean different things. Preferring the id would discard a
+    // property the user named; preferring the name would create a duplicate of
+    // one they had just selected.
+    expect(siteSelectionBlocker({ prospectSiteId: "site-1", siteName: "New place" })).toMatch(
+      /not both/
+    );
   });
 });

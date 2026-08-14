@@ -2,6 +2,21 @@ import React, { useEffect } from 'react'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { useTheme } from '../theme/ThemeProvider'
 import AppSidebar from './AppSidebar'
+import MobileTabBar from './MobileTabBar'
+
+/**
+ * How the rail starts when the user has never touched it.
+ *
+ * A tablet in portrait is 768–1024px wide: wide enough that shadcn renders the
+ * rail rather than the phone bar, narrow enough that 256px of it is a third of
+ * the screen. So the first run there is the ICON rail, and desktop keeps the
+ * full one. The cookie always wins once it exists — this only decides run one.
+ */
+function railStartsOpen(): boolean {
+  const chosen = document.cookie.match(/(?:^|;\s*)sidebar_state=(true|false)/)
+  if (chosen) return chosen[1] === 'true'
+  return window.innerWidth >= 1024
+}
 
 interface LayoutProps {
   children: React.ReactNode
@@ -42,7 +57,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   return (
     <SidebarProvider
-      defaultOpen={!document.cookie.includes('sidebar_state=false')}
+      defaultOpen={railStartsOpen()}
       // The provider defaults to `min-h-svh` on an unclamped page; this shell is
       // fixed-height with exactly one scroll region per page, so the height is
       // pinned and min-h-svh is merged away. min() against 100dvh because if
@@ -51,10 +66,6 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       className="h-[min(var(--app-height),100dvh)] min-h-0 overflow-hidden"
     >
       <AppSidebar />
-
-      {/* On mobile the sidebar is an offcanvas Sheet; its summons sits in the
-          PageShell title row (every page renders through it) — a floating chip
-          here crowded the header and wasted the title row's left gutter. */}
 
       {/* Installed to a home screen the app draws edge-to-edge (viewport-fit=cover
           + black-translucent), so the inset — not the browser — must keep clear of
@@ -71,6 +82,12 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         >
           {children}
         </div>
+
+        {/* The phone's navigation, IN FLOW below the page's scroll region
+            rather than fixed over it — so no page has to reserve room for it
+            and none can scroll its last row underneath. Renders itself away
+            from `md` up, where the rail takes over. */}
+        <MobileTabBar />
       </SidebarInset>
     </SidebarProvider>
   )

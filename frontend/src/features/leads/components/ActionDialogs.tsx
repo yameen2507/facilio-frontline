@@ -137,9 +137,9 @@ function LogCallDialog({
     <ActionDialog
       open={open}
       onOpenChange={onOpenChange}
-      title="Log a call"
-      description="Added to the lead's activity, attributed to you."
-      submitLabel="Log call"
+      title="Add call notes"
+      description="What happened on the call, saved to the lead's activity and attributed to you. The first call noted marks the lead contacted."
+      submitLabel="Save notes"
       busy={busy}
       canSubmit={body.trim().length > 0}
       onSubmit={async () => {

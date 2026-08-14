@@ -54,6 +54,8 @@ const NUMERIC_COLUMNS = new Set([
   "restroom_count",
   "min_repeats",
   "max_repeats",
+  // --- access lane -----------------------------------------------------------
+  "sort_order",
   "geo_lat",
   "geo_lng",
   "geo_accuracy_m",

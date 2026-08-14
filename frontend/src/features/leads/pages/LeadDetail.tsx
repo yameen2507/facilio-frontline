@@ -21,27 +21,62 @@
  * rejected write can be fixed and retried, `true` lets it close.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ComponentProps } from "react";
+import {
+  ArrowRight,
+  Banknote,
+  Building2,
+  ChevronDown,
+  ClipboardList,
+  Clock,
+  FileText,
+  GitMerge,
+  Handshake,
+  Inbox,
+  Mail,
+  MapPin,
+  MessageSquare,
+  MoreHorizontal,
+  PenLine,
+  Phone,
+  User,
+  UserCheck,
+  Wrench,
+  type LucideIcon,
+} from "lucide-react";
 import { Link, useParams } from "react-router-dom";
+import { Button as UIButton } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/utils";
+import { useAccess } from "../../../app/access";
 import { useActor } from "../../../app/auth";
 import { PageShell } from "../../../app/shell/PageShell";
-import { ago, humanise, money } from "../../../lib/format";
+import { ago, humanise, money, onDay, plural } from "../../../lib/format";
 import { errMessage } from "../../../lib/request";
 import { vibe } from "../../../lib/vibe";
 import { Button } from "../../../ui/Button";
-import { Bar, Card, Split, Stack } from "../../../ui/Card";
+import { Card } from "../../../ui/Card";
+import { CompanyLogo } from "../../../ui/CompanyLogo";
+import { FactList } from "../../../ui/FactList";
+import OverlayScrollbar from "../../../ui/OverlayScrollbar";
+import { RailSection } from "../../../ui/RailSection";
 import { Chip } from "../../../ui/Chip";
-import { Facts } from "../../../ui/Facts";
 import { LeadDetailSkeleton } from "../../../ui/Skeleton";
 import { ErrorState } from "../../../ui/States";
 import { useToast } from "../../../ui/Toast";
-import { actionsFor, type LeadActionId } from "../actions";
+import { actionsFor, isTerminal, movesFor, MOVES, PERMISSION_OF, type LeadActionId } from "../actions";
 import {
   analyseInput,
   assignLead,
   claimLead,
   convertLead,
   getLead,
+  listDealSurveys,
   logCall,
   storeAnalysis,
   transitionLead,
@@ -53,16 +88,34 @@ import {
   type AssignRole,
   type PendingLeadAction,
 } from "../components/ActionDialogs";
-import { StatusChip, SlaChip } from "../components/LeadChips";
+import { SlaChip } from "../components/LeadChips";
+import { SurveysPane } from "../components/SurveysPane";
 import { LifecycleSteps } from "../components/LifecycleSteps";
 import { ResponseClocks } from "../components/ResponseClocks";
 import { Ownership, Timeline } from "../components/Timeline";
-import { TranscriptCard } from "../components/TranscriptCard";
-import type { LeadDetail as LeadDetailShape } from "../types/lead";
+import { TranscriptPane } from "../components/TranscriptCard";
+import { Tabs, type Tab } from "../../../ui/Tabs";
+import type { DealSurvey, LeadDetail as LeadDetailShape } from "../types/lead";
+
+/** The right-hand container's panes. */
+type DetailTab = "assessment" | "surveys" | "activity" | "conversation";
+
+/**
+ * How each channel presents in the header — the same vocabulary the new-lead
+ * dialog uses, with an icon carrying the channel at a glance. Only `widget`
+ * leads have a conversation behind them, which is why only they grow the
+ * Conversation tab.
+ */
+const SOURCE_META: Record<string, { Icon: LucideIcon; label: string }> = {
+  widget: { Icon: MessageSquare, label: "Website chat" },
+  tender: { Icon: FileText, label: "Tender notice" },
+  inapp: { Icon: PenLine, label: "Raised internally" },
+};
 
 export function LeadDetail() {
   const { id = "" } = useParams();
   const actor = useActor();
+  const { can, loading: accessLoading } = useAccess();
   const toast = useToast();
 
   const [detail, setDetail] = useState<LeadDetailShape | null>(null);
@@ -70,6 +123,13 @@ export function LeadDetail() {
   const [assessing, setAssessing] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [pending, setPending] = useState<PendingLeadAction>(null);
+  const [tab, setTab] = useState<DetailTab>("assessment");
+  const [surveys, setSurveys] = useState<DealSurvey[] | null>(null);
+  const [surveysError, setSurveysError] = useState<string | null>(null);
+  // Whether the full stage path has scrolled out of the work area — the
+  // condensed sticky strip is shown only then.
+  const [condensed, setCondensed] = useState(false);
+  const pathEndRef = useRef<HTMLDivElement | null>(null);
 
   // Which lead this component is currently showing. An async reply checks against
   // it before writing, which is what stops a slow response for lead A from
@@ -89,6 +149,9 @@ export function LeadDetail() {
     let live = true;
     setDetail(null);
     setError(null);
+    // A fresh lead starts on the verdict; a tab picked on the previous lead
+    // must not carry over ("conversation" may not even exist on this one).
+    setTab("assessment");
 
     getLead(id).then(({ data, error: err }) => {
       if (!live) return;
@@ -157,6 +220,70 @@ export function LeadDetail() {
     }
   }
 
+  // Surveys ride on the DEAL, so they exist only after conversion. Fetched
+  // here rather than in the pane because the count also feeds the tab label
+  // and the enquiry banner — one request, three consumers. Keyed on dealId,
+  // which appears the moment Convert lands and refetches then.
+  const dealIdForSurveys = detail?.lead.dealId ?? null;
+  useEffect(() => {
+    setSurveys(null);
+    setSurveysError(null);
+    if (!dealIdForSurveys) return;
+
+    let live = true;
+    listDealSurveys(dealIdForSurveys).then(({ data, error: err }) => {
+      if (!live) return;
+      if (err) setSurveysError(err);
+      else setSurveys(data?.surveys ?? []);
+    });
+
+    return () => {
+      live = false;
+    };
+  }, [dealIdForSurveys, reloadKey]);
+
+  // Watches the point just under the path card, WITH the work-area scroller as
+  // the observer's root — against the window the sentinel can be "hidden" while
+  // still below the pane's top edge, and the strip never fired. "Not
+  // intersecting AND above the root's top" = the whole path has scrolled away,
+  // which is when the condensed strip earns its place. Keyed on `detail`: the
+  // sentinel exists only once the loaded view renders.
+  useEffect(() => {
+    const el = pathEndRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        setCondensed(!entry.isIntersecting && entry.boundingClientRect.top < (entry.rootBounds?.top ?? 0));
+      },
+      { root: el.closest(".overlay-scroll") }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [detail]);
+
+  // An unassessed lead assesses ITSELF: the verdict is the first thing anyone
+  // wants from this page, and the click that fetched it was pure ceremony. One
+  // attempt per lead id — a failed run toasts and falls back to the card's
+  // manual button rather than retrying in a loop, which with a broken assessor
+  // would burn a model call per render. Terminal leads are exempt: history is
+  // read, not re-scored, and re-assessment stays a deliberate act.
+  const autoAssessed = useRef<string | null>(null);
+  useEffect(() => {
+    if (!detail || detail.analysis || assessing) return;
+    if (isTerminal(detail.lead.status)) return;
+    // An automatic model call WAITS for the permission answer: fail-open is
+    // for controls a person still has to click, not for a write the page
+    // makes by itself — a view-only role merely opening an unassessed lead
+    // must not burn a model call and append an analysis version.
+    if (accessLoading || !can("leads", PERMISSION_OF.assess)) return;
+    if (autoAssessed.current === id) return;
+    autoAssessed.current = id;
+    void assess();
+    // `assess` is deliberately not a dependency: it is recreated per render
+    // and would re-fire this effect. The run is keyed on what actually
+    // matters — which lead, and whether it has a verdict yet.
+  }, [detail, id, assessing, accessLoading, can]);
+
   if (error) {
     return (
       <PageShell title="Lead">
@@ -167,7 +294,7 @@ export function LeadDetail() {
 
   if (!detail) {
     return (
-      <PageShell title="Lead">
+      <PageShell title="Lead" fillBody>
         <LeadDetailSkeleton />
       </PageShell>
     );
@@ -176,14 +303,21 @@ export function LeadDetail() {
   const lead = detail.lead;
   const token = lead.data?.intakeSessionToken;
 
-  const HANDLERS: Record<LeadActionId, { label: string; primary?: boolean; run: () => Promise<void> | void }> = {
+  // Labels here are for the HEADER's buttons (claim as an ownership grab, work
+  // that doesn't move the lead). A move rendered on the path card takes its
+  // label from MOVES instead, where it is phrased around the state it lands in.
+  const HANDLERS: Record<
+    LeadActionId,
+    { label: string; glyph?: ComponentProps<typeof Button>["glyph"]; run: () => Promise<void> | void }
+  > = {
     claim: {
       label: "Claim",
-      primary: true,
       run: async () => settled(unwrap(await claimLead(id, actor)), "Claimed — it's yours"),
     },
-    "log-call": { label: "Log a call", run: () => setPending("log-call") },
-    assess: { label: "Assess with AI", primary: true, run: assess },
+    // "Add call notes", not "Record a call" — record implies audio, and this
+    // is a person typing what happened on the call.
+    "log-call": { label: "Add call notes", glyph: "phone", run: () => setPending("log-call") },
+    assess: { label: "Assess with AI", run: assess },
     reassess: { label: "Re-assess", run: assess },
     qualify: {
       label: "Qualify",
@@ -193,7 +327,6 @@ export function LeadDetail() {
     assign: { label: "Assign…", run: () => setPending("assign") },
     convert: {
       label: "Convert to deal",
-      primary: true,
       run: async () => {
         const r = unwrap(await convertLead(id, actor));
         if (r) settled(r, `${r.dealRefNo} created · ${r.queued.length} Facilio writes queued`);
@@ -242,71 +375,194 @@ export function LeadDetail() {
     return true;
   };
 
-  // The action set is a pure function of the lead's state, and it is unit-tested.
-  // "assess" is dropped from the bar because the AI card carries it when there is
-  // no verdict yet — two buttons for one action on one screen.
-  const actions = actionsFor(lead, Boolean(detail.analysis)).filter((a) => a !== "assess");
+  // Both sets are pure functions of the lead's state, and both are unit-tested.
+  // The header carries only work that does NOT advance the lead; anything that
+  // moves it lives on the path card below, labelled with its destination.
+  // Assessing — first run and re-runs alike — lives on the AI assessment pane,
+  // beside the verdict it refreshes, so the header never duplicates it.
+  // "claim" and "log-call" stay in the header only while they are NOT the
+  // recommended move, so the same action never appears twice.
+  // The state machine says what the LEAD allows; the permission matrix says
+  // what the PERSON may do. Both filters run before anything renders, so a
+  // forbidden move is never offered only to bounce off the server.
+  const available = actionsFor(lead, Boolean(detail.analysis)).filter((a) =>
+    can("leads", PERMISSION_OF[a])
+  );
+  const allowedMoves = movesFor(lead);
+  const moves = {
+    next:
+      allowedMoves.next && can("leads", PERMISSION_OF[allowedMoves.next])
+        ? allowedMoves.next
+        : null,
+    others: allowedMoves.others.filter((m) => can("leads", PERMISSION_OF[m])),
+  };
+  const next = moves.next;
+  const headerActions = available.filter(
+    (a) => (a === "claim" && next !== "claim") || (a === "log-call" && next !== "log-call")
+  );
+
+  const source = SOURCE_META[lead.source] ?? { Icon: Inbox, label: humanise(lead.source) };
 
   return (
+    // The header carries the title and the overflow menu; identity detail,
+    // the clock verdict and the primary actions live in the record rail,
+    // Attio-style. fillBody hands the page its own height so the rail can be
+    // a FIXED panel: on wide screens the rail and the work area scroll
+    // independently; below 1080px the whole page stacks and scrolls as one.
     <PageShell
       title={lead.companyName}
-      subtitle={`${lead.refNo} · from ${lead.source} · ${ago(lead.createdAt)}`}
+      fillBody
       actions={
-        <Button small glyph="refresh" onClick={() => setReloadKey((k) => k + 1)}>
-          Refresh
-        </Button>
+        /* The menu goes away entirely when nothing is left to put in it, so
+           the trigger never opens onto an empty sheet. */
+        available.includes("assign") ? (
+          /* shadcn's Button rather than the app wrapper: asChild injects the
+             trigger's props into its child, and the wrapper doesn't forward
+             unknown props. */
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <UIButton variant="outline" size="sm" aria-label="More actions">
+                <MoreHorizontal />
+              </UIButton>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={() => setPending("assign")}>Assign…</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null
       }
     >
-      <Bar className="mb-4">
-        {actions.map((a) => (
-          <Button
-            key={a}
-            variant={HANDLERS[a].primary ? "primary" : "default"}
-            onClick={() => void HANDLERS[a].run()}
-            disabled={a === "reassess" && assessing}
-          >
-            {a === "reassess" && assessing ? "Assessing…" : HANDLERS[a].label}
-          </Button>
-        ))}
-        <span className="flex-1" />
-        <StatusChip status={lead.status} />
-        <SlaChip sla={detail.sla} />
-      </Bar>
+      <div className="flex min-h-0 flex-1 max-[1079px]:flex-col max-[1079px]:overflow-y-auto">
+        {/* The record rail — a FIXED flat panel with its own scroll, not a
+            floating card: flat sections divided by rules, the way Attio panels
+            a record. Below 1080px it stacks above the work area and the page
+            scrolls as one. */}
+        <aside className="shrink-0 border-b min-[1080px]:min-h-0 min-[1080px]:w-[400px] min-[1080px]:border-r min-[1080px]:border-b-0">
+          {/* The house overlay scrollbar, not Radix ScrollArea: its viewport
+              wraps content in an inline display:table div that silently breaks
+              position:sticky, which the work area depends on — and the thin
+              floating bar solves the same always-on-track ugliness. */}
+          <OverlayScrollbar style={{ height: "100%" }}>
+            <div className="pb-2 min-[1080px]:pb-[calc(--spacing(4)+env(safe-area-inset-bottom,0px))]">
+          {/* The identity block — the rail leads with WHO, the way Attio heads
+              its record panel: mark, name, the record's meta line, then its
+              actions right where the record is read. */}
+          <div className="px-6 py-4">
+            <CompanyLogo
+              name={lead.companyName}
+              domain={lead.websiteDomain}
+              email={lead.contactEmail}
+              className="size-10"
+            />
+            <div className="mt-2.5 truncate text-base font-semibold tracking-tight">{lead.companyName}</div>
+            {/* A flex row, not inline spans: icons, text and the clock chip
+                all centre on one axis instead of chasing a text baseline. */}
+            <div className="text-muted-foreground mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs">
+              <span className="font-mono">{lead.refNo}</span>
+              <span aria-hidden="true" className="opacity-40">·</span>
+              <span className="flex items-center gap-1">
+                <source.Icon className="size-3.5 opacity-70" aria-hidden="true" />
+                {source.label}
+              </span>
+              <span aria-hidden="true" className="opacity-40">·</span>
+              <span className="flex items-center gap-1">
+                <Clock className="size-3.5 opacity-70" aria-hidden="true" />
+                {ago(lead.createdAt)}
+              </span>
+              {detail.sla ? (
+                // One flex item, so the separator and the chip wrap TOGETHER —
+                // split, a line ends on a dangling dot.
+                <span className="flex items-center gap-1.5">
+                  <span aria-hidden="true" className="opacity-40">·</span>
+                  <SlaChip sla={detail.sla} />
+                </span>
+              ) : null}
+            </div>
+            {/* The rail keeps only the everyday work; the overflow menu lives
+                in the page header's right corner. */}
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {headerActions.map((a) => (
+                <Button key={a} small glyph={HANDLERS[a].glyph} onClick={() => void HANDLERS[a].run()}>
+                  {HANDLERS[a].label}
+                </Button>
+              ))}
+            </div>
+          </div>
 
-      <Card className="mb-4">
-        <LifecycleSteps lead={lead} />
-      </Card>
-
-      <Split>
-        <Stack>
-          <Card title="Enquiry">
+          <RailSection title="Enquiry">
+            {/* The deal's surveys, surfaced where the record is read. The
+                button is a tab switch, not a navigation — the list is one
+                click to the right. */}
+            {surveys?.length ? (
+              <div className="mb-4 flex items-center gap-2 rounded-md bg-green-100 px-3 py-2.5 text-green-700 dark:bg-green-950 dark:text-green-400">
+                <ClipboardList className="size-3.5 shrink-0" aria-hidden="true" />
+                <span className="min-w-0 flex-1 text-sm font-medium">
+                  {plural(surveys.length, "survey", "surveys")} raised on this deal
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setTab("surveys")}
+                  className="shrink-0 text-xs font-medium underline-offset-4 hover:underline"
+                >
+                  View
+                </button>
+              </div>
+            ) : null}
+            {/* First thing in the card: the same company enquiring again is a
+                buying signal, and each merged row says WHICH key matched, so
+                the reader can judge the merge rather than take it on faith. */}
+            {detail.duplicates.length ? (
+              <div className="mb-4 rounded-md bg-orange-100 px-3 py-2.5 text-orange-700 dark:bg-orange-950 dark:text-orange-400">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <GitMerge className="size-3.5 shrink-0" aria-hidden="true" />
+                  {plural(detail.duplicates.length, "duplicate enquiry", "duplicate enquiries")} merged in
+                </div>
+                <ul className="mt-1 flex list-none flex-col gap-0.5 pl-[22px] text-xs">
+                  {detail.duplicates.map((d) => (
+                    <li key={d.id}>
+                      <Link to={`/leads/${d.id}`} className="font-medium underline-offset-4 hover:underline">
+                        {d.refNo}
+                      </Link>
+                      {" · "}
+                      {d.matchedOn ? `same ${d.matchedOn}` : "matched this lead"}
+                      {" · "}
+                      {onDay(d.createdAt)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             <div className="mb-4">
               {lead.description ?? "No description captured."}
             </div>
-            <Facts
-              items={[
-                { label: "Contact", value: lead.contactName ?? "—" },
-                { label: "Service", value: lead.serviceType ?? "—" },
+            <FactList
+              rows={[
+                { icon: User, label: "Contact", value: lead.contactName ?? "—" },
+                { icon: Wrench, label: "Service", value: lead.serviceType ?? "—" },
                 {
+                  icon: Mail,
                   label: "Email",
                   value: lead.contactEmail ? <a href={`mailto:${lead.contactEmail}`}>{lead.contactEmail}</a> : "—",
                 },
                 {
+                  icon: Phone,
                   label: "Phone",
                   value: lead.contactPhone ? <a href={`tel:${lead.contactPhone}`}>{lead.contactPhone}</a> : "—",
                 },
                 {
+                  icon: MapPin,
                   label: "Location",
                   value: `${lead.siteCity ?? "—"}${lead.siteAddress ? `, ${lead.siteAddress}` : ""}`,
                 },
-                { label: "Est. value", value: money(lead.estimatedValue, lead.currency ?? "AED") },
-                { label: "Owner", value: lead.ownerEmail ?? "unclaimed" },
+                { icon: Banknote, label: "Est. value", value: money(lead.estimatedValue, lead.currency ?? "AED") },
+                { icon: UserCheck, label: "Owner", value: lead.ownerEmail ?? "unclaimed" },
                 {
+                  icon: Handshake,
                   label: "Deal",
                   // The next step after conversion is the site walk — offer it
                   // where the deal is, not three pages away.
                   value: lead.dealId ? (
-                    <span className="flex items-center gap-2">
+                    <span className="flex flex-wrap items-center gap-2">
                       <Chip tone="green">created</Chip>
                       <Link to={`/surveys?new=${lead.dealId}`}>Raise survey</Link>
                     </span>
@@ -315,54 +571,171 @@ export function LeadDetail() {
                   ),
                 },
                 {
+                  icon: Building2,
                   label: "Account",
-                  value: lead.accountId ? <Link to={`/accounts/${lead.accountId}`}>Company page</Link> : "—",
+                  // The account is created FROM this lead's company at
+                  // conversion, so the company name is its honest label —
+                  // "Company page" said where the link went, not who it was.
+                  value: lead.accountId ? (
+                    <Link to={`/accounts/${lead.accountId}`}>{lead.companyName}</Link>
+                  ) : (
+                    "—"
+                  ),
                 },
               ]}
             />
-            {lead.dispositionReason ? (
-              <div className="mt-3">
-                <Chip tone="red">{`closed: ${lead.dispositionReason}`}</Chip>
-              </div>
-            ) : null}
-            {detail.duplicates.length ? (
-              <div className="mt-3">
-                <Chip tone="orange">
-                  {`${detail.duplicates.length} duplicate ${
-                    detail.duplicates.length === 1 ? "enquiry" : "enquiries"
-                  } merged in`}
-                </Chip>
-              </div>
-            ) : null}
-          </Card>
+            {/* The close reason lives on the path's terminal segment, and the
+                merged duplicates lead the section as the banner above. */}
+          </RailSection>
 
-          <Card title="Activity" meta={`${detail.timeline.length} events`}>
-            <Timeline events={detail.timeline} />
-          </Card>
-        </Stack>
-
-        <Stack>
-          {token ? <TranscriptCard token={token} /> : null}
-
-          <Card title="AI assessment">
-            <AiAssessment
-              lead={lead}
-              band={detail.band}
-              analysis={detail.analysis}
-              onAssess={() => void assess()}
-              assessing={assessing}
-            />
-          </Card>
-
-          <Card title="Response clocks">
+          <RailSection title="Response clocks">
             <ResponseClocks lead={lead} />
+          </RailSection>
+
+          <RailSection title="Ownership" meta={detail.assignments.length || undefined}>
+            <Ownership assignments={detail.assignments} />
+          </RailSection>
+            </div>
+          </OverlayScrollbar>
+        </aside>
+
+        {/* The work area: the stage path, then the tabbed panes, scrolling
+            independently of the rail behind the same overlay scrollbar. */}
+        <div className="min-w-0 flex-1 min-[1080px]:min-h-0">
+          <OverlayScrollbar style={{ height: "100%" }}>
+            {/* Insets written out longhand for the same safe-area reason as
+                the shell's own scroller. */}
+            <div className="px-4 pt-4 pb-[calc(--spacing(4)+env(safe-area-inset-bottom,0px))] sm:px-6 sm:pt-6 sm:pb-[calc(--spacing(6)+env(safe-area-inset-bottom,0px))]">
+          {/* The path card: where the lead IS, then the moves that change
+              that — kept on one surface so the flow and the controls that
+              drive it are never read apart. Terminal leads get the path alone;
+              there is nothing left to move. */}
+          <Card className="mb-5" pad={false}>
+            <div className="p-3 sm:p-4">
+              <LifecycleSteps lead={lead} />
+            </div>
+            {next || moves.others.length ? (
+              <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2 border-t px-4 py-3">
+                {next ? (
+                  // One sentence beside the button that performs it, so the
+                  // control never has to be decoded ("Qualify… into what?").
+                  <p className="text-muted-foreground min-w-0 flex-1 basis-56 text-sm">{MOVES[next].hint}</p>
+                ) : (
+                  <span className="min-w-0 flex-1 basis-56" aria-hidden="true" />
+                )}
+                {moves.others.length ? (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <UIButton variant="outline" size="sm">
+                        Move to
+                        <ChevronDown />
+                      </UIButton>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-72">
+                      {moves.others.map((m) => (
+                        <DropdownMenuItem
+                          key={m}
+                          variant={m === "close" ? "destructive" : "default"}
+                          className="flex-col items-start gap-0.5 py-2"
+                          onSelect={() => void HANDLERS[m].run()}
+                        >
+                          <span className="text-sm font-medium">{MOVES[m].label}</span>
+                          {/* Every item says where the move lands, so picking
+                              one is never a guess. */}
+                          <span className="text-muted-foreground text-xs">
+                            {MOVES[m].blurb} · {humanise(lead.status)} → {humanise(MOVES[m].to)}
+                          </span>
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : null}
+                {next ? (
+                  // shadcn's Button here too, for a different reason than the
+                  // menu triggers: the app wrapper only renders a LEADING
+                  // glyph, and the forward arrow must trail the label to read
+                  // as "this advances it".
+                  <UIButton size="sm" onClick={() => void HANDLERS[next].run()}>
+                    {MOVES[next].label}
+                    <ArrowRight />
+                  </UIButton>
+                ) : null}
+              </div>
+            ) : null}
           </Card>
 
-          <Card title="Ownership">
-            <Ownership assignments={detail.assignments} />
-          </Card>
-        </Stack>
-      </Split>
+          {/* The point just under the path card; when it crosses the viewport
+              top the full path is gone and the sticky strip takes over. */}
+          <div ref={pathEndRef} aria-hidden="true" />
+          {condensed ? (
+            // h-0 so appearing never shifts the layout — the strip floats over
+            // the content on its own backdrop, sliding in from the top edge.
+            // Its rendered height is 44px (py-2 + the h-7 compact bar), which
+            // is the offset the pinned tabs sit at below.
+            <div className="sticky top-0 z-20 h-0">
+              <div className="bg-background/95 -mx-4 px-4 py-2 backdrop-blur-sm motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-2 motion-safe:duration-200 sm:-mx-6 sm:px-6">
+                <LifecycleSteps lead={lead} compact />
+              </div>
+            </div>
+          ) : null}
+
+          {/* The tabs pin WITH the strip: sticky at the top edge, and once the
+              condensed path appears they ride 44px below it, so the position
+              and the panes' navigation stay on screen together. */}
+          <div
+            className={cn(
+              "sticky z-10 -mx-4 mb-1 bg-background px-4 pt-1 pb-3 transition-[top] duration-200 motion-reduce:transition-none sm:-mx-6 sm:px-6",
+              condensed ? "top-[44px] border-b" : "top-0"
+            )}
+          >
+            <Tabs<DetailTab>
+              items={
+                [
+                  { id: "assessment", label: "AI assessment" },
+                  // Surveys exist only once a deal does — a tab that can never
+                  // hold content is noise on an unconverted lead.
+                  ...(lead.dealId
+                    ? [{ id: "surveys", label: "Surveys", count: surveys?.length } as Tab<DetailTab>]
+                    : []),
+                  { id: "activity", label: "Activity", count: detail.timeline.length },
+                  ...(token ? [{ id: "conversation", label: "Conversation" } as Tab<DetailTab>] : []),
+                ] satisfies Tab<DetailTab>[]
+              }
+              active={tab}
+              onChange={setTab}
+            />
+          </div>
+          {/* Panes sit FLAT under the tabs — the pane is the page here, and a
+              wrapper card was chrome with no job. They hide rather than
+              unmount: the transcript is its own request and the analyst ticker
+              has state, and a tab switch must not refetch or restart either. */}
+          <div className={tab === "assessment" ? undefined : "hidden"}>
+              <AiAssessment
+                lead={lead}
+                band={detail.band}
+                analysis={detail.analysis}
+                onAssess={() => void assess()}
+                assessing={assessing}
+                canAssess={can("leads", PERMISSION_OF.assess)}
+              />
+            </div>
+          {lead.dealId ? (
+            <div className={tab === "surveys" ? undefined : "hidden"}>
+              <SurveysPane dealId={lead.dealId} surveys={surveys} error={surveysError} />
+            </div>
+          ) : null}
+          <div className={tab === "activity" ? undefined : "hidden"}>
+            <Timeline events={detail.timeline} />
+          </div>
+          {token ? (
+            <div className={tab === "conversation" ? undefined : "hidden"}>
+              <TranscriptPane token={token} />
+            </div>
+          ) : null}
+            </div>
+          </OverlayScrollbar>
+        </div>
+      </div>
 
       <LeadActionDialogs
         pending={pending}

@@ -59,27 +59,38 @@ describe("conditionMultiplier — D-e-safe (C11)", () => {
 
 describe("priceLine", () => {
   it("prices a one-time line into the one-time bucket only", () => {
-    const p = priceLine({ qty: 4500, unitRate: 0.8, multiplier: 1.25, frequency: "one_time" });
-    expect(p.perOccurrence).toBe(4500);
-    expect(p.oneTime).toBe(4500);
+    const p = priceLine({ qty: 4500, unitRate: 80, multiplier: 1.25, frequency: "one_time" });
+    expect(p.perOccurrence).toBe(450_000);
+    expect(p.oneTime).toBe(450_000);
     expect(p.monthlyEquivalent).toBeNull();
   });
 
   it("converts a recurring line to its monthly equivalent", () => {
-    const p = priceLine({ qty: 1, unitRate: 300, frequency: "weekly" });
+    const p = priceLine({ qty: 1, unitRate: 30_000, frequency: "weekly" });
     expect(p.oneTime).toBeNull();
-    expect(p.monthlyEquivalent).toBe(1300); // 300 × 52/12
+    expect(p.monthlyEquivalent).toBe(130_000); // 30_000 × 52/12
   });
 
   it("applies the per-occurrence minimum charge", () => {
-    const p = priceLine({ qty: 10, unitRate: 1, minCharge: 150, frequency: "monthly" });
-    expect(p.perOccurrence).toBe(150);
-    expect(p.monthlyEquivalent).toBe(150);
+    const p = priceLine({ qty: 10, unitRate: 100, minCharge: 15_000, frequency: "monthly" });
+    expect(p.perOccurrence).toBe(15_000);
+    expect(p.monthlyEquivalent).toBe(15_000);
   });
 
-  it("rounds money to two decimals", () => {
-    const p = priceLine({ qty: 3, unitRate: 0.333, frequency: "one_time" });
-    expect(p.perOccurrence).toBe(1);
+  it("rounds to whole minor units, once, at the line boundary", () => {
+    // 100 × 52/12 = 433.33… — a weekly rate never divides evenly into a month.
+    const p = priceLine({ qty: 1, unitRate: 100, frequency: "weekly" });
+    expect(p.monthlyEquivalent).toBe(433);
+    expect(Number.isInteger(p.monthlyEquivalent)).toBe(true);
+  });
+
+  it("derives the monthly figure from the unrounded per-occurrence value", () => {
+    // qty × rate = 333.33…  Rounding that to 333 FIRST and then multiplying by
+    // 52/12 gives 1443; carrying the unrounded value through gives 1444. The
+    // second is correct, and the difference compounds every month.
+    const p = priceLine({ qty: 3.3333, unitRate: 100, frequency: "weekly" });
+    expect(p.perOccurrence).toBe(333);
+    expect(p.monthlyEquivalent).toBe(1444);
   });
 });
 
@@ -125,7 +136,7 @@ const RATE_ENTRIES: RateEntry[] = [
     serviceCode: "GC",
     facilioServiceId: null,
     uom: "sqft",
-    unitRate: 0.1,
+    price: 10,
     conditionMultipliers: { "1": 1.5, "2": 1.25, "3": 1, "4": 0.9, "5": 0.85 },
     conditionScaleDirection: "1_is_worst",
     defaultFrequency: "monthly",
@@ -134,7 +145,7 @@ const RATE_ENTRIES: RateEntry[] = [
     estimationKey: "restroom_count",
     description: "Restroom deep clean",
     serviceCode: "RDC",
-    unitRate: 120,
+    price: 12_000,
     defaultFrequency: "one_time",
   },
 ];
@@ -167,14 +178,14 @@ describe("draftLinesFromHandoff (M2b)", () => {
     expect(line?.description).toBe("General cleaning — Room 204");
     expect(line?.conditionScore).toBe(2);
     expect(line?.conditionMultiplier).toBe(1.25);
-    expect(line?.monthlyEquivalent).toBe(600); // 4800 × 0.1 × 1.25, monthly
+    expect(line?.monthlyEquivalent).toBe(60_000); // 4800 × 10 × 1.25, monthly
     expect(line?.isOptional).toBe(false);
   });
 
   it("prices an unscoped value with no condition adjustment", () => {
     const line = draft.lines.find((l) => l.estimationKey === "restroom_count");
     expect(line?.conditionMultiplier).toBe(1);
-    expect(line?.oneTime).toBe(720);
+    expect(line?.oneTime).toBe(72_000);
   });
 
   it("returns unmatched keys and non-numeric values as unpriced, never drops them", () => {
@@ -186,7 +197,7 @@ describe("draftLinesFromHandoff (M2b)", () => {
   it("turns recommendations into unpriced OPTIONAL lines (C10)", () => {
     const rec = draft.lines.find((l) => l.sourceRole === "recommendation");
     expect(rec?.isOptional).toBe(true);
-    expect(rec?.unitRate).toBeNull();
+    expect(rec?.cardPrice).toBeNull();
     expect(rec?.description).toBe("Grease trap servicing");
   });
 
@@ -229,7 +240,7 @@ describe("quoteReadiness — warn, never block", () => {
     const warnings = quoteReadiness({
       contractType: "semi_comprehensive",
       liabilityThresholdAmount: null,
-      lines: [{ unitRate: 10, isOptional: false }],
+      lines: [{ cardPrice: 1_000, isOptional: false }],
     });
     expect(warnings.some((w) => w.includes("liability threshold"))).toBe(true);
   });
@@ -238,7 +249,7 @@ describe("quoteReadiness — warn, never block", () => {
     const warnings = quoteReadiness({
       contractType: "semi_comprehensive",
       liabilityThresholdAmount: 500,
-      lines: [{ unitRate: 10, isOptional: false }],
+      lines: [{ cardPrice: 1_000, isOptional: false }],
     });
     expect(warnings).toEqual([]);
   });
@@ -246,9 +257,9 @@ describe("quoteReadiness — warn, never block", () => {
   it("counts unpriced required and optional lines separately", () => {
     const warnings = quoteReadiness({
       lines: [
-        { unitRate: null, isOptional: false },
-        { unitRate: null, isOptional: true },
-        { unitRate: 5, isOptional: false },
+        { cardPrice: null, isOptional: false },
+        { cardPrice: null, isOptional: true },
+        { cardPrice: 500, isOptional: false },
       ],
     });
     expect(warnings.some((w) => w.includes("count toward the total"))).toBe(true);
@@ -256,7 +267,7 @@ describe("quoteReadiness — warn, never block", () => {
   });
 
   it("surfaces high not-visited share at the default threshold", () => {
-    const lines = [{ unitRate: 10, isOptional: false }];
+    const lines = [{ cardPrice: 1_000, isOptional: false }];
     expect(quoteReadiness({ lines, notVisitedPct: 25 }).some((w) => w.includes("not visited"))).toBe(true);
     expect(quoteReadiness({ lines, notVisitedPct: 6 })).toEqual([]);
   });

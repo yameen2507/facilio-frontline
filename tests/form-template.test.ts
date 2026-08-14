@@ -3,16 +3,25 @@ import {
   archiveBlocker,
   editBlocker,
   FIELD_TYPES,
+  isEstimable,
   isTemplateStatus,
   LEVEL_BINDINGS,
   publishBlockers,
   publishStatusBlocker,
   TEMPLATE_STATUSES,
+  UNITS,
   type PublishSection,
 } from "../src/domain/form-template";
 
-const q = (fieldType: string, options: unknown[] | null = null) => ({ fieldType, options });
+const q = (
+  fieldType: string,
+  options: unknown[] | null = null,
+  extra: { unit?: string | null; estimationKey?: string | null } = {}
+) => ({ fieldType, options, ...extra });
 const section = (...questions: ReturnType<typeof q>[]): PublishSection => ({ questions });
+/** A `number` needs a unit to be publishable, so the valid form is the default. */
+const num = (unit: string | null = "sqft", estimationKey: string | null = null) =>
+  q("number", null, { unit, estimationKey });
 
 describe("the lifecycle: draft -> published -> archived, one-way", () => {
   it("only a draft is editable", () => {
@@ -69,9 +78,12 @@ describe("the publish guard — three blockers, reported together", () => {
   });
 
   it("ignores option counts on non-options field types", () => {
-    for (const t of FIELD_TYPES.filter((t) => t !== "options")) {
+    // `number` carries its own rule (a unit), so it is exercised in its own
+    // describe rather than smuggled through the options case.
+    for (const t of FIELD_TYPES.filter((t) => t !== "options" && t !== "number")) {
       expect(publishBlockers([section(q(t, null))])).toEqual([]);
     }
+    expect(publishBlockers([section(num())])).toEqual([]);
   });
 
   it("reports independent blockers together", () => {
@@ -81,9 +93,72 @@ describe("the publish guard — three blockers, reported together", () => {
   });
 });
 
+describe("C31 — the number type and its unit", () => {
+  it("blocks a number question with no unit", () => {
+    expect(publishBlockers([section(num(null))])).toEqual(["1 number question(s) need a unit"]);
+  });
+
+  it("blocks a number question whose unit is not one of ours", () => {
+    expect(publishBlockers([section(num("square feet"))])).toEqual([
+      "1 number question(s) need a unit",
+    ]);
+  });
+
+  it("counts every unitless number question, not just the first", () => {
+    expect(publishBlockers([section(num(null), num(null), num("sqm"))])).toEqual([
+      "2 number question(s) need a unit",
+    ]);
+  });
+
+  it("accepts every unit on the fixed list", () => {
+    for (const u of UNITS) expect(publishBlockers([section(num(u))])).toEqual([]);
+  });
+
+  it("lets a number carry an estimation key — that is the whole point", () => {
+    expect(publishBlockers([section(num("sqft", "total_sqft"))])).toEqual([]);
+  });
+});
+
+describe("C31 — an estimation key only sits where it can be priced", () => {
+  it("blocks the F-02 shape: a key on free text", () => {
+    expect(publishBlockers([section(q("short_text", null, { estimationKey: "total_sqft" }))])).toEqual(
+      [
+        "1 question(s) carry an estimation key on a type that cannot be priced — move it to Number or Options",
+      ]
+    );
+  });
+
+  it("allows a key on options", () => {
+    expect(
+      publishBlockers([section(q("options", ["a", "b"], { estimationKey: "condition" }))])
+    ).toEqual([]);
+  });
+
+  it("treats a blank or whitespace key as no key at all", () => {
+    expect(publishBlockers([section(q("short_text", null, { estimationKey: "" }))])).toEqual([]);
+    expect(publishBlockers([section(q("short_text", null, { estimationKey: "   " }))])).toEqual([]);
+  });
+
+  it("reports a misplaced key alongside a unitless number, not instead of it", () => {
+    const blockers = publishBlockers([
+      section(num(null), q("long_text", null, { estimationKey: "notes" })),
+    ]);
+    expect(blockers).toHaveLength(2);
+    expect(blockers).toContain("1 number question(s) need a unit");
+  });
+
+  it("agrees with isEstimable about which types qualify", () => {
+    expect(FIELD_TYPES.filter(isEstimable)).toEqual(["number", "options"]);
+  });
+});
+
 describe("the enum sets the reference handler serves", () => {
-  it("holds P1's four field types — `number` awaits D-k", () => {
-    expect(FIELD_TYPES).toEqual(["short_text", "long_text", "options", "attachment"]);
+  it("holds five field types — `number` closed D-k per §8 C31", () => {
+    expect(FIELD_TYPES).toEqual(["short_text", "long_text", "number", "options", "attachment"]);
+  });
+
+  it("holds the five units, fixed so `sqft` and `sq ft` cannot both exist", () => {
+    expect(UNITS).toEqual(["sqft", "sqm", "each", "linear_m", "hours"]);
   });
 
   it("holds the three level bindings", () => {

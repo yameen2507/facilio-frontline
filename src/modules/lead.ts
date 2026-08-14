@@ -370,7 +370,7 @@ export interface LeadDetail {
   analysis: Record<string, unknown> | null;
   timeline: ReturnType<typeof timeline>;
   assignments: Array<Record<string, unknown>>;
-  duplicates: Array<{ id: string; refNo: string; createdAt: string }>;
+  duplicates: Array<{ id: string; refNo: string; createdAt: string; matchedOn: "email" | "phone" | "domain" | null }>;
 }
 
 /**
@@ -395,7 +395,7 @@ export function leadDetail(id: string): LeadDetail {
     lead: Lead | null;
     analysis: Record<string, unknown> | null;
     assignments: Array<Record<string, unknown>>;
-    duplicates: Array<{ id: string; refNo: string; createdAt: string }>;
+    duplicates: Array<{ id: string; refNo: string; createdAt: string; matchedOn: "email" | "phone" | "domain" | null }>;
     timeline: ReturnType<typeof timeline>;
   }>(
     `select
@@ -421,10 +421,22 @@ export function leadDetail(id: string): LeadDetail {
         ) x) as assignments_arr,
 
        (select coalesce(json_agg(x order by x.created_at desc), '[]'::json) from (
-          select id, ref_no, created_at
-            from fl_lead
-           where duplicate_of_lead_id = $1
-           order by created_at desc
+          select d.id, d.ref_no, d.created_at,
+                 -- WHY it merged, recomputed from the norm keys in the same
+                 -- confidence order findDuplicate matches in (email > phone >
+                 -- domain). Recomputed rather than stored: the match reason
+                 -- only lives in an event body string, and comparing the keys
+                 -- is the same logic that made the match. Null when an edit
+                 -- since the merge broke the key equality.
+                 case
+                   when d.email_norm is not null and d.email_norm = p.email_norm then 'email'
+                   when d.phone_norm is not null and d.phone_norm = p.phone_norm then 'phone'
+                   when d.domain_norm is not null and d.domain_norm = p.domain_norm then 'domain'
+                 end as matched_on
+            from fl_lead d
+            join fl_lead p on p.id = $1
+           where d.duplicate_of_lead_id = $1
+           order by d.created_at desc
            limit 50
         ) x) as duplicates_arr,
 

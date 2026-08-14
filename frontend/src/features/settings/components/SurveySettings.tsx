@@ -4,6 +4,11 @@
  * talks to `survey.settings-get/put`, because a module owns its own settings
  * and functions are never widened across module lines.
  *
+ * PARKED (2026-08-14): nothing renders this card any more — the org runs on
+ * the seeded survey.* defaults, and `survey.settings-put` stays the no-UI edit
+ * path. Kept whole rather than deleted so bringing the surface back is one
+ * import in pages/ServiceCoverage.tsx, not a rebuild.
+ *
  * The scale direction is decision D-e and it FEEDS PRICING: the FM convention
  * reads 5 as excellent, the cleaning-buildup convention reads 5 as filthy, and
  * both conventions live in this product. Two teams reading the same number

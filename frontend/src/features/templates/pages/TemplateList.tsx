@@ -124,8 +124,21 @@ function TemplateCard({
 }) {
   const thumb = thumbOf(t.name);
   return (
-    // Flat like every other surface: no shadow at rest or on hover — the
-    // border tint is the hover cue, and the glyph animation the delight.
+    // Flat like every other surface: no shadow at rest or on hover — a blue
+    // arc travelling the border plus a whisper of scale is the hover cue, and
+    // the glyph animation the delight. 1.5% is the ceiling: past it text
+    // shimmers and the grid reads as restless. Reduced motion keeps the tint,
+    // drops the move.
+    //
+    // `template-ring` (globals.css) owns the edge and nothing else. It is a
+    // class rather than utilities because the travelling arc needs @property
+    // registrations and a keyframe, which Tailwind has no utility for — and
+    // because it paints through the BACKGROUND, which takes a three-value
+    // background-clip that does not survive being written inline.
+    //
+    // --template-ring-lit rides in the transition list where border-color used
+    // to: it is the custom property that fades the arc up and down, so the
+    // hover still eases in over the same 200ms instead of snapping.
     <div
       role="button"
       tabIndex={0}
@@ -137,7 +150,7 @@ function TemplateCard({
           onOpen();
         }
       }}
-      className="group bg-card hover:border-ring/40 relative flex cursor-pointer flex-col overflow-hidden rounded-xl border transition-colors">
+      className="group bg-card template-ring relative flex cursor-pointer flex-col overflow-hidden rounded-xl border transition-[transform,--template-ring-lit] duration-200 ease-out hover:scale-[1.015] active:scale-[0.99] motion-reduce:transition-none motion-reduce:hover:scale-100 motion-reduce:active:scale-100">
       {/* The status chip lives on the thumbnail, where there is empty space —
           in the body it was shoulder-to-shoulder with the name and the ⋯ menu.
           A sibling of the thumb div, not a child, so an archived card's
@@ -343,7 +356,7 @@ export function TemplateList() {
           placeholder="Search templates"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="h-8 w-full sm:w-72"
+          className="w-full"
           aria-label="Search templates"
         />
       }

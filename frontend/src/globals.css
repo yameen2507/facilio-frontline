@@ -159,6 +159,38 @@
   }
 }
 
+/* ── The phone tab bar's footprint ───────────────────────────────────────────
+   Below `md` the shell ends in a bottom nav (layout/MobileTabBar) instead of
+   the side rail. These two numbers are what everything else needs to know
+   about it, and they live on :root because the things that read them — the
+   toast, a page's floating save pill — render OUTSIDE the shell and so can't
+   inherit a variable set on it.
+
+   --bottom-nav   how much of the viewport's bottom edge the bar occupies,
+                  SAFE AREA EXCLUDED. Anything viewport-fixed adds it to its own
+                  `bottom` so it lands above the bar instead of under it. The
+                  3.5rem is MobileTabBar's `h-14`; change them together.
+   --safe-bottom  the home-indicator inset a SCROLLING page must pad for itself.
+                  Zero while the bar is up: the bar sits below the scroller and
+                  already carries that inset, and counting it in both places
+                  leaves a dead strip of empty page above the nav.
+
+   767px, not 768: it is the last pixel before Tailwind's `md` and before
+   use-mobile's breakpoint, so the variables flip on the same edge the bar and
+   the rail trade places on. */
+
+:root {
+  --bottom-nav: 0px;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+@media (max-width: 767px) {
+  :root {
+    --bottom-nav: 3.5rem;
+    --safe-bottom: 0px;
+  }
+}
+
 /* ── Theme switch crossfade ──────────────────────────────────────────────────
    Paired with ThemeProvider's apply(): browsers with View Transitions blend a
    snapshot of the old theme into the new one (duration set here); the
@@ -183,9 +215,123 @@
     stroke 280ms ease !important;
 }
 
+/* ── The page-change fade (app/App.tsx, the Shell adapter) ───────────────────
+   Every navigation swaps the whole content pane at once; without this the new
+   page simply appears, which reads as a flicker rather than a move.
+
+   OPACITY, AND NOTHING ELSE — and hand-rolled rather than tw-animate-css's
+   `animate-in fade-in`, which is the obvious reach and is the wrong tool here.
+   Its shared `enter` keyframe writes `transform` and `filter` unconditionally,
+   built from the --tw-enter-* vars, so a fade with no slide still animates an
+   IDENTITY transform. That is enough: a transformed (or filtered) element
+   becomes the containing block for every `position: fixed` descendant, and the
+   survey walk's save pill is fixed and lives inside the page. It would jump to
+   the pane's centre for the length of every navigation and snap back at the
+   end. Opacity is the only property that animates without that side effect,
+   which is also why this fade cannot be given a rise.
+
+   No fill-mode: the animation starts on the frame the element is first
+   painted, so there is no flash of the finished state before it runs. */
+
+@keyframes page-enter {
+  from {
+    opacity: 0;
+  }
+}
+
+.page-enter {
+  animation: page-enter 200ms ease-out;
+}
+
+/* ── The template card's hover ring (features/templates/pages/TemplateList) ──
+   A blue arc that travels around the card's 1px edge while the pointer is on
+   it, in place of the flat `border-ring/40` tint it replaced.
+
+   THE RING IS PAINTED BY THE BACKGROUND, NOT BY THE BORDER. The card is
+   `overflow-hidden` (it has to be — the thumbnail's gradient and the oversized
+   glyph both bleed to the corners), and that clips any pseudo-element to the
+   PADDING box, one pixel inside the edge we want to light. An element's own
+   background is not subject to its own overflow clip, so the paint goes there
+   instead: a conic gradient clipped to the border box draws the rim, and a
+   flat `--card` layer clipped to the padding box covers everything inside it,
+   leaving exactly the 1px strip showing. The real border is held transparent
+   so it doesn't paint over the result. Geometry is unchanged — same width,
+   same radius, same position as the border it replaces.
+
+   TWO REGISTERED PROPERTIES, because plain custom properties neither animate
+   nor transition:
+
+   --template-ring-angle is what actually spins, and it runs ONLY on hover: a
+   gallery of twenty cards each turning a gradient forever is a lot of repaint
+   for something nobody is looking at.
+
+   --template-ring-lit is the fade in and out, and it is why the arc's colours
+   are written as a mix rather than named outright. At 0% every stop resolves
+   to `var(--border)`, so the resting ring is EXACTLY the border it replaced —
+   which matters most in dark, where --border is a 10% white that has to keep
+   compositing over the card the way it always did. At 100% the blue is at
+   full strength. The card's own transition list carries it (see the
+   `transition-[transform,--template-ring-lit]` class on the card).
+
+   Both are also declared as ordinary values below, so a browser without
+   @property still resolves the gradient — it lands a static arc with no fade
+   rather than an invalid background-image and no edge at all. */
+
+@property --template-ring-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@property --template-ring-lit {
+  syntax: "<percentage>";
+  inherits: false;
+  initial-value: 0%;
+}
+
+@keyframes template-ring-spin {
+  to {
+    --template-ring-angle: 360deg;
+  }
+}
+
+.template-ring {
+  --template-ring-angle: 0deg;
+  --template-ring-lit: 0%;
+
+  border-color: transparent;
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+  background-image:
+    /* The card's own fill, masking the gradient off everything but the rim. */
+    linear-gradient(var(--card), var(--card)),
+    /* One bright arc over a ring that is otherwise the plain border colour —
+       a travelling highlight, not a rainbow. The system has exactly one
+       saturated colour and this stays inside it. */
+    conic-gradient(
+      from var(--template-ring-angle),
+      var(--border) 0deg,
+      color-mix(in oklab, var(--ring) var(--template-ring-lit), var(--border)) 70deg,
+      color-mix(in oklab, var(--primary) var(--template-ring-lit), var(--border)) 110deg,
+      color-mix(in oklab, var(--ring) var(--template-ring-lit), var(--border)) 150deg,
+      var(--border) 220deg,
+      var(--border) 360deg
+    );
+}
+
+.template-ring:hover {
+  --template-ring-lit: 100%;
+  animation: template-ring-spin 3s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   ::view-transition-old(root),
   ::view-transition-new(root) {
+    animation: none;
+  }
+  /* The arc still lights, it just stops travelling — the same trade the card
+     already makes with its hover scale. */
+  .template-ring:hover {
     animation: none;
   }
   .theme-fade,
@@ -193,6 +339,9 @@
   .theme-fade *::before,
   .theme-fade *::after {
     transition: none !important;
+  }
+  .page-enter {
+    animation: none;
   }
 }
 

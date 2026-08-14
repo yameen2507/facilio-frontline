@@ -15,7 +15,17 @@
  */
 
 import {
+  completenessPct,
+  notVisitedPct,
+  reviewGuard,
+  submitGuard,
+  type CompletenessSettings,
+  type GuardResult,
+  type SurveyCounts,
+} from "../domain/survey-completeness";
+import {
   incrementsRework,
+  siteSelectionBlocker,
   stampColumnsFor,
   SURVEY_STATUSES,
   validateSurveyTransition,
@@ -29,9 +39,26 @@ import {
   stampColumnFor as visitStampColumnFor,
   type VisitStatus,
 } from "../domain/visit-state";
+import {
+  reconcile,
+  type ReconcileItem,
+  type ReconcileNode,
+  type ReconcileObservation,
+  type ReconcileRequiredAnswer,
+} from "../domain/reconcile";
+import { checksum, type RevisionTrigger } from "../domain/survey-revision";
+// The prospect portfolio owns fl_prospect_location. The survey lane consumes it
+// through these two rather than writing the table itself, so the level rules and
+// the ancestry stamp have exactly one implementation (portfolio v1.1 §5).
+import { ANCESTRY_SEPARATOR } from "../domain/ancestry";
+import {
+  createLocation as createProspectLocation,
+  listSites as listProspectSites,
+} from "./prospect";
 import { count, many, manyWithTruncation, mutate, nowIso, one } from "../shared/db";
 import { appendEvent } from "../shared/events";
 import { nextRef } from "../shared/ids";
+import { getSetting } from "./settings";
 import { snapshotTemplate } from "./snapshot";
 
 export interface SurveyRecord {
@@ -83,7 +110,7 @@ export interface VisitRecord {
 const SURVEY_COLUMNS = `id, ref_no, title, status, deal_id, account_id, template_id,
   template_version_no, lead_assignee_id, lead_user_email, contract_intent,
   target_completion_date, revision_no, rework_count, completeness_pct, not_visited_pct,
-  notes, status_changed_at, created_at, updated_at`;
+  notes, current_revision_id, status_changed_at, created_at, updated_at`;
 
 const VISIT_COLUMNS = `id, survey_id, visit_number, sequence_no, status, scheduled_start,
   scheduled_end, timezone, site_contact_name, site_contact_phone, site_contact_email,
@@ -190,8 +217,13 @@ export interface SurveyDetail {
   photos: unknown[];
   /** id → label for captioning photos by the room they evidence. */
   entryLabels: unknown[];
+  /** Frozen revisions, newest first — what a proposal may be priced from. */
+  revisions: unknown[];
   /** How much of the template the T2 snapshot copied — the walk's size. */
   snapshot: { sections: number; questions: number };
+  /** What T5 and T7 would say right now — so the record page can show what is
+      owed instead of letting a person discover it by being refused. */
+  readiness: SurveyReadiness;
 }
 
 /**
@@ -213,6 +245,7 @@ export function surveyDetail(id: string): SurveyDetail {
     events: unknown[];
     photos: unknown[];
     entryLabels: unknown[];
+    revisions: unknown[];
     sectionInstanceCount: unknown;
     questionInstanceCount: unknown;
   }>(
@@ -236,9 +269,9 @@ export function surveyDetail(id: string): SurveyDetail {
         ) x) as assignees_arr,
 
        (select coalesce(json_agg(x order by x.ancestry_path), '[]'::json) from (
-          select id, name, node_type, parent_node_id, ancestry_path, verdict, verdict_note,
+          select id, name, type, parent_id, ancestry_path, verdict, verdict_note,
                  area_sqft, room_count, restroom_count, floor_label, provenance, facilio_id
-            from fl_prospect_node
+            from fl_prospect_location
            where deal_id = (select deal_id from fl_survey where id = $1)
              and is_active = 'true'
            limit 500
@@ -278,7 +311,7 @@ export function surveyDetail(id: string): SurveyDetail {
               or entity_id in (select id from fl_survey_section_entry where survey_id = $1)
               or entity_id in (select id from fl_survey_answer where survey_id = $1)
               or entity_id in (select id from fl_survey_observation where survey_id = $1)
-              or entity_id in (select id from fl_prospect_node where survey_id = $1)
+              or entity_id in (select id from fl_prospect_location where survey_id = $1)
            limit 500
         ) x) as photos_arr,
 
@@ -286,6 +319,17 @@ export function surveyDetail(id: string): SurveyDetail {
           select id, entry_label from fl_survey_section_entry
            where survey_id = $1 and is_active = 'true'
         ) x) as entry_labels_arr,
+
+       -- What a proposal can be priced from. A frozen revision is the ONLY
+       -- thing the proposal lane will accept as a survey (spec §5: "a Proposal
+       -- turns a frozen survey revision into priced lines"), so the record has
+       -- to be able to name them or the handoff has nothing to hand over.
+       (select coalesce(json_agg(x order by x.revision_no desc), '[]'::json) from (
+          select id, revision_no, frozen_at, frozen_by, checksum, trigger_kind, is_current
+            from fl_survey_revision
+           where survey_id = $1
+           limit 50
+        ) x) as revisions_arr,
 
        (select count(*) from fl_survey_section_instance
          where survey_id = $1 and is_active = 'true') as section_instance_count,
@@ -313,10 +357,15 @@ export function surveyDetail(id: string): SurveyDetail {
     events: row.events,
     photos: row.photos,
     entryLabels: row.entryLabels,
+    revisions: row.revisions,
     snapshot: {
       sections: Number(row.sectionInstanceCount ?? 0),
       questions: Number(row.questionInstanceCount ?? 0),
     },
+    // A second query rather than seven more subqueries welded onto the one
+    // above: this one is answered by counts alone and the batched read is
+    // already the longest statement in the module.
+    readiness: surveyReadiness(id, survey.reworkCount ?? 0),
   };
 }
 
@@ -324,6 +373,10 @@ export function surveyDetail(id: string): SurveyDetail {
 
 export interface CreateSurveyInput {
   dealId: string;
+  /** An existing site on this deal. Give this OR `siteName`, never neither. */
+  prospectSiteId?: string | null;
+  /** Names a new site to create on this deal, for a property we have never surveyed. */
+  siteName?: string | null;
   templateId?: string | null;
   title?: string | null;
   scheduledStart?: string | null;
@@ -334,10 +387,77 @@ export interface CreateSurveyInput {
 }
 
 /**
- * v1.7 §A1.0: creating a survey asks three things — the deal, optionally a
- * template, optionally a first visit date. Only the deal is mandatory. A date
- * fires T1+T2 together (visit #1 + `scheduled` + the snapshot); no date lands
- * the survey in `draft`, to be scheduled later (D-l).
+ * Every site on a deal, for the create form's picker.
+ *
+ * Delegates to the prospect portfolio, which owns this table — the survey lane
+ * is a *consumer* of the portfolio, not a second writer of it. Deal-scoped
+ * because a building bid before is copied forward into this deal
+ * (`prospect.copy-forward`) rather than shared across two: a survey is a
+ * point-in-time record, and that building's condition in March genuinely is not
+ * its condition eighteen months later (portfolio v1.1 §5.4).
+ */
+export function listSitesForDeal(dealId: string) {
+  return listProspectSites(dealId);
+}
+
+/**
+ * Resolves the survey's site, creating one when the user named a new property.
+ *
+ * Both paths go through the prospect module so the level rules, the ancestry
+ * stamp and the two state machines have exactly one implementation. Writing the
+ * insert here instead is how the earlier version came to set `verdict = 'seeded'`
+ * — a value §4.1 does not define — and to omit `pursuit_decision` and
+ * `convert_state`, which §5.1 marks required.
+ *
+ * The site is the tree's root, which is why a survey cannot be created without
+ * one: with no root, `walk.ts` has nothing to parent a discovered room to and
+ * every space becomes an orphan (`F-03`).
+ */
+function resolveSurveySite(
+  input: { dealId: string; prospectSiteId?: string | null; siteName?: string | null },
+  actor: string | null
+): string {
+  // The pure half of the rule, so it is covered by a test rather than only by
+  // clicking the dialog. See domain/survey-state.ts.
+  const blocker = siteSelectionBlocker(input);
+  if (blocker) throw new Error(blocker);
+
+  if (input.prospectSiteId) {
+    const site = one<{ id: string }>(
+      `select id from fl_prospect_location
+        where id = $1 and deal_id = $2 and type = 'site' and is_active = 'true' limit 1`,
+      [input.prospectSiteId, input.dealId]
+    );
+    // Scoped to the deal on purpose: a site id from another pursuit would
+    // otherwise attach this survey's whole tree under someone else's property.
+    if (!site) {
+      throw new Error(`site ${input.prospectSiteId} is not a site on this deal`);
+    }
+    return site.id;
+  }
+
+  // `siteSelectionBlocker` has already established that exactly one of the two
+  // was given, so reaching here means a non-blank name.
+  return createProspectLocation({
+    dealId: input.dealId,
+    type: "site",
+    name: (input.siteName ?? "").trim(),
+    // A property typed into the survey form came from a person, not a document.
+    provenance: "manual",
+    actor,
+  }).location.id;
+}
+
+/**
+ * v1.7 §A1.0 + §8 C32: creating a survey asks for the deal and **the site**,
+ * optionally a template, optionally a first visit date. A date fires T1+T2
+ * together (visit #1 + `scheduled` + the snapshot); no date lands the survey in
+ * `draft`, to be scheduled later (D-l).
+ *
+ * The site became mandatory at C32. Before that the form asked only for a deal,
+ * so `prospect_site_id` was never written by anything — which is why the walk
+ * created parentless spaces and violated C3 (`F-03`), and why the surveyor
+ * arrived with no address (`P-08`).
  */
 export function createSurvey(input: CreateSurveyInput): { survey: SurveyRecord } {
   const deal = one<{ id: string; accountId: string | null; title: string | null }>(
@@ -363,15 +483,21 @@ export function createSurvey(input: CreateSurveyInput): { survey: SurveyRecord }
   const refNo = nextRef("survey");
   const title = input.title ?? template?.name ?? deal.title ?? null;
 
+  // Before the insert: a survey with no site is the F-03 defect, so it must not
+  // be creatable even for a moment. There are no transactions here (§3a), so an
+  // orphan site row from a later failure is the acceptable direction — a named
+  // property with no survey is inert, a survey with no property is not.
+  const prospectSiteId = resolveSurveySite(input, input.actor);
+
   const row = one<{ id: string }>(
     `insert into fl_survey
        (id, ref_no, deal_id, account_id, title, template_id, template_version_no,
-        buildings_in_scope_json, status, status_changed_at, status_changed_by,
+        prospect_site_id, buildings_in_scope_json, status, status_changed_at, status_changed_by,
         disciplines_required_json, is_condition_survey_complete, target_completion_date,
         revision_no, rework_count, notes,
         created_by, updated_by, is_active, data_json, created_at, updated_at)
      values (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6,
-             '[]', 'draft', $7, $8,
+             $10, '[]', 'draft', $7, $8,
              '[]', 'false', $9,
              1, 0, null,
              $8, $8, 'true', '{}', $7, $7)
@@ -386,6 +512,7 @@ export function createSurvey(input: CreateSurveyInput): { survey: SurveyRecord }
       now,
       input.actor,
       input.targetCompletionDate ?? null,
+      prospectSiteId,
     ]
   );
   if (!row) throw new Error("survey insert returned no row");
@@ -396,7 +523,7 @@ export function createSurvey(input: CreateSurveyInput): { survey: SurveyRecord }
     kind: "created",
     actor: input.actor,
     body: refNo,
-    meta: { dealId: deal.id, templateId: template?.id ?? null },
+    meta: { dealId: deal.id, templateId: template?.id ?? null, prospectSiteId },
   });
 
   if (input.scheduledStart) {
@@ -665,6 +792,1255 @@ export function transitionVisit(input: {
   return { visit: fresh as VisitRecord };
 }
 
+// ── Editing the record ───────────────────────────────────────────────────────
+
+/**
+ * The three fields a survey's own record owns: what it is called, when it is
+ * wanted by, and the desk's notes on it.
+ *
+ * STATUS IS NOT HERE, and the omission is the point — a status that could be
+ * typed into an update is a state machine with a back door, and every guard in
+ * this module would be optional. Moves go through `transition`.
+ *
+ * Refused once the survey is terminal: a completed survey has a frozen
+ * revision quoting its title, and renaming it afterwards would make the
+ * proposal and the record disagree about what was surveyed.
+ */
+export function updateSurvey(input: {
+  surveyId: string;
+  title?: string | null;
+  targetCompletionDate?: string | null;
+  contractIntent?: string | null;
+  notes?: string | null;
+  actor: string | null;
+}): { survey: SurveyRecord } {
+  const survey = one<{ id: string; status: SurveyStatus }>(
+    `select id, status from fl_survey where id = $1 and is_active = 'true' limit 1`,
+    [input.surveyId]
+  );
+  if (!survey) throw new Error(`survey ${input.surveyId} not found`);
+  if (survey.status === "completed" || survey.status === "cancelled") {
+    throw new Error(`a ${survey.status} survey is a closed record and cannot be edited`);
+  }
+
+  const now = nowIso();
+  const sets: string[] = ["updated_by = $2", "updated_at = $3"];
+  const params: unknown[] = [input.surveyId, input.actor, now];
+
+  // Each field is applied only when SUPPLIED, so a dialog that edits one thing
+  // cannot blank the two it never showed. An explicit empty string still
+  // clears — that is a person deleting a value, which is different from a
+  // caller not mentioning it.
+  const put = (column: string, value: string | null | undefined) => {
+    if (value === undefined) return;
+    params.push(value === null || value.trim() === "" ? null : value.trim());
+    sets.push(`${column} = $${params.length}`);
+  };
+
+  put("title", input.title);
+  put("target_completion_date", input.targetCompletionDate);
+  put("contract_intent", input.contractIntent);
+  put("notes", input.notes);
+
+  if (sets.length === 2) throw new Error("nothing to update");
+
+  mutate(
+    `update fl_survey set ${sets.join(", ")} where id = $1 and is_active = 'true'`,
+    params
+  );
+
+  appendEvent({
+    entityType: "survey",
+    entityId: input.surveyId,
+    kind: "updated",
+    actor: input.actor,
+    body: "record edited",
+  });
+
+  const fresh = one<SurveyRecord>(
+    `select ${SURVEY_COLUMNS},
+            (select a.name from fl_account a where a.id = s.account_id) as account_name,
+            (select t.name from fl_form_template t where t.id = s.template_id) as template_name
+       from fl_survey s where s.id = $1 limit 1`,
+    [input.surveyId]
+  );
+
+  return { survey: fresh as SurveyRecord };
+}
+
+// ── Qualifications ───────────────────────────────────────────────────────────
+
+/**
+ * The exclusions that print on the proposal, derived from what the survey could
+ * NOT establish.
+ *
+ * A qualification is how the survey says "we are not pricing this, and here is
+ * why" — and it is the difference between a quote that is silent about the
+ * rooftop nobody could reach and one that excludes it in writing. `proposal.ts`
+ * renders this list straight onto the document, which is why it is generated
+ * into the FROZEN revision rather than computed at print time: what the client
+ * was told has to be what the record says they were told.
+ *
+ * TWO SOURCES, both of them things the survey already knows:
+ *   not_visited_node     a seeded node nobody reached
+ *   unanswered_question  a required question left blank
+ *
+ * REGENERATED, NOT ACCUMULATED. Every automatic row is cleared and rebuilt, so
+ * a rework bounce that fixes a gap also removes the exclusion it caused —
+ * otherwise a survey would carry the ghost of every problem it ever had.
+ * Hand-written qualifications are never touched: `generated_automatically`
+ * exists exactly to tell the two apart.
+ */
+function generateQualifications(surveyId: string, actor: string | null): number {
+  const now = nowIso();
+
+  // Retired, not deleted — soft like every other removal in this module. A
+  // survey that bounced for rework and came back should still be able to show
+  // what it used to exclude and when that stopped being true; a hard delete
+  // would make the exclusion history end at the last freeze. Rows the current
+  // pass still wants are switched back on below.
+  mutate(
+    `update fl_survey_qualification
+        set is_active = 'false', updated_at = $2
+      where survey_id = $1 and generated_automatically = 'true' and is_active = 'true'`,
+    [surveyId, now]
+  );
+
+  const rows = many<{ source: string; refId: string | null; text: string }>(
+    `select 'not_visited_node' as source, n.id as ref_id,
+            'The ' || n.name || ' was not accessible during the walk and is excluded from this proposal.' as text
+       from fl_prospect_location n
+      where n.deal_id = (select deal_id from fl_survey where id = $1)
+        and n.is_active = 'true' and n.provenance in ('rfp', 'crm')
+        and n.verdict in ('not_visited', 'not_found')
+      limit 200`,
+    [surveyId]
+  ).concat(
+    many<{ source: string; refId: string | null; text: string }>(
+      `select 'unanswered_question' as source, q.id as ref_id,
+              '"' || q.label || '" was not established during the walk; anything depending on it is excluded pending a further survey.' as text
+         from fl_survey_question_instance q
+        where q.survey_id = $1 and q.is_active = 'true' and q.is_required = 'true'
+          and not exists (
+            select 1 from fl_survey_answer a
+             where a.question_instance_id = q.id and a.is_active = 'true'
+               and (a.is_na = 'true'
+                    or coalesce(a.value_text, '') <> ''
+                    or a.value_number is not null
+                    or a.value_date is not null
+                    or coalesce(a.value_bool, '') <> ''
+                    or coalesce(a.value_json, '') not in ('', '[]', '{}', 'null')))
+        limit 200`,
+      [surveyId]
+    )
+  );
+
+  let written = 0;
+  for (const row of rows) {
+    const params = [
+      `qual:${surveyId}:${row.source}:${row.refId ?? "-"}`,
+      surveyId,
+      row.source,
+      row.refId,
+      row.text,
+      actor,
+      now,
+    ];
+
+    // Switch a previously-retired row back on rather than inserting beside it:
+    // the id is derived from (survey, source, subject), so the row that
+    // excluded THIS node last time is the row that should exclude it now.
+    const revived = mutate(
+      `update fl_survey_qualification
+          set text = $5, is_active = 'true', updated_by = $6, updated_at = $7
+        where id = md5($1)::uuid::text and survey_id = $2 and source = $3
+          and generated_automatically = 'true'
+          and source_ref_id is not distinct from $4`,
+      params
+    );
+
+    written +=
+      revived ||
+      mutate(
+        `insert into fl_survey_qualification
+           (id, survey_id, source, source_ref_id, text, is_printed_on_proposal,
+            generated_automatically, created_by, updated_by, is_active, data_json,
+            created_at, updated_at)
+         select md5($1)::uuid::text, $2, $3, $4, $5, 'true', 'true', $6, $6, 'true', '{}', $7, $7
+          where not exists (
+            select 1 from fl_survey_qualification where id = md5($1)::uuid::text)`,
+        params
+      );
+  }
+
+  return written;
+}
+
+/**
+ * A qualification somebody typed. Never regenerated, never cleared by a
+ * re-freeze — `generated_automatically = 'false'` is what protects it.
+ */
+export function addQualification(input: {
+  surveyId: string;
+  text: string;
+  actor: string | null;
+}): { qualifications: unknown[] } {
+  const text = (input.text ?? "").trim();
+  if (!text) throw new Error("a qualification needs its wording");
+
+  const now = nowIso();
+  const params = [`qual:${input.surveyId}:manual:${text}`, input.surveyId, text, input.actor, now];
+
+  // Idempotent by WORDING, like every other derived-id write in this module.
+  // Adding the same sentence twice is a double-click, not two exclusions, and
+  // the same statement brings back one that was withdrawn and typed again.
+  const revived = mutate(
+    `update fl_survey_qualification
+        set text = $3, is_active = 'true', updated_by = $4, updated_at = $5
+      where id = md5($1)::uuid::text and survey_id = $2`,
+    params
+  );
+
+  if (!revived) {
+    mutate(
+      `insert into fl_survey_qualification
+         (id, survey_id, source, source_ref_id, text, is_printed_on_proposal,
+          generated_automatically, created_by, updated_by, is_active, data_json,
+          created_at, updated_at)
+       select md5($1)::uuid::text, $2, 'manual', null, $3, 'true', 'false', $4, $4,
+              'true', '{}', $5, $5
+        where not exists (
+          select 1 from fl_survey_qualification where id = md5($1)::uuid::text)`,
+      params
+    );
+  }
+
+  appendEvent({
+    entityType: "survey",
+    entityId: input.surveyId,
+    kind: "qualification_added",
+    actor: input.actor,
+    body: text,
+  });
+
+  return { qualifications: readQualifications(input.surveyId) };
+}
+
+/** Soft, like everything else here — a removed exclusion is still history. */
+export function removeQualification(input: {
+  qualificationId: string;
+  actor: string | null;
+}): { qualifications: unknown[] } {
+  const row = one<{ surveyId: string }>(
+    `select survey_id from fl_survey_qualification where id = $1 limit 1`,
+    [input.qualificationId]
+  );
+  if (!row) throw new Error(`qualification ${input.qualificationId} not found`);
+
+  mutate(
+    `update fl_survey_qualification set is_active = 'false', updated_by = $2, updated_at = $3
+      where id = $1`,
+    [input.qualificationId, input.actor, nowIso()]
+  );
+
+  return { qualifications: readQualifications(row.surveyId) };
+}
+
+const readQualifications = (surveyId: string): unknown[] =>
+  many(
+    `select id, source, source_ref_id, text, is_printed_on_proposal, generated_automatically
+       from fl_survey_qualification
+      where survey_id = $1 and is_active = 'true'
+      limit 200`,
+    [surveyId]
+  );
+
+// ── The revision freeze (T7) ─────────────────────────────────────────────────
+
+/**
+ * The handoff payload, built from what the survey actually holds — the thing
+ * the estimation lane prices from, and the reason `completed` is terminal.
+ *
+ * THE SHAPE IS A CONTRACT, not this module's choice: `domain/pricing.ts` reads
+ * it as `HandoffPayload` and `modules/proposal.ts` verifies its checksum before
+ * generating a single line. The migrate fixture writes the same shape so a
+ * seeded demo and a real submit are indistinguishable downstream — which is
+ * exactly why this must not drift from it.
+ *
+ * WHAT IS THIN, AND HONESTLY SO: `observations` on the portfolio come from
+ * `fl_survey_observation`, which capture writes per section entry, so a node
+ * only carries one if a repeat entry created it. Nodes seeded from tender
+ * documents have no observation and appear with their verdict alone. That is
+ * the truth of the walk, not a gap in the query — a node nobody stood in has
+ * nothing to report.
+ */
+/**
+ * Undo `mapRow`'s camelCasing for this one payload.
+ *
+ * THE PAYLOAD IS A WIRE FORMAT, NOT A DB ROW. v1.8 §5 specifies it in
+ * snake_case, `src/domain/pricing.ts` reads it in snake_case, and it is frozen
+ * into `snapshot_json` verbatim and checksummed — so it has to leave here in
+ * the shape the contract names, not the shape the row mapper happens to hand us.
+ *
+ * Why this is needed at all: the batched read aliases its subqueries `*_arr`,
+ * and `mapDeep` camelises every key INSIDE those (row-map.ts). Renaming only
+ * the top-level keys back — which is what this function used to do — produced a
+ * payload that looked right at a glance and was wrong one level down:
+ * `estimation_values: [{ estimationKey, ... }]`. The estimator then matched
+ * `ev.estimation_key` against `undefined` and reported every single value as
+ * unpriceable. It was invisible in testing because the seeded demo fixture is
+ * hand-written in snake_case and never went through the mapper.
+ */
+const toSnakeDeep = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(toSnakeDeep);
+  if (value === null || typeof value !== "object") return value;
+
+  const out: Record<string, unknown> = {};
+  for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+    out[key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)] = toSnakeDeep(v);
+  }
+  return out;
+};
+
+function handoffPayload(surveyId: string): Record<string, unknown> {
+  const row = one<{
+    survey: Record<string, unknown> | null;
+    portfolio: unknown[];
+    estimationValues: unknown[];
+    qualifications: unknown[];
+    recommendations: unknown[];
+    visits: unknown[];
+  }>(
+    `select
+       (select row_to_json(x) from (
+          select s.ref_no as survey_number, s.revision_no, s.contract_intent,
+                 s.completeness_pct, s.not_visited_pct, s.rework_count
+            from fl_survey s where s.id = $1
+        ) x) as survey_obj,
+
+       (select coalesce(json_agg(x order by x.ancestry_path), '[]'::json) from (
+          select n.id as node_id, n.type, n.name, n.parent_id,
+                 n.ancestry_path, n.provenance, n.verdict,
+                 json_build_object(
+                   'area_sqft', n.area_sqft, 'floor_count', n.floor_count,
+                   'room_count', n.room_count, 'restroom_count', n.restroom_count
+                 ) as attributes,
+                 (select row_to_json(o) from (
+                    select condition_score, contamination_level, buildup_note,
+                           access_constraint, suggested_frequency
+                      from fl_survey_observation
+                     where prospect_node_id = n.id and is_active = 'true'
+                     order by observed_at desc limit 1
+                  ) o) as observation
+            from fl_prospect_location n
+           where n.deal_id = (select deal_id from fl_survey where id = $1)
+             and n.is_active = 'true'
+           limit 500
+        ) x) as portfolio_arr,
+
+       -- Only questions the template MARKED as feeding estimation. An answer
+       -- is evidence; an estimation_value is a quantity someone will multiply
+       -- by a rate, and the difference is a decision the template author made.
+       (select coalesce(json_agg(x), '[]'::json) from (
+          select q.estimation_key,
+                 -- The NUMBER wins when there is one, and value_type is
+                 -- computed off the same test — a plain coalesce would let a
+                 -- stale value_text be carried under value_type 'number', so
+                 -- the payload would claim a quantity and hand over prose.
+                 -- Matters from the moment a numeric answer type exists (C31).
+                 -- (No backticks in here: this comment lives inside a JS
+                 -- template literal, and one would close the string.)
+                 case when a.value_number is not null
+                      then a.value_number::text
+                      else a.value_text end as value,
+                 case when a.value_number is not null then 'number' else 'text' end as value_type,
+                 e.prospect_node_id as scope_node_id,
+                 a.id as source_answer_id
+            from fl_survey_answer a
+            join fl_survey_question_instance q on q.id = a.question_instance_id
+            left join fl_survey_section_entry e on e.id = a.section_entry_id
+           where a.survey_id = $1 and a.is_active = 'true' and q.is_active = 'true'
+             and q.feeds_estimation = 'true'
+             and coalesce(q.estimation_key, '') <> ''
+           limit 500
+        ) x) as estimation_values_arr,
+
+       (select coalesce(json_agg(x), '[]'::json) from (
+          select source, source_ref_id, text
+            from fl_survey_qualification
+           where survey_id = $1 and is_active = 'true'
+           limit 200
+        ) x) as qualifications_arr,
+
+       -- pricing.ts turns these into draft proposal lines with sourceRole
+       -- 'recommendation'. Omitting them was the reason a surveyor's
+       -- "quote this separately" never reached a quote.
+       (select coalesce(json_agg(x), '[]'::json) from (
+          select title, description as value, recommendation_type, urgency,
+                 suggested_service_id, prospect_node_id as scope_node_id
+            from fl_survey_recommendation
+           where survey_id = $1 and is_active = 'true'
+           limit 200
+        ) x) as recommendations_arr,
+
+       (select coalesce(json_agg(x order by x.sequence_no), '[]'::json) from (
+          select visit_number, scheduled_start, status, slot_source, sequence_no
+            from fl_survey_visit
+           where survey_id = $1 and is_active = 'true'
+        ) x) as visits_arr`,
+    [surveyId]
+  );
+
+  // `toSnakeDeep` on every branch, not just the top level — see its comment.
+  return {
+    payload_version: "1.0",
+    survey: toSnakeDeep(row?.survey ?? null),
+    portfolio: toSnakeDeep(row?.portfolio ?? []),
+    estimation_values: toSnakeDeep(row?.estimationValues ?? []),
+    qualifications: toSnakeDeep(row?.qualifications ?? []),
+    recommendations: toSnakeDeep(row?.recommendations ?? []),
+    visits: toSnakeDeep(row?.visits ?? []),
+    excluded: { cancelled_surveys_included: false },
+  };
+}
+
+/**
+ * Freeze the survey as it stands and make that revision current.
+ *
+ * This is the half of T7 that makes `completed` mean anything: without it the
+ * status changes and nothing is captured, so a later edit anywhere in the tree
+ * would silently change what the client was quoted from. The checksum is what
+ * `proposal.ts` re-verifies before it prices a line.
+ *
+ * `is_current` is cleared on the previous revision in the same call — two
+ * current revisions is a proposal lane that cannot tell which one it priced.
+ */
+function freezeRevision(surveyId: string, trigger: RevisionTrigger, actor: string | null): string | null {
+  // BEFORE the payload is built, because the payload is what carries them: a
+  // qualification generated afterwards would never reach the frozen revision,
+  // and `proposal.ts` prints this list as the proposal's exclusions.
+  generateQualifications(surveyId, actor);
+
+  const payload = handoffPayload(surveyId);
+  const now = nowIso();
+  const revisionNo =
+    count(`select count(*) as c from fl_survey_revision where survey_id = $1`, [surveyId]) + 1;
+
+  // The id is DERIVED — `md5(key)::uuid::text`, the shape every other stable id
+  // in this schema uses (form.ts's snapshot copies, walk.ts's portfolio nodes),
+  // which is what keeps a retried freeze idempotent instead of stacking
+  // revisions. The key is composed in JS and passed as ONE text parameter:
+  // building it with `||` inside the statement would put an untyped bind
+  // parameter on the right of a concatenation, and Postgres cannot always
+  // resolve an operator for that.
+  const key = `rev:${surveyId}:${revisionNo}`;
+
+  // NOT current yet. This runs BEFORE the status update, so until that update
+  // lands there is no completed survey for this revision to be the current one
+  // OF — and a freeze that succeeded next to a status change that lost its race
+  // would otherwise leave the previous revision demoted and an orphan promoted
+  // on a survey that never completed. The caller promotes it once the move is
+  // real.
+  const written = mutate(
+    `insert into fl_survey_revision
+       (id, survey_id, revision_no, frozen_at, frozen_by, snapshot_json, checksum,
+        trigger_kind, is_current, data_json, created_at, updated_at)
+     select md5($1)::uuid::text, $2, $3, $4, $5, $6, $7, $8, 'false', '{}', $4, $4
+      where not exists (
+        select 1 from fl_survey_revision where id = md5($1)::uuid::text)`,
+    [key, surveyId, revisionNo, now, actor, JSON.stringify(payload), checksum(payload), trigger]
+  );
+  if (!written) return null;
+
+  const row = one<{ id: string }>(
+    `select id from fl_survey_revision where survey_id = $1 and revision_no = $2 limit 1`,
+    [surveyId, revisionNo]
+  );
+
+  return row?.id ?? null;
+}
+
+/**
+ * Frozen revisions, for the lane that prices them.
+ *
+ * BY DEAL, not just by survey, because that is the question the proposal side
+ * actually asks: a proposal is raised against a deal, and what it needs to know
+ * is "which frozen surveys can I price this from" — which may be several, since
+ * a deal can carry more than one survey. Each row names its survey so the
+ * picker can say what it is offering rather than showing bare revision numbers.
+ *
+ * Only surveys that COMPLETED appear. A revision frozen next to a status change
+ * that lost its race is inert by design (see `freezeRevision`), and offering
+ * one to be priced would undo that care.
+ */
+export function listRevisions(input: { surveyId?: string | null; dealId?: string | null }): {
+  revisions: unknown[];
+} {
+  if (!input.surveyId && !input.dealId) throw new Error("pass a surveyId or a dealId");
+
+  // The clause is built, not parameterised around a null. `($1 is null or …)`
+  // is the usual trick and it costs a cast plus a doubly-referenced parameter
+  // on a platform whose driver this module does not get to choose. Composing
+  // the filter in JS is what `listSurveys` above already does, and it leaves
+  // one statement shape per call rather than one that has to mean two things.
+  const where = input.surveyId ? "r.survey_id = $1" : "s.deal_id = $1";
+
+  return {
+    revisions: many(
+      `select r.id, r.survey_id, r.revision_no, r.frozen_at, r.frozen_by,
+              r.checksum, r.trigger_kind, r.is_current,
+              s.ref_no as survey_ref_no, s.title as survey_title,
+              s.completeness_pct, s.not_visited_pct
+         from fl_survey_revision r
+         join fl_survey s on s.id = r.survey_id
+        where s.is_active = 'true' and s.status = 'completed'
+          and r.is_current = 'true'
+          and ${where}
+        order by r.frozen_at desc
+        limit 100`,
+      [input.surveyId ?? input.dealId]
+    ),
+  };
+}
+
+/**
+ * Make a frozen revision the current one, after the status move it belongs to
+ * has actually landed. Demoting the previous revision and promoting this one
+ * is a single statement so there is no instant with two current revisions —
+ * which a proposal lane would have no way to choose between.
+ */
+function promoteRevision(surveyId: string, revisionId: string): void {
+  mutate(
+    `update fl_survey_revision
+        set is_current = case when id = $2 then 'true' else 'false' end
+      where survey_id = $1`,
+    [surveyId, revisionId]
+  );
+}
+
+// ── Seeding the portfolio from the tender documents ──────────────────────────
+
+export interface NodeImportInput {
+  name: string;
+  /** `site` | `building` | `space` — defaults to space. */
+  nodeType?: string | null;
+  /** The name of another node IN THE SAME BATCH. Ids are derived from names,
+      so a parent can be named before or after its children. */
+  parentName?: string | null;
+  areaSqft?: number | null;
+  floorCount?: number | null;
+  roomCount?: number | null;
+  restroomCount?: number | null;
+  floorLabel?: string | null;
+  facilioId?: string | null;
+}
+
+/** The numeric attributes the diff compares — `COUNT_FIELDS` in reconcile.ts. */
+const CLAIMED_FIELDS: readonly (keyof NodeImportInput)[] = [
+  "areaSqft",
+  "floorCount",
+  "roomCount",
+  "restroomCount",
+];
+
+const FIELD_COLUMN: Record<string, string> = {
+  areaSqft: "area_sqft",
+  floorCount: "floor_count",
+  roomCount: "room_count",
+  restroomCount: "restroom_count",
+};
+
+/**
+ * Seed the portfolio with what the TENDER DOCUMENTS claimed, before anybody
+ * walks it.
+ *
+ * THIS IS THE HANDLER THE REST OF THE MODULE HAS BEEN ASSUMING. Until it
+ * existed there were no `rfp` nodes anywhere, which quietly hollowed out three
+ * separate things: a verdict had nothing to be recorded against, coverage had
+ * no denominator so `not_visited_pct` was always null, and the three
+ * value-level reconciliation diffs could never fire because there was no
+ * claimed side to compare. Seeding a tree is what turns all three on.
+ *
+ * IDS ARE DERIVED FROM (deal, name) so re-importing a corrected list updates
+ * the tree in place instead of doubling it — the same treatment every other
+ * derived id in this schema gets. A node's VERDICT is never overwritten by a
+ * re-import: the documents may be re-read, but what a surveyor found on site is
+ * not the document's to revise.
+ *
+ * EVERY NUMERIC ATTRIBUTE IS ALSO WRITTEN AS A CLAIMED OBSERVATION, because
+ * that is what `reconcile.ts` compares against. A node row records that the
+ * documents mentioned a room; an observation row records that they said it was
+ * 900 sqft — and only the second can disagree with the surveyor.
+ */
+export function importNodes(input: {
+  surveyId: string;
+  nodes: NodeImportInput[];
+  actor: string | null;
+}): { nodes: number; observations: number } {
+  const survey = one<{ id: string; dealId: string; status: SurveyStatus }>(
+    `select id, deal_id, status from fl_survey where id = $1 and is_active = 'true' limit 1`,
+    [input.surveyId]
+  );
+  if (!survey) throw new Error(`survey ${input.surveyId} not found`);
+  if (survey.status === "completed" || survey.status === "cancelled") {
+    throw new Error(`a ${survey.status} survey's portfolio is frozen and cannot be re-seeded`);
+  }
+
+  const clean = input.nodes
+    .map((n) => ({ ...n, name: (n.name ?? "").trim() }))
+    .filter((n) => n.name);
+  if (!clean.length) throw new Error("no nodes to import");
+
+  // Derived from the DEAL, not the survey: the tree belongs to the deal, and
+  // two surveys against one deal must land on the same nodes rather than each
+  // seeding a private copy of the same building.
+  const keyOf = (name: string) => `node:rfp:${survey.dealId}:${name.toLowerCase()}`;
+
+  const byName = new Map(clean.map((n) => [n.name.toLowerCase(), n]));
+
+  const now = nowIso();
+  let nodes = 0;
+  let observations = 0;
+
+  for (const node of clean) {
+    const parent = (node.parentName ?? "").trim();
+    // ONE parameter list, used by both statements in the same order, so the
+    // update and the insert can never drift about what $7 means.
+    // ONE parameter list, CONTIGUOUS, used by both statements in the same
+    // order. Both must reference every $n: a prepared statement handed more
+    // parameters than it names is a bind error, not a harmless extra.
+    const p = [
+      keyOf(node.name), // $1  own key, hashed in SQL
+      survey.dealId, // $2
+      input.surveyId, // $3
+      node.nodeType || "space", // $4
+      parent && byName.has(parent.toLowerCase()) ? keyOf(parent) : null, // $5 parent key
+      node.name, // $6
+      node.areaSqft ?? null, // $7
+      node.floorCount ?? null, // $8
+      node.roomCount ?? null, // $9
+      node.restroomCount ?? null, // $10
+      node.floorLabel ?? null, // $11
+      node.facilioId ?? null, // $12
+      input.actor, // $13
+      now, // $14
+    ];
+
+    // Update first, and note what is NOT in the SET list: `verdict`,
+    // `verdict_note` and their stamps. A re-read of the documents may correct
+    // what was claimed; it may not erase what somebody found on site.
+    const updated = mutate(
+      `update fl_prospect_location
+          set type = $4,
+              parent_id = case when $5 is null then null else md5($5)::uuid::text end,
+              name = $6, area_sqft = $7, floor_count = $8,
+              room_count = $9, restroom_count = $10, floor_label = $11, facilio_id = $12,
+              updated_by = $13, updated_at = $14, is_active = 'true',
+              survey_id = coalesce(survey_id, $3), deal_id = $2
+        where id = md5($1)::uuid::text and provenance in ('rfp', 'crm')`,
+      p
+    );
+
+    if (!updated) {
+      nodes += mutate(
+        `insert into fl_prospect_location
+           (id, deal_id, survey_id, type, parent_id, ancestry_path, name,
+            area_sqft, floor_count, room_count, restroom_count, floor_label, facilio_id,
+            provenance, verdict, created_by, updated_by, is_active, data_json,
+            created_at, updated_at)
+         select md5($1)::uuid::text, $2, $3, $4,
+                case when $5 is null then null else md5($5)::uuid::text end,
+                md5($1)::uuid::text, $6, $7, $8, $9, $10, $11, $12,
+                'rfp', 'unverified', $13, $13, 'true', '{}', $14, $14
+          where not exists (
+            select 1 from fl_prospect_location where id = md5($1)::uuid::text)`,
+        p
+      );
+    } else {
+      nodes += updated;
+    }
+
+    // The claimed side of every future comparison.
+    for (const field of CLAIMED_FIELDS) {
+      const value = node[field];
+      if (value === null || value === undefined) continue;
+      const obsKey = `obs:rfp:${keyOf(node.name)}:${FIELD_COLUMN[field as string]}`;
+      const obsParams = [
+        obsKey,
+        keyOf(node.name),
+        survey.dealId,
+        input.surveyId,
+        FIELD_COLUMN[field as string],
+        Number(value),
+        input.actor,
+        now,
+      ];
+
+      // Its own list: this statement names four of the eight, and a prepared
+      // statement handed parameters it never references is a bind error.
+      const obsUpdated = mutate(
+        `update fl_prospect_observation
+            set value_number = $2, observed_by = $3, observed_at = $4, updated_at = $4
+          where id = md5($1)::uuid::text and provenance = 'rfp'`,
+        [obsKey, Number(value), input.actor, now]
+      );
+
+      if (!obsUpdated) {
+        observations += mutate(
+          `insert into fl_prospect_observation
+             (id, prospect_node_id, deal_id, survey_id, field_key, value_number,
+              provenance, observed_by, observed_at, data_json, created_at, updated_at)
+           select md5($1)::uuid::text, md5($2)::uuid::text, $3, $4, $5, $6,
+                  'rfp', $7, $8, '{}', $8, $8
+            where not exists (
+              select 1 from fl_prospect_observation where id = md5($1)::uuid::text)`,
+          obsParams
+        );
+      } else {
+        observations += obsUpdated;
+      }
+    }
+  }
+
+  // ANCESTRY IS DERIVED FROM THE LINKS, not composed while inserting. Every
+  // node lands with its own id as its path, then each pass pushes children one
+  // level down under their parent — so the paths are chains of the SAME hashed
+  // ids walk.ts writes, and a seeded tree and a captured one sort as one tree
+  // rather than two interleaved blocks.
+  //
+  // Bounded at five passes because a tender's tree is site → building → space
+  // and this must terminate on a list that names itself as its own parent. The
+  // `<>` clause makes each pass a no-op once the paths have settled.
+  for (let depth = 0; depth < 5; depth += 1) {
+    const moved = mutate(
+      `update fl_prospect_location c
+          set ancestry_path = p.ancestry_path || '${ANCESTRY_SEPARATOR}' || c.id
+         from fl_prospect_location p
+        where c.parent_id = p.id
+          and c.deal_id = $1 and c.provenance in ('rfp', 'crm')
+          and c.is_active = 'true'
+          and c.ancestry_path <> p.ancestry_path || '${ANCESTRY_SEPARATOR}' || c.id`,
+      [survey.dealId]
+    );
+    if (!moved) break;
+  }
+
+  appendEvent({
+    entityType: "survey",
+    entityId: input.surveyId,
+    kind: "nodes_imported",
+    actor: input.actor,
+    body: `${clean.length} node(s) seeded from the tender documents`,
+  });
+
+  restampCompleteness(input.surveyId, now);
+
+  return { nodes, observations };
+}
+
+// ── Node verdicts ────────────────────────────────────────────────────────────
+
+const VERDICTS: readonly string[] = [
+  "unverified",
+  "verified",
+  "changed",
+  "not_found",
+  "added_on_site",
+  "not_visited",
+];
+
+/**
+ * A verdict that CONTRADICTS the tender documents has to say why. "Verified"
+ * agrees with what was claimed and needs no defence; the other three are the
+ * survey telling the estimator that the paperwork was wrong, and an unexplained
+ * contradiction is the one a client challenges.
+ */
+const VERDICT_NEEDS_NOTE: readonly string[] = ["changed", "not_found", "not_visited"];
+
+/**
+ * Record what the surveyor found at a node that the tender documents claimed.
+ *
+ * ONLY SEEDED NODES TAKE A VERDICT, and the refusal is deliberate. A node with
+ * `provenance = 'survey'` was created BY capture and already carries
+ * `added_on_site` — that value is a record of how the row came to exist, not an
+ * opinion someone may revise. `surveyCounts` reads exactly this distinction to
+ * decide what T7 is owed, so letting a verdict be typed over a capture-created
+ * node would quietly move the denominator the completion guard counts against.
+ */
+export function setNodeVerdict(input: {
+  nodeId: string;
+  verdict: string;
+  verdictNote?: string | null;
+  visitId?: string | null;
+  actor: string | null;
+}): { node: unknown } {
+  if (!VERDICTS.includes(input.verdict)) {
+    throw new Error(`unknown verdict: ${input.verdict} (allowed: ${VERDICTS.join(", ")})`);
+  }
+
+  const node = one<{
+    id: string;
+    name: string;
+    provenance: string;
+    surveyId: string | null;
+    dealId: string | null;
+  }>(
+    `select id, name, provenance, survey_id, deal_id
+       from fl_prospect_location where id = $1 and is_active = 'true' limit 1`,
+    [input.nodeId]
+  );
+  if (!node) throw new Error(`node ${input.nodeId} not found`);
+
+  if (node.provenance !== "rfp" && node.provenance !== "crm") {
+    throw new Error(
+      `"${node.name}" was found on site, not claimed by the tender documents — there is nothing to verify against`
+    );
+  }
+
+  const note = typeof input.verdictNote === "string" ? input.verdictNote.trim() : "";
+  if (VERDICT_NEEDS_NOTE.includes(input.verdict) && !note) {
+    throw new Error(`a "${input.verdict}" verdict needs a note saying what was found instead`);
+  }
+
+  const now = nowIso();
+  const updated = mutate(
+    `update fl_prospect_location
+        set verdict = $2, verdict_note = $3, verdict_by = $4, verdict_at = $5,
+            verdict_visit_id = $6, updated_by = $4, updated_at = $5
+      where id = $1 and is_active = 'true'`,
+    [input.nodeId, input.verdict, note || null, input.actor, now, input.visitId ?? null]
+  );
+  if (!updated) throw new Error(`node ${input.nodeId} could not be updated`);
+
+  appendEvent({
+    entityType: "prospect_node",
+    entityId: input.nodeId,
+    kind: "verdict",
+    actor: input.actor,
+    body: `${node.name}: ${input.verdict}`,
+    meta: note ? { note } : {},
+  });
+
+  // A verdict moves `verdictedNodes`, which is half of completeness — restamp
+  // for the same reason capture does, so the record page and the list agree.
+  //
+  // VIA THE DEAL, not `node.survey_id`. The portfolio tree hangs off the DEAL —
+  // that is how `surveyCounts` reaches it, and a node seeded from tender
+  // documents is claimed against the deal before any particular survey walks
+  // it, so its `survey_id` may well be null. Going through the deal also
+  // catches the case the column could never express: several surveys against
+  // one deal share one tree, so one verdict moves all of their numbers.
+  if (node.dealId) {
+    for (const s of many<{ id: string }>(
+      `select id from fl_survey
+        where deal_id = $1 and is_active = 'true'
+          and status not in ('completed', 'cancelled') limit 50`,
+      [node.dealId]
+    )) {
+      restampCompleteness(s.id, now);
+    }
+  }
+
+  const fresh = one(
+    `select id, name, type, parent_id, ancestry_path, verdict, verdict_note,
+            verdict_at, verdict_by, area_sqft, room_count, restroom_count, floor_label,
+            provenance, facilio_id
+       from fl_prospect_location where id = $1 limit 1`,
+    [input.nodeId]
+  );
+
+  return { node: fresh };
+}
+
+// ── Reconciliation ───────────────────────────────────────────────────────────
+
+/**
+ * Run the deterministic diff and store what it found.
+ *
+ * The DECIDING lives in `domain/reconcile.ts`, which is pure and must stay that
+ * way; this gathers its three inputs and persists its output. Two rules govern
+ * the write, and both exist to protect a person's decision:
+ *
+ * IDS ARE DERIVED, not generated — `survey:difftype:subject:field` — so
+ * re-running the diff UPDATES the row it found last time instead of stacking a
+ * second copy of the same disagreement. Nobody should have to close the same
+ * item twice because someone pressed the button again.
+ *
+ * DECIDED ROWS ARE NEVER TOUCHED. A re-run may not reopen, reword or re-suggest
+ * an item a person has closed — `reconcile.ts`'s header forbids the app writing
+ * a decision, and silently discarding one is the same violation wearing a
+ * different hat. Rows that have gone away since the last run are left alone
+ * too: an item that no longer diffs is history, not garbage.
+ *
+ * WHAT IT CAN ACTUALLY FIND TODAY is narrower than the six diff types, and the
+ * caller is told so rather than being handed an empty list to misread. The
+ * value-level types all compare tender-document claims against site
+ * observations, and `fl_prospect_observation` — the claimed side — has no
+ * writer in this build. Until an RFP import lands, the reachable diffs are
+ * `node_not_found`, `node_added` and `unanswered_required`.
+ */
+export function reconcileSurvey(input: { surveyId: string; actor: string | null }): {
+  items: unknown[];
+  written: number;
+  /** Diff types this run could not have found, and why. */
+  unreachable: string[];
+} {
+  const source = one<{
+    nodes: ReconcileNode[];
+    observations: ReconcileObservation[];
+    requiredAnswers: ReconcileRequiredAnswer[];
+  }>(
+    `select
+       (select coalesce(json_agg(x order by x.node_id), '[]'::json) from (
+          select id as node_id, name, provenance, verdict
+            from fl_prospect_location
+           where deal_id = (select deal_id from fl_survey where id = $1)
+             and is_active = 'true'
+           limit 500
+        ) x) as nodes_arr,
+
+       (select coalesce(json_agg(x order by x.node_id, x.field_key), '[]'::json) from (
+          select prospect_node_id as node_id, field_key,
+                 coalesce(value_text, value_number::text) as value,
+                 provenance, observed_by
+            from fl_prospect_observation
+           where survey_id = $1
+           limit 1000
+        ) x) as observations_arr,
+
+       (select coalesce(json_agg(x order by x.question_instance_id), '[]'::json) from (
+          select q.id as question_instance_id, q.label,
+                 exists (select 1 from fl_survey_answer a
+                          where a.question_instance_id = q.id and a.is_active = 'true'
+                            and (coalesce(a.value_text, '') <> ''
+                                 or a.value_number is not null
+                                 or a.value_date is not null
+                                 or coalesce(a.value_bool, '') <> ''
+                                 or coalesce(a.value_json, '') not in ('', '[]', '{}', 'null')))
+                   as is_answered,
+                 exists (select 1 from fl_survey_answer a
+                          where a.question_instance_id = q.id and a.is_active = 'true'
+                            and a.is_na = 'true') as is_na
+            from fl_survey_question_instance q
+           where q.survey_id = $1 and q.is_active = 'true' and q.is_required = 'true'
+           limit 500
+        ) x) as required_answers_arr`,
+    [input.surveyId]
+  );
+
+  const found = reconcile({
+    nodes: source?.nodes ?? [],
+    observations: source?.observations ?? [],
+    requiredAnswers: source?.requiredAnswers ?? [],
+  });
+
+  // The natural key of a disagreement: which survey, what kind, about what,
+  // on which field. Hashed into a uuid because every id column in this schema
+  // holds one — same treatment `freezeRevision` and walk.ts's portfolio nodes
+  // get, except computed here in JS since the row is built here too.
+  const keyOf = (item: ReconcileItem): string =>
+    [
+      input.surveyId,
+      item.diffType,
+      item.prospectNodeId ?? item.questionInstanceId ?? "-",
+      item.fieldKey ?? "-",
+    ].join(":");
+
+  const now = nowIso();
+  let written = 0;
+
+  for (const item of found) {
+    const params = [
+      keyOf(item),
+      input.surveyId,
+      item.diffType,
+      item.prospectNodeId,
+      item.fieldKey,
+      item.questionInstanceId,
+      item.rfpValue,
+      item.surveyValue,
+      item.suggestedValue,
+      item.suggestionBasis,
+      now,
+    ];
+
+    // UPDATE-THEN-INSERT, and the two `where` clauses together are what makes a
+    // decided row untouchable: the update is fenced to `status = 'open'` so it
+    // cannot reword a closed item, and the insert is fenced to a row that does
+    // not exist so it cannot replace one. No decided-id list has to be read
+    // and kept in step — the statements themselves refuse.
+    const updated = mutate(
+      `update fl_survey_reconciliation
+          set diff_type = $3, prospect_node_id = $4, field_key = $5, question_instance_id = $6,
+              rfp_value = $7, survey_value = $8, suggested_value = $9, suggestion_basis = $10,
+              updated_at = $11, is_active = 'true'
+        where id = md5($1)::uuid::text and survey_id = $2 and status = 'open'`,
+      params
+    );
+
+    if (!updated) {
+      written += mutate(
+        `insert into fl_survey_reconciliation
+           (id, survey_id, diff_type, prospect_node_id, field_key, question_instance_id,
+            rfp_value, survey_value, suggested_value, suggestion_basis, status,
+            is_active, data_json, created_at, updated_at)
+         select md5($1)::uuid::text, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'open',
+                'true', '{}', $11, $11
+          where not exists (
+            select 1 from fl_survey_reconciliation where id = md5($1)::uuid::text)`,
+        params
+      );
+    } else {
+      written += updated;
+    }
+  }
+
+  appendEvent({
+    entityType: "survey",
+    entityId: input.surveyId,
+    kind: "reconciled",
+    actor: input.actor,
+    body: `${found.length} difference(s) found`,
+  });
+
+  const observed = (source?.observations ?? []).length;
+
+  return {
+    items: readReconciliation(input.surveyId),
+    written,
+    unreachable: observed
+      ? []
+      : ["value_conflict", "count_mismatch", "intra_survey_conflict"],
+  };
+}
+
+const readReconciliation = (surveyId: string): unknown[] =>
+  many(
+    `select id, diff_type, prospect_node_id, field_key, question_instance_id,
+            rfp_value, survey_value, suggested_value, suggestion_basis,
+            decision, manual_value, decision_note, decided_by, decided_at, status
+       from fl_survey_reconciliation
+      where survey_id = $1 and is_active = 'true'
+      limit 500`,
+    [surveyId]
+  );
+
+const DECISIONS: readonly string[] = ["accept_survey", "accept_rfp", "manual", "exclude"];
+
+/**
+ * A person closes one row. THE APP NEVER DOES THIS — see `reconcile.ts`.
+ *
+ * `manual` is the only decision that carries a value, and it must: choosing
+ * "neither of these" without saying what instead leaves the estimator with the
+ * same disagreement and one more click of false progress.
+ */
+export function decideReconcileItem(input: {
+  itemId: string;
+  decision: string;
+  manualValue?: string | null;
+  decisionNote?: string | null;
+  actor: string | null;
+}): { item: unknown } {
+  if (!DECISIONS.includes(input.decision)) {
+    throw new Error(`unknown decision: ${input.decision} (allowed: ${DECISIONS.join(", ")})`);
+  }
+
+  const item = one<{ id: string; surveyId: string; status: string }>(
+    `select id, survey_id, status from fl_survey_reconciliation
+      where id = $1 and is_active = 'true' limit 1`,
+    [input.itemId]
+  );
+  if (!item) throw new Error(`reconciliation item ${input.itemId} not found`);
+
+  const manual = typeof input.manualValue === "string" ? input.manualValue.trim() : "";
+  if (input.decision === "manual" && !manual) {
+    throw new Error("a manual decision needs the value to use instead");
+  }
+
+  const now = nowIso();
+  const updated = mutate(
+    `update fl_survey_reconciliation
+        set decision = $2, manual_value = $3, decision_note = $4,
+            decided_by = $5, decided_at = $6, status = 'decided', updated_at = $6
+      where id = $1 and status = 'open'`,
+    [
+      input.itemId,
+      input.decision,
+      manual || null,
+      (input.decisionNote ?? "").trim() || null,
+      input.actor,
+      now,
+    ]
+  );
+  if (!updated) throw new Error("that item has already been decided — reload and try again");
+
+  appendEvent({
+    entityType: "survey",
+    entityId: item.surveyId,
+    kind: "reconcile_decision",
+    actor: input.actor,
+    body: `${input.decision} on ${input.itemId}`,
+    meta: manual ? { manualValue: manual } : {},
+  });
+
+  return {
+    item: one(
+      `select id, diff_type, prospect_node_id, field_key, question_instance_id,
+              rfp_value, survey_value, suggested_value, suggestion_basis,
+              decision, manual_value, decision_note, decided_by, decided_at, status
+         from fl_survey_reconciliation where id = $1 limit 1`,
+      [input.itemId]
+    ),
+  };
+}
+
+// ── Completeness, and the guards that read it ────────────────────────────────
+
+/**
+ * The seven numbers `domain/survey-completeness.ts` decides on. That file is
+ * pure and does the deciding; THIS is the counting, which is the half that
+ * needs a database. Keeping the split means the guard rules are unit-testable
+ * without a schema, and this query is the only place that knows what "seeded"
+ * or "answered" means in SQL.
+ *
+ * Two definitions worth stating, because both are choices:
+ *
+ * SEEDED is deal-scoped and provenance-scoped. A verdict is owed on the tree
+ * that came OUT of the tender documents (`rfp`, `crm`) — not on a room the
+ * surveyor added on site, which is evidence rather than a question. The
+ * deal_id join matches `surveyDetail`, which reads the same tree.
+ *
+ * ANSWERED is not "a row exists". The walk writes an answer row as the
+ * surveyor types and clearing a field leaves that row behind holding nothing,
+ * so a row-count would report a question answered when the screen shows it
+ * blank. A value in any of the typed columns, or an explicit not-applicable,
+ * is what counts.
+ */
+export function surveyCounts(surveyId: string): SurveyCounts {
+  // Written out in full rather than splicing a shared `where` fragment: the
+  // three node counts differ only in their last predicate, and a template that
+  // appends `and …` after an interpolated clause is one edit away from
+  // silently attaching itself to the wrong scope.
+  const row = one<Record<string, unknown>>(
+    `select
+       (select count(*) from fl_prospect_location
+         where deal_id = (select deal_id from fl_survey where id = $1)
+           and is_active = 'true'
+           and provenance in ('rfp', 'crm')) as seeded_nodes,
+
+       (select count(*) from fl_prospect_location
+         where deal_id = (select deal_id from fl_survey where id = $1)
+           and is_active = 'true'
+           and provenance in ('rfp', 'crm')
+           and verdict is not null
+           and verdict <> 'unverified') as verdicted_nodes,
+
+       (select count(*) from fl_prospect_location
+         where deal_id = (select deal_id from fl_survey where id = $1)
+           and is_active = 'true'
+           and provenance in ('rfp', 'crm')
+           and verdict = 'not_visited') as not_visited_nodes,
+
+       (select count(*) from fl_survey_question_instance
+         where survey_id = $1 and is_active = 'true'
+           and is_required = 'true') as required_questions,
+
+       -- value_json is a TEXT column holding JSON.stringify output, so a
+       -- multi-select the surveyor cleared arrives as the four characters
+       -- '[]' — not null, and emphatically not an answer. Excluding the
+       -- empty encodings is what stops a cleared question counting as done.
+       (select count(distinct a.question_instance_id)
+          from fl_survey_answer a
+          join fl_survey_question_instance q on q.id = a.question_instance_id
+         where a.survey_id = $1 and a.is_active = 'true'
+           and q.is_active = 'true' and q.is_required = 'true'
+           and (a.is_na = 'true'
+                or coalesce(a.value_text, '') <> ''
+                or a.value_number is not null
+                or a.value_date is not null
+                or coalesce(a.value_bool, '') <> ''
+                or coalesce(a.value_json, '') not in ('', '[]', '{}', 'null'))
+       ) as answered_required,
+
+       (select count(*) from fl_survey_reconciliation
+         where survey_id = $1 and is_active = 'true'
+           and status = 'open') as open_reconciliation_items,
+
+       (select count(*) from fl_survey_visit
+         where survey_id = $1 and is_active = 'true'
+           and status in ('planned', 'in_progress')) as open_visits`,
+    [surveyId]
+  );
+
+  const n = (key: string): number => Number(row?.[key] ?? 0);
+
+  return {
+    seededNodes: n("seededNodes"),
+    verdictedNodes: n("verdictedNodes"),
+    notVisitedNodes: n("notVisitedNodes"),
+    requiredQuestions: n("requiredQuestions"),
+    answeredRequired: n("answeredRequired"),
+    openReconciliationItems: n("openReconciliationItems"),
+    openVisits: n("openVisits"),
+  };
+}
+
+/**
+ * Write the two derived percentages back onto the survey row.
+ *
+ * Called from everywhere that moves the numbers — capture (answers), verdicts
+ * (nodes) and any transition — because these are the columns the LIST prints,
+ * and a list is the one place nobody thinks to question a stale figure.
+ */
+export function restampCompleteness(surveyId: string, now = nowIso()): SurveyCounts {
+  const counts = surveyCounts(surveyId);
+  mutate(
+    `update fl_survey
+        set completeness_pct = $2, not_visited_pct = $3, updated_at = $4
+      where id = $1 and is_active = 'true'`,
+    [surveyId, completenessPct(counts), notVisitedPct(counts), now]
+  );
+  return counts;
+}
+
+/** The three org knobs the submit guard reads. Config, never hardcoded (D-S14). */
+function completenessSettings(): CompletenessSettings {
+  return {
+    allowCompleteWithNotVisited: getSetting("survey.allow_complete_with_not_visited", true),
+    notVisitedWarnThresholdPct: getSetting("survey.not_visited_warn_threshold_pct", 20),
+    reworkWarnAfterBounces: getSetting("survey.rework_warn_after_bounces", 3),
+  };
+}
+
+export interface SurveyReadiness {
+  counts: SurveyCounts;
+  /** Null when nothing is owed — see domain/survey-completeness.ts. */
+  completenessPct: number | null;
+  /** Null when nothing was seeded. NOT the same as 0. */
+  notVisitedPct: number | null;
+  /** T5 — what stops `in_progress -> pending_review`. */
+  review: GuardResult;
+  /** T7 — what stops `pending_review -> completed`. */
+  submit: GuardResult;
+}
+
+/**
+ * Both guards answered at once, for a caller that wants to SHOW what is
+ * blocking rather than discover it by being refused. The transition handler
+ * runs the same functions over the same counts, so the list a person reads
+ * before clicking is the list that would stop them.
+ */
+export function surveyReadiness(surveyId: string, reworkCount = 0): SurveyReadiness {
+  const counts = surveyCounts(surveyId);
+  return {
+    counts,
+    completenessPct: completenessPct(counts),
+    notVisitedPct: notVisitedPct(counts),
+    review: reviewGuard(counts),
+    submit: submitGuard(counts, reworkCount, completenessSettings()),
+  };
+}
+
 // ── Transition ────────────────────────────────────────────────────────────────
 
 export function transitionSurvey(input: {
@@ -672,9 +2048,15 @@ export function transitionSurvey(input: {
   toStatus: string;
   reason?: string | null;
   actor: string | null;
-}): { survey: SurveyRecord } {
-  const survey = one<{ id: string; refNo: string; status: SurveyStatus; leadUserEmail: string | null }>(
-    `select id, ref_no, status, lead_user_email
+}): { survey: SurveyRecord; warnings: string[] } {
+  const survey = one<{
+    id: string;
+    refNo: string;
+    status: SurveyStatus;
+    leadUserEmail: string | null;
+    reworkCount: number | null;
+  }>(
+    `select id, ref_no, status, lead_user_email, rework_count
        from fl_survey where id = $1 and is_active = 'true' limit 1`,
     [input.surveyId]
   );
@@ -689,9 +2071,40 @@ export function transitionSurvey(input: {
     actorIsLead: Boolean(input.actor) && input.actor === survey.leadUserEmail,
   });
 
+  /**
+   * THE COUNT-BASED GUARDS. `survey-state.ts` is a table plus a validator and
+   * cannot see rows, so T5's "no visit left open" and T7's full set live here,
+   * where the counting happens. Without this the state machine would happily
+   * complete a survey with unanswered required questions and undecided
+   * reconciliation rows — and `completed` is terminal, so there is no second
+   * chance to catch it.
+   *
+   * Blockers throw and name themselves. Warnings do NOT stop the move: a
+   * survey with most of its site unvisited still completes (D-S11), loudly.
+   * They ride out on the event so the estimator inherits them.
+   */
+  const counts = surveyCounts(input.surveyId);
+  let warnings: string[] = [];
+
+  if (move.to === "pending_review" || move.to === "completed") {
+    const guard =
+      move.to === "pending_review"
+        ? reviewGuard(counts)
+        : submitGuard(counts, survey.reworkCount ?? 0, completenessSettings());
+
+    if (!guard.ok) throw new Error(`${move.code} blocked — ${guard.blockers.join("; ")}`);
+    warnings = guard.warnings;
+  }
+
   const now = nowIso();
   const sets: string[] = [];
   const params: unknown[] = [input.surveyId, move.to, now, input.actor];
+
+  // Restamped on EVERY move, not just the guarded ones — one count, two uses.
+  // These are the columns the list and the record page print, and a number
+  // that only refreshes on submit is wrong for most of a survey's life.
+  params.push(completenessPct(counts), notVisitedPct(counts));
+  sets.push(`completeness_pct = $${params.length - 1}`, `not_visited_pct = $${params.length}`);
 
   const stamps = stampColumnsFor(move.to);
   if (stamps.includes("cancel_reason")) {
@@ -700,6 +2113,27 @@ export function transitionSurvey(input: {
   }
   if (stamps.includes("submitted_by")) {
     sets.push("submitted_by = $4", "submitted_at = $3");
+  }
+
+  // THE FREEZE, and it happens BEFORE the status update on purpose. The
+  // revision has to capture the survey as it was when it passed the guard; if
+  // the status moved first and the freeze then failed, the survey would sit in
+  // `completed` — terminal — with nothing frozen and no way back to fix it.
+  //
+  // Frozen first, the worst case is a revision row on a survey that never
+  // completed. It is written `is_current = 'false'` and promoted only after the
+  // status update lands (below), so that row changes nothing about which
+  // revision the proposal lane would price — it is inert until the move is
+  // real. `current_revision_id` is the column `stampColumnsFor` has been naming
+  // since before there was anything to put in it.
+  let frozenRevisionId: string | null = null;
+  if (stamps.includes("current_revision_id")) {
+    frozenRevisionId = freezeRevision(input.surveyId, "submit", input.actor);
+    if (!frozenRevisionId) {
+      throw new Error("could not freeze the survey revision — nothing was completed");
+    }
+    params.push(frozenRevisionId);
+    sets.push(`current_revision_id = $${params.length}`);
   }
   if (incrementsRework(move.from, move.to)) {
     sets.push("rework_count = coalesce(rework_count, 0) + 1");
@@ -716,13 +2150,23 @@ export function transitionSurvey(input: {
   );
   if (!updated) throw new Error(`survey is no longer ${move.from} — reload and try again`);
 
+  // The move is real, so the revision it froze becomes the current one.
+  if (frozenRevisionId) promoteRevision(input.surveyId, frozenRevisionId);
+
   appendEvent({
     entityType: "survey",
     entityId: input.surveyId,
     kind: "status_change",
     actor: input.actor,
     body: `${move.code}: ${move.from} → ${move.to}`,
-    meta: move.reason ? { reason: move.reason } : {},
+    // Warnings are recorded, not shown and forgotten. "80% of the site was
+    // never visited" is the sort of thing an estimator needs to be able to
+    // find AFTER the price is questioned, and the audit trail is where they
+    // will look.
+    meta: {
+      ...(move.reason ? { reason: move.reason } : {}),
+      ...(warnings.length ? { warnings } : {}),
+    },
   });
 
   const fresh = one<SurveyRecord>(
@@ -733,7 +2177,9 @@ export function transitionSurvey(input: {
     [input.surveyId]
   );
 
-  return { survey: fresh as SurveyRecord };
+  // Warnings ride back so the caller can show what it proceeded PAST — a move
+  // that succeeded with reservations is not the same as a clean one.
+  return { survey: fresh as SurveyRecord, warnings };
 }
 
 // ── Assignment ────────────────────────────────────────────────────────────────

@@ -109,14 +109,40 @@ export function conditionMultiplier(
 
 // --- line math ----------------------------------------------------------------
 
-const round2 = (x: number): number => Math.round((x + Number.EPSILON) * 100) / 100;
+/**
+ * MONEY IS INTEGER MINOR UNITS, EVERYWHERE IN THIS MODULE.
+ *
+ * ARCHITECTURE.md §7 is a frozen contract: "integer minor units in JS,
+ * numeric(14,2) in Postgres. Never a float." Conversion to major units happens
+ * once, at the db boundary in `src/modules/proposal.ts` — never here, because
+ * `src/domain` is pure and a second conversion site is a second rounding bug.
+ *
+ * Three fractional inputs flow through the same expression — `qty` (areas are
+ * not integers), `conditionMultiplier` (×1.12), and `OCCURRENCES_PER_MONTH`
+ * (52/12, 365/12, 1/3) — so the rounding rule has to be stated rather than
+ * assumed:
+ *
+ *  1. Rates and prices are integer minor units. Quantities and multipliers
+ *     stay fractional.
+ *  2. Round EXACTLY ONCE per line, at the line boundary. Intermediate products
+ *     are never rounded mid-chain: `monthlyEquivalent` is derived from the
+ *     unrounded per-occurrence value, not from the rounded one.
+ *  3. NEVER re-round a sum. Totals add already-rounded integer line values.
+ *     Rounding per line, summing, then rounding again gives a third answer.
+ */
+const minor = (x: number): number => Math.round(x);
 
 export interface LinePriceInput {
   qty: number;
+  /** Integer minor units. */
   unitRate: number;
   /** From `conditionMultiplier`; defaults to no adjustment. */
   multiplier?: number;
-  /** Per-occurrence floor — small rooms still cost a callout. */
+  /**
+   * Per-occurrence floor in minor units — small rooms still cost a callout.
+   * Applied AFTER any pricing mode (see `proposal-pricing.ts`), so a discount
+   * cannot price a job below the cost of mobilising a crew.
+   */
   minCharge?: number | null;
   frequency: Frequency;
 }
@@ -137,12 +163,15 @@ export function priceLine(input: LinePriceInput): LinePrice {
     typeof input.minCharge === "number" && Number.isFinite(input.minCharge)
       ? Math.max(raw, input.minCharge)
       : raw;
-  const perOccurrence = round2(floored);
+  const perOccurrence = minor(floored);
 
   const perMonth = OCCURRENCES_PER_MONTH[input.frequency];
+  // Note `floored`, not `perOccurrence`: rule 2. Deriving the monthly figure
+  // from the already-rounded per-occurrence value compounds the error twelve
+  // times a year.
   return perMonth === null
     ? { perOccurrence, oneTime: perOccurrence, monthlyEquivalent: null }
-    : { perOccurrence, oneTime: null, monthlyEquivalent: round2(perOccurrence * perMonth) };
+    : { perOccurrence, oneTime: null, monthlyEquivalent: minor(floored * perMonth) };
 }
 
 // --- quote totals (C10: optional lines shown, never added) ---------------------
@@ -174,11 +203,13 @@ export function quoteTotals(lines: readonly TotalableLine[]): QuoteTotals {
     }
   }
 
+  // No rounding here — rule 3. Every input is already an integer minor-unit
+  // line value, so the sum is exact and re-rounding could only move it.
   return {
-    oneTimeSubtotal: round2(totals.one),
-    recurringMonthlySubtotal: round2(totals.monthly),
-    optionalOneTimeTotal: round2(totals.optOne),
-    optionalRecurringMonthlyTotal: round2(totals.optMonthly),
+    oneTimeSubtotal: totals.one,
+    recurringMonthlySubtotal: totals.monthly,
+    optionalOneTimeTotal: totals.optOne,
+    optionalRecurringMonthlyTotal: totals.optMonthly,
   };
 }
 
@@ -193,16 +224,17 @@ export interface TaxedTotals extends QuoteTotals {
 /** Tax applies to the committed subtotals only — optional lines are not sold yet. */
 export function applyTax(totals: QuoteTotals, taxPct: number): TaxedTotals {
   const pct = Number.isFinite(taxPct) && taxPct > 0 ? taxPct : 0;
-  const taxOneTime = round2((totals.oneTimeSubtotal * pct) / 100);
-  const taxRecurringMonthly = round2((totals.recurringMonthlySubtotal * pct) / 100);
+  const taxOneTime = minor((totals.oneTimeSubtotal * pct) / 100);
+  const taxRecurringMonthly = minor((totals.recurringMonthlySubtotal * pct) / 100);
 
+  // The tax figures are the only rounding point; the totals are integer sums.
   return {
     ...totals,
     taxPct: pct,
     taxOneTime,
     taxRecurringMonthly,
-    totalOneTime: round2(totals.oneTimeSubtotal + taxOneTime),
-    totalRecurringMonthly: round2(totals.recurringMonthlySubtotal + taxRecurringMonthly),
+    totalOneTime: totals.oneTimeSubtotal + taxOneTime,
+    totalRecurringMonthly: totals.recurringMonthlySubtotal + taxRecurringMonthly,
   };
 }
 
@@ -265,7 +297,8 @@ export interface RateEntry {
   /** Facilio Services id (C23) — nullable until L10/G1. Never an app-local id. */
   facilioServiceId?: string | null;
   uom?: string | null;
-  unitRate: number;
+  /** `fl_rate_card_row.price` — ONE price per row, in integer minor units. */
+  price: number;
   minCharge?: number | null;
   /** Keyed by score AS AUTHORED — `conditionScaleDirection` says which way. */
   conditionMultipliers?: Record<string, number> | null;
@@ -282,8 +315,12 @@ export interface DraftLine {
   sourceRole: "finding" | "recommendation";
   qty: number;
   uom: string | null;
-  /** Null means "needs a human" — the line is surfaced, not priced. */
-  unitRate: number | null;
+  /**
+   * The card's price, COPIED at creation and never looked up again — that is
+   * what makes a sent proposal immune to a later rate change. Null means
+   * "needs a human": the line is surfaced, not priced.
+   */
+  cardPrice: number | null;
   conditionScore: number | null;
   conditionMultiplier: number;
   frequency: Frequency;
@@ -354,12 +391,26 @@ export function draftLinesFromHandoff(
       continue;
     }
 
-    const qty = typeof ev.value === "number" ? ev.value : Number(ev.value);
+    // BLANK IS NOT ZERO. `Number("")`, `Number("   ")` and `Number(null)` are
+    // all 0, and 0 is finite — so without this guard an unanswered quantity
+    // sails through as a zero-quantity line and prints on the client's proposal
+    // as a service we have agreed to perform for nothing. An answer nobody gave
+    // is missing, not free, and it belongs in `unpriced` with everything else
+    // the card could not price.
+    const raw = ev.value;
+    const blank =
+      raw === null ||
+      raw === undefined ||
+      (typeof raw === "string" && raw.trim() === "");
+
+    const qty = blank ? Number.NaN : typeof raw === "number" ? raw : Number(raw);
     if (!Number.isFinite(qty)) {
       // The D-k failure mode arriving in the wild: a quantity that reads as
       // prose ("~4,500 sq ft") cannot silently become money.
       unpriced.push({
-        reason: `value is not a number: ${JSON.stringify(ev.value)}`,
+        reason: blank
+          ? "no value was captured for this key — it cannot be priced until someone answers it"
+          : `value is not a number: ${JSON.stringify(ev.value)}`,
         estimationKey: ev.estimation_key,
       });
       continue;
@@ -382,7 +433,7 @@ export function draftLinesFromHandoff(
     const frequency = entry.defaultFrequency ?? "one_time";
     const price = priceLine({
       qty,
-      unitRate: entry.unitRate,
+      unitRate: entry.price,
       multiplier: adjustment.multiplier,
       minCharge: entry.minCharge,
       frequency,
@@ -398,7 +449,7 @@ export function draftLinesFromHandoff(
       sourceRole: "finding",
       qty,
       uom: entry.uom ?? null,
-      unitRate: entry.unitRate,
+      cardPrice: entry.price,
       conditionScore: score,
       conditionMultiplier: adjustment.multiplier,
       frequency,
@@ -440,7 +491,7 @@ export function draftLinesFromHandoff(
       sourceRole: "recommendation",
       qty: 1,
       uom: null,
-      unitRate: null,
+      cardPrice: null,
       conditionScore: null,
       conditionMultiplier: 1,
       frequency: "one_time",
@@ -461,7 +512,7 @@ export interface QuoteReadinessInput {
   contractType?: string | null;
   /** C14: prints on the quote and the agreement for semi-comprehensive. */
   liabilityThresholdAmount?: number | null;
-  lines: ReadonlyArray<{ unitRate: number | null; isOptional: boolean }>;
+  lines: ReadonlyArray<{ cardPrice: number | null; isOptional: boolean }>;
   notVisitedPct?: number | null;
   /** Matches `survey.not_visited_warn_threshold_pct`; default 20. */
   notVisitedWarnPct?: number;
@@ -488,12 +539,12 @@ export function quoteReadiness(input: QuoteReadinessInput): string[] {
     );
   }
 
-  const unpricedRequired = input.lines.filter((l) => l.unitRate === null && !l.isOptional).length;
+  const unpricedRequired = input.lines.filter((l) => l.cardPrice === null && !l.isOptional).length;
   if (unpricedRequired > 0) {
     warnings.push(`${unpricedRequired} line(s) have no rate and count toward the total — price them first`);
   }
 
-  const unpricedOptional = input.lines.filter((l) => l.unitRate === null && l.isOptional).length;
+  const unpricedOptional = input.lines.filter((l) => l.cardPrice === null && l.isOptional).length;
   if (unpricedOptional > 0) {
     warnings.push(
       `${unpricedOptional} optional line(s) have no rate — they print on the quote but never join the total`

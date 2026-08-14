@@ -24,11 +24,17 @@ export function Row({
   children,
   onClick,
   selected = false,
+  className,
   style,
 }: {
   children: ReactNode;
   onClick?: () => void;
   selected?: boolean;
+  /** A different column set for a row that isn't the four-column list shape —
+      `grid-cols-*` classes, so the override can be RESPONSIVE. An inline
+      `gridTemplateColumns` can't be: it wins at every width, including the ones
+      where its fixed columns are wider than the screen. */
+  className?: string;
   style?: CSSProperties;
 }) {
   const clickable = Boolean(onClick);
@@ -38,6 +44,7 @@ export function Row({
         ROW_GRID,
         clickable && "hover:bg-muted/50 cursor-pointer",
         selected && "bg-muted",
+        className,
       )}
       style={style}
       onClick={onClick}
@@ -106,7 +113,9 @@ export const TableHead = ({ columns }: { columns: string[] }) => (
   </div>
 );
 
-/** "Showing 12 of 40" — the market-standard footer under a truncated list. */
+/** "Showing 12 of 40" — the market-standard footer under a truncated list.
+    From `sm` up only: on a phone the list bleeds full-width with no footer,
+    and the count sits beside the page title instead (PageShell's `count`). */
 export const CountLine = ({ children }: { children: ReactNode }) => (
-  <div className="text-muted-foreground border-t px-4 py-2 text-xs">{children}</div>
+  <div className="text-muted-foreground border-t px-4 py-2 text-xs max-sm:hidden">{children}</div>
 );

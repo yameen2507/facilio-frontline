@@ -73,6 +73,7 @@ export type Lead = {
   contactName?: string | null;
   contactEmail?: string | null;
   contactPhone?: string | null;
+  websiteDomain?: string | null;
 
   estimatedValue?: number | string | null;
   currency?: string | null;
@@ -129,6 +130,18 @@ export type Assignment = {
   reason?: string | null;
 };
 
+/**
+ * A later enquiry that was auto-closed into this lead. `matchedOn` is
+ * recomputed from the dedup keys when the detail is read, so it is null if an
+ * edit since the merge broke the key equality.
+ */
+export type MergedDuplicate = {
+  id: string;
+  refNo: string;
+  createdAt: string;
+  matchedOn: "email" | "phone" | "domain" | null;
+};
+
 /** What `get` returns, and what every mutation returns as `detail`. */
 export type LeadDetail = {
   lead: Lead;
@@ -137,7 +150,23 @@ export type LeadDetail = {
   sla?: Sla | null;
   timeline: TimelineEvent[];
   assignments: Assignment[];
-  duplicates: unknown[];
+  duplicates: MergedDuplicate[];
 };
 
 export type TranscriptMessage = { role: "agent" | "visitor" | "system"; content: string };
+
+/**
+ * A survey row as the lead page needs it — this module's own copy, not the
+ * surveys module's richer type, so deleting either feature never breaks the
+ * other. `status` stays a plain string here: the survey lifecycle is that
+ * module's vocabulary and a new state must not break this page.
+ */
+export type DealSurvey = {
+  id: string;
+  refNo: string;
+  title?: string | null;
+  status: string;
+  templateName?: string | null;
+  targetCompletionDate?: string | null;
+  createdAt?: string | null;
+};

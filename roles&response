@@ -1,0 +1,973 @@
+CRM Setup, Roles & Permissions Specification 
+
+Developer-ready MVP specification reflecting the agreed architecture and latest changes. 
+
+1. Company Profile 
+
+Field 
+
+Type 
+
+Example 
+
+Required 
+
+Company Name 
+
+Text 
+
+ABC Facility Management 
+
+Yes 
+
+Legal Name 
+
+Text 
+
+ABC FM LLC 
+
+No 
+
+Home Country 
+
+Dropdown 
+
+UAE 
+
+Yes 
+
+Primary Currency 
+
+Dropdown 
+
+USD 
+
+Yes 
+
+Supported Countries 
+
+Multi-select 
+
+UAE, Saudi Arabia, Australia, Kuwait, Qatar 
+
+No 
+
+Supported Currencies 
+
+Multi-select 
+
+USD, AUD, SAR, KWD, QAR, EUR 
+
+No 
+
+Time Zone 
+
+Dropdown 
+
+Asia/Dubai 
+
+Yes 
+
+Default Service Region 
+
+Lookup 
+
+Dubai 
+
+Yes 
+
+Default Rate Card 
+
+Lookup 
+
+Dubai Soft Services 2026 
+
+No 
+
+Logo 
+
+Image 
+
+Company Logo 
+
+No 
+
+Address 
+
+Address 
+
+Company Address 
+
+No 
+
+Phone 
+
+Text 
+
++971... 
+
+No 
+
+Email 
+
+Email 
+
+info@company.com 
+
+No 
+
+Website 
+
+URL 
+
+company.com 
+
+No 
+
+No Tax/VAT fields are required. 
+
+2. Region Module 
+
+Region is a standalone master module. 
+
+Field 
+
+Type 
+
+Example 
+
+Required 
+
+Region ID 
+
+Auto 
+
+REG-0001 
+
+Yes 
+
+Region Name 
+
+Text 
+
+Dubai 
+
+Yes 
+
+Country 
+
+Lookup 
+
+UAE 
+
+Yes 
+
+Description 
+
+Long Text 
+
+Dubai service region 
+
+No 
+
+Active 
+
+Yes/No 
+
+Yes 
+
+Yes 
+
+Region is referenced by Company Profile, Users, Services, Leads, Accounts, Deals, Surveys, Rate Cards and reporting. 
+
+3. Service Module 
+
+Services are standalone records. Do not create Category, Service Group or Service Type master tables. 
+
+Field 
+
+Type 
+
+Example 
+
+Required 
+
+Service ID 
+
+Auto 
+
+SVC-0001 
+
+Yes 
+
+Service Name 
+
+Text 
+
+Routine Office Cleaning 
+
+Yes 
+
+Description 
+
+Long Text 
+
+Daily cleaning of office areas 
+
+No 
+
+Available Regions 
+
+Multi-select Lookup 
+
+Dubai, Abu Dhabi 
+
+Yes 
+
+Active 
+
+Yes/No 
+
+Yes 
+
+Yes 
+
+Requires Survey 
+
+Yes/No 
+
+Yes 
+
+Yes 
+
+Requires Area 
+
+Yes/No 
+
+Yes 
+
+Yes 
+
+Requires Quantity 
+
+Yes/No 
+
+No 
+
+No 
+
+Requires Frequency 
+
+Yes/No 
+
+Yes 
+
+Yes 
+
+Requires Condition 
+
+Yes/No 
+
+Yes 
+
+No 
+
+Requires Manpower 
+
+Yes/No 
+
+Yes 
+
+No 
+
+Applicable Location 
+
+Multi-select 
+
+Building, Floor, Space 
+
+Yes 
+
+Notes 
+
+Long Text 
+
+— 
+
+No 
+
+4. Rate Card Module 
+
+Rate Card is one CRM module and one user-facing record. The header information and pricing rows are managed together on the same Rate Card screen. The developer may use a parent/child database relationship internally if required, but Rate Card Header and Rate Card Line Items must not appear as separate CRM modules. 
+
+4.1 Rate Card 
+
+Field 
+
+Type 
+
+Example 
+
+Required 
+
+Rate Card ID 
+
+Auto 
+
+RC-0001 
+
+Yes 
+
+Rate Card Name 
+
+Text 
+
+UAE Standard Soft Services 2026 
+
+Yes 
+
+Description 
+
+Long Text 
+
+Standard UAE pricing 
+
+No 
+
+Priority 
+
+Number 
+
+10 
+
+Yes 
+
+Status 
+
+Dropdown 
+
+Draft / Active / Expired / Archived 
+
+Yes 
+
+Effective From 
+
+Date 
+
+01-Jan-2026 
+
+Yes 
+
+Effective To 
+
+Date 
+
+31-Dec-2026 
+
+No 
+
+Currency 
+
+Dropdown 
+
+USD 
+
+Yes 
+
+Country 
+
+Lookup 
+
+UAE 
+
+No 
+
+Region 
+
+Lookup 
+
+Dubai 
+
+No 
+
+Client 
+
+Lookup 
+
+ABC Properties 
+
+No 
+
+Deal / Account 
+
+Lookup 
+
+ABC Tower Contract 
+
+No 
+
+Default Rate Card 
+
+Yes/No 
+
+Yes 
+
+No 
+
+Created By 
+
+User 
+
+Admin 
+
+Auto 
+
+Approved By 
+
+User 
+
+Sales Manager 
+
+No 
+
+Notes 
+
+Long Text 
+
+— 
+
+No 
+
+4.2 Rate Card Applicability Criteria 
+
+A Rate Card can have criteria determining when it applies. 
+
+Field 
+
+Type 
+
+Example 
+
+Criteria 
+
+Dropdown 
+
+Region 
+
+Operator 
+
+Dropdown 
+
+Is 
+
+Value 
+
+Lookup 
+
+UAE 
+
+Logic 
+
+AND / OR 
+
+AND 
+
+MVP criteria: Country, Region, Client, Account and Deal. If multiple Rate Cards match, the highest Priority should be selected. 
+
+4.3 Pricing Rows inside the Rate Card 
+
+Pricing rows are repeating rows inside the Rate Card. They are not a separate user-facing module. 
+
+Field 
+
+Type 
+
+Example 
+
+Required 
+
+Service 
+
+Lookup 
+
+Routine Office Cleaning 
+
+Yes 
+
+Pricing Basis 
+
+Lookup 
+
+Unit 
+
+Yes 
+
+Unit 
+
+Dynamic Dropdown 
+
+Sq Ft 
+
+Yes 
+
+Frequency 
+
+Dropdown 
+
+Monthly 
+
+Yes 
+
+Cost Rate 
+
+Number 
+
+$1.25 
+
+Yes 
+
+Standard Sell Rate 
+
+Number 
+
+$2.30 
+
+Yes 
+
+Minimum Sell Rate 
+
+Number 
+
+$1.90 
+
+Yes 
+
+Minimum Charge 
+
+Number 
+
+$250 
+
+No 
+
+Active 
+
+Yes/No 
+
+Yes 
+
+Yes 
+
+Pricing Basis must be a Lookup/Master, not free text. 
+
+Pricing Basis 
+
+Unit 
+
+Hour 
+
+Visit 
+
+Unit should depend on Pricing Basis. Example: Unit → Sq Ft, Sq M, Washroom, Room, Person, Site, Other; Hour → Hour; Visit → Per Visit. 
+
+4.4 Rate Card Audit Trail 
+
+Every Rate Card and pricing-row change must be recorded. Audit records are immutable. 
+
+Field 
+
+Example 
+
+Changed By 
+
+John Smith 
+
+Changed Date & Time 
+
+14-Aug-2026 11:30 
+
+Field Changed 
+
+Standard Sell Rate 
+
+Previous Value 
+
+$2.10 
+
+New Value 
+
+$2.30 
+
+5. Roles 
+
+Role ID 
+
+Role Name 
+
+Description 
+
+Active 
+
+ROLE-001 
+
+System Admin 
+
+Full system administration 
+
+Yes 
+
+ROLE-002 
+
+Management 
+
+Management visibility 
+
+Yes 
+
+ROLE-003 
+
+Sales Manager 
+
+Manage sales team and pipeline 
+
+Yes 
+
+ROLE-004 
+
+Lead Actioner 
+
+Process and qualify leads 
+
+Yes 
+
+ROLE-005 
+
+Sales Executive 
+
+Manage assigned sales opportunities 
+
+Yes 
+
+ROLE-007 
+
+Surveyor 
+
+Conduct site surveys 
+
+Yes 
+
+ROLE-008 
+
+Estimator / Commercial 
+
+Pricing and proposals 
+
+Yes 
+
+ROLE-009 
+
+Operations Manager 
+
+Operational handover 
+
+Yes 
+
+6. Role Responsibilities 
+
+Role 
+
+What They Actually Do 
+
+System Admin 
+
+Users, roles, permissions, company setup, services, regions, rate cards, integrations, email and system configuration 
+
+Management 
+
+View overall business performance, leads, opportunities, proposals, sales pipeline and reports 
+
+Lead Actioner 
+
+Receive new leads, review AI analysis, contact prospect, enrich information, qualify/disqualify, follow up and assign to Sales 
+
+Sales Manager 
+
+Manage sales team, distribute deals, monitor pipeline, approve/oversee opportunities and manage sales performance 
+
+Sales Executive 
+
+Work assigned accounts/deals, communicate with client, arrange site visit, collect requirements and manage opportunity 
+
+Survey Manager 
+
+Create/manage survey assignments, select surveyor, schedule surveys and monitor survey completion 
+
+Surveyor 
+
+Visit site and capture building/floor/space information, measurements, conditions, photos, services required, frequency and manpower requirements 
+
+Estimator / Commercial 
+
+Use survey information + rate card to calculate manpower, pricing, cost and proposal 
+
+Operations Manager 
+
+Review won contract and prepare operational handover 
+
+7. User Module — ONE ROLE ONLY 
+
+A user can have ONLY ONE role. Role is a single Lookup field, not a multi-select lookup. 
+
+Field 
+
+Type 
+
+Example 
+
+Required 
+
+User Name 
+
+User 
+
+John Smith 
+
+Yes 
+
+Email 
+
+Email 
+
+john@company.com 
+
+Yes 
+
+Role 
+
+Lookup 
+
+Lead Actioner 
+
+Yes 
+
+Team 
+
+Lookup 
+
+Dubai Sales 
+
+No 
+
+Region 
+
+Lookup 
+
+Dubai 
+
+No 
+
+Department 
+
+Lookup 
+
+Sales 
+
+No 
+
+Manager 
+
+Lookup 
+
+VP Sales 
+
+No 
+
+Status 
+
+Active/Inactive 
+
+Active 
+
+Yes 
+
+Example user display: John Smith | Role: Lead Actioner | Team: Dubai Sales | Region: Dubai | Manager: VP Sales 
+
+8. Role Permissions 
+
+Permissions are configured at Role level, not directly on individual Users. 
+
+Permission 
+
+Meaning 
+
+None 
+
+No access 
+
+View 
+
+Can view records 
+
+Create 
+
+Can create records 
+
+Edit 
+
+Can edit records 
+
+Full 
+
+Full module access, subject to action permissions 
+
+9. CRUD + Button-Level Permissions 
+
+Admin must be able to configure exactly which actions each Role can perform. Do not hard-code button visibility into individual screens. 
+
+Action 
+
+Lead Actioner 
+
+Sales Manager 
+
+Sales Executive 
+
+Leads - View 
+
+Yes 
+
+Yes 
+
+Yes 
+
+Leads - Create 
+
+Yes 
+
+Yes 
+
+No 
+
+Leads - Edit 
+
+Yes 
+
+Yes 
+
+Yes 
+
+Leads - Delete 
+
+No 
+
+Yes 
+
+No 
+
+Leads - Assign 
+
+Yes 
+
+Yes 
+
+No 
+
+Leads - Qualify 
+
+Yes 
+
+Yes 
+
+No 
+
+Leads - Disqualify 
+
+Yes 
+
+Yes 
+
+No 
+
+Leads - Convert 
+
+Yes 
+
+Yes 
+
+No 
+
+Leads - Send Email 
+
+Yes 
+
+Yes 
+
+Yes 
+
+Leads - Add Note 
+
+Yes 
+
+Yes 
+
+Yes 
+
+Leads - Export 
+
+No 
+
+Yes 
+
+No 
+
+The matrix above is an example of configurable permissions. The actual permission matrix must be editable in Settings. 
+
+10. Settings → Users & Access 
+
+Section 
+
+Purpose 
+
+Users 
+
+Create/edit users, assign exactly one role, set team/region/manager, activate/deactivate 
+
+Roles 
+
+Create/edit/activate/deactivate roles 
+
+Permissions 
+
+Configure module, CRUD and action/button permissions per role 
+
+11. Permission Architecture 
+
+USER → ONE ROLE → ROLE PERMISSIONS → MODULE ACCESS → CRUD PERMISSIONS → ACTION / BUTTON PERMISSIONS 
+
+Team, Region, Department and Manager are separate User attributes and do not create additional roles. 
+
+12. Key Developer Rules 
+
+A user can have only ONE role. 
+
+Role must be a single Lookup field, not a multi-select lookup. 
+
+Region must be a separate master module. 
+
+Do not create Service Category, Service Group or Service Type master tables. 
+
+Rate Card is one user-facing module; pricing rows are repeating rows within the Rate Card. 
+
+Pricing Basis must be a Lookup/Master. 
+
+Unit should dynamically respond to the selected Pricing Basis. 
+
+Rate Card and pricing-row changes must have a complete immutable audit trail. 
+
+CRUD and specific business-action/button permissions must be configurable from Settings. 
+
+Do not hard-code action/button visibility into individual modules. 
+
+Team, Region and Manager are separate from Role. 
+
+No Tax/VAT configuration is required for this MVP. 

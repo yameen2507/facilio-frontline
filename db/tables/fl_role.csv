@@ -1,0 +1,2 @@
+id,data_json,created_at,updated_at,org_id,code,name,description,active,is_system,sort_order,created_by,updated_by
+00000000-0000-0000-0000-000000000000,{},2000-01-01T00:00:00Z,2000-01-01T00:00:00Z,org-0,ROLE-000,Seed Role,Seed row - safe to delete,false,false,0,seed@example.com,seed@example.com

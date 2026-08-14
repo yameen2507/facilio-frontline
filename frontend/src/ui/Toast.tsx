@@ -43,7 +43,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       <div
         className={cn(
-          "pointer-events-none fixed bottom-6 left-1/2 z-20 -translate-x-1/2 rounded-md px-4 py-2.5 text-sm shadow-md transition-opacity duration-200",
+          // The offset clears the phone tab bar (--bottom-nav is 0 above `md`,
+          // where there isn't one) and, on a home-screen install, the home
+          // indicator under it. Both are viewport-fixed, so without this the
+          // strip reports from underneath the navigation.
+          "pointer-events-none fixed bottom-[calc(var(--bottom-nav)+env(safe-area-inset-bottom,0px)+--spacing(6))] left-1/2 z-20 -translate-x-1/2 rounded-md px-4 py-2.5 text-sm shadow-md transition-opacity duration-200",
           message.bad ? "bg-destructive text-white" : "bg-foreground text-background",
           visible ? "opacity-100" : "opacity-0",
         )}

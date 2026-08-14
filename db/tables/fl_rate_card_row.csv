@@ -1,0 +1,2 @@
+id,data_json,created_at,updated_at,rate_card_id,facilio_service_id,service_code,description,estimation_key,pricing_basis,uom,price,min_charge,condition_multipliers_json,default_frequency,sequence_no,notes,created_by,updated_by,is_active
+00000000-0000-0000-0000-000000000000,{},2000-01-01T00:00:00Z,2000-01-01T00:00:00Z,00000000-0000-0000-0000-000000000000,none,SEED,Seed row - safe to delete,seed_key,unit,unit,0,0,{},one_time,0,seed,seed@example.com,seed@example.com,false

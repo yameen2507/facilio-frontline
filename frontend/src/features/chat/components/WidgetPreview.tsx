@@ -227,7 +227,10 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
         </div>
       </Card>
 
-      <div className="text-muted-foreground mt-3 flex items-center justify-between gap-4 text-xs">
+      {/* Stacked, not a row: the widget is 400px wide and the note beside the
+          button broke into three ragged lines against it. The note stays above
+          the control it qualifies. */}
+      <div className="text-muted-foreground mt-3 flex flex-col items-center gap-2 text-center text-xs">
         <span>The assistant never quotes a price — a surveyor confirms that on site.</span>
         <Button small onClick={() => void start()}>
           Start a new conversation

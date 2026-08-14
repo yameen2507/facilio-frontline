@@ -16,10 +16,12 @@
 
 import StudioFunctions from "@facilio/studio-functions";
 import {
+  ESTIMABLE_TYPES,
   FIELD_TYPES,
   LEVEL_BINDINGS,
   NODE_TYPES,
   TEMPLATE_STATUSES,
+  UNITS,
 } from "../../domain/form-template";
 import {
   handle,
@@ -375,8 +377,10 @@ server.addHandler({
     allowMultiple: S("true for multiselect options or multiple attachments"),
     isRequired: S("true when the walk cannot submit without an answer"),
     feedsEstimation: S("true when the answer feeds pricing"),
-    estimationKey: S("Stable key the estimator reads, e.g. total_sqft"),
-    unit: S("Unit hint, e.g. sqft — reserved for the number type (D-k)"),
+    estimationKey: S(
+      `Stable key the estimator reads, e.g. total_sqft. Allowed only on: ${ESTIMABLE_TYPES.join(", ")}`
+    ),
+    unit: S(`Required on the number type. One of: ${UNITS.join(", ")}`),
     actorEmail: ACTOR,
   },
   execute: async (args) =>
@@ -422,6 +426,8 @@ server.addHandler({
   execute: async () =>
     handle(() => ({
       fieldTypes: FIELD_TYPES,
+      estimableTypes: ESTIMABLE_TYPES,
+      units: UNITS,
       levelBindings: LEVEL_BINDINGS,
       nodeTypes: NODE_TYPES,
       templateStatuses: TEMPLATE_STATUSES,

@@ -1,0 +1,2 @@
+id,data_json,created_at,updated_at,org_id,name,email,email_norm,role_id,team,region,department,manager_email,status,job_title,phone,created_by,updated_by
+00000000-0000-0000-0000-000000000000,{},2000-01-01T00:00:00Z,2000-01-01T00:00:00Z,org-0,Seed User,seed@example.com,seed@example.com,00000000-0000-0000-0000-000000000000,Seed Team,Seed Region,Seed Dept,seed@example.com,inactive,Seed Title,+971500000000,seed@example.com,seed@example.com

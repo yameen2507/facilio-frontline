@@ -1,0 +1,2 @@
+id,data_json,created_at,updated_at,name,description,status,version_no,sections_json,is_default,published_by,published_at,archived_by,archived_at,created_by,updated_by,is_active
+00000000-0000-0000-0000-000000000000,{},2000-01-01T00:00:00Z,2000-01-01T00:00:00Z,Seed Template,Seed row - safe to delete,archived,0,[],false,seed@example.com,2000-01-01T00:00:00Z,seed@example.com,2000-01-01T00:00:00Z,seed@example.com,seed@example.com,false

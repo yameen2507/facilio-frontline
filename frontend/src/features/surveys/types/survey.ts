@@ -64,6 +64,8 @@ export type Survey = {
   assigneeCount?: number;
   createdAt?: string | null;
   statusChangedAt?: string | null;
+  /** Set at T7 — the revision a proposal prices from. */
+  currentRevisionId?: string | null;
 };
 
 export type Visit = {
@@ -96,11 +98,19 @@ export type Assignee = {
   assignedAt?: string | null;
 };
 
+/**
+ * A row of the prospect portfolio, as the survey surfaces read it.
+ *
+ * The portfolio is its OWN product area (Prospect Portfolio Module v1.1) and
+ * owns `fl_prospect_location`; the survey lane consumes it. `type` and
+ * `parentId` are the v1.1 names — §0a purged "node" from the vocabulary, so
+ * `node_type` became `type` and `parent_node_id` became `parent_id`.
+ */
 export type ProspectNode = {
   id: string;
   name: string;
-  nodeType: NodeType;
-  parentNodeId?: string | null;
+  type: NodeType;
+  parentId?: string | null;
   ancestryPath?: string | null;
   verdict: NodeVerdict;
   verdictNote?: string | null;
@@ -162,6 +172,46 @@ export type SurveyEvent = {
   occurredAt: string;
 };
 
+/**
+ * What the two count guards would say right now, computed server-side in
+ * `domain/survey-completeness.ts` and handed down whole.
+ *
+ * NOT re-derived here, and that is the point: the rules that decide whether a
+ * survey may be sent for review or completed are the same functions the
+ * transition handler runs, so the list a person reads before clicking is
+ * exactly the list that would refuse them. A second copy in the client is a
+ * second copy to drift.
+ *
+ * `blockers` stop the move. `warnings` do NOT — a survey with most of its site
+ * unvisited still completes (D-S11); it says so loudly and the reason lands on
+ * the audit trail.
+ */
+export type GuardResult = {
+  ok: boolean;
+  blockers: string[];
+  warnings: string[];
+};
+
+export type SurveyCounts = {
+  seededNodes: number;
+  verdictedNodes: number;
+  notVisitedNodes: number;
+  requiredQuestions: number;
+  answeredRequired: number;
+  openReconciliationItems: number;
+  openVisits: number;
+};
+
+export type SurveyReadiness = {
+  counts: SurveyCounts;
+  completenessPct: number | null;
+  notVisitedPct: number | null;
+  /** T5 — `in_progress → pending_review`. */
+  review: GuardResult;
+  /** T7 — `pending_review → completed`. */
+  submit: GuardResult;
+};
+
 export type SurveyDetailResponse = {
   survey: Survey;
   visits: Visit[];
@@ -177,6 +227,18 @@ export type SurveyDetailResponse = {
   entryLabels?: { id: string; entryLabel: string }[];
   /** How much of the template the T2 snapshot copied — the walk's size. */
   snapshot?: { sections: number; questions: number };
+  /** Optional so a response from before the completion slice still parses. */
+  readiness?: SurveyReadiness;
+  /** Frozen revisions, newest first — what a proposal may be priced from. */
+  revisions?: {
+    id: string;
+    revisionNo: number;
+    frozenAt?: string | null;
+    frozenBy?: string | null;
+    checksum?: string | null;
+    triggerKind?: string | null;
+    isCurrent?: string | null;
+  }[];
 };
 
 // ── The walk ─────────────────────────────────────────────────────────────────
