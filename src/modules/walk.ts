@@ -182,7 +182,7 @@ export function walkState(surveyId: string, visitId?: string | null): Record<str
               or entity_id in (select id from fl_survey_section_entry where survey_id = $1)
               or entity_id in (select id from fl_survey_answer where survey_id = $1)
               or entity_id in (select id from fl_survey_observation where survey_id = $1)
-              or entity_id in (select id from fl_prospect_location where survey_id = $1)
+              or entity_id in (select id from fl_portfolio_location where survey_id = $1)
            limit 1000
         ) x) as photos_arr,
 
@@ -457,16 +457,22 @@ export function captureBatch(input: CaptureInput): Record<string, unknown> {
 
       const marks = nodeEntryIds.map((_, i) => `$${i + 5}`).join(", ");
       written.nodes = mutate(
-        `insert into fl_prospect_location
-           (id, deal_id, survey_id, type, parent_id, ancestry_path, name,
+        // `site_id` takes $4 as well, the same value the parent link uses. v1.3
+        // carries the ancestry as FKs alongside the path (§2.2), and a space
+        // discovered on a walk sits under the survey's site by construction —
+        // so the site is already in hand here and stamping it is a copy, not a
+        // guess. Leaving it null would fail the check every row copied forward
+        // by `migrate.copy-portfolio-locations` already passes.
+        `insert into fl_portfolio_location
+           (id, deal_id, survey_id, type, parent_id, site_id, ancestry_path, name,
             provenance, verdict, created_by, updated_by, is_active, data_json, created_at, updated_at)
          select md5('node:' || e.id)::uuid::text, $1, $2, coalesce(i.node_type_created, 'space'),
-                $4, $4 || '${ANCESTRY_SEPARATOR}' || md5('node:' || e.id)::uuid::text, e.entry_label,
+                $4, $4, $4 || '${ANCESTRY_SEPARATOR}' || md5('node:' || e.id)::uuid::text, e.entry_label,
                 'survey', 'added_on_site', $3, $3, 'true', '{}', e.created_at, e.created_at
            from fl_survey_section_entry e
            join fl_survey_section_instance i on i.id = e.section_instance_id
           where e.survey_id = $2 and e.id in (${marks})
-            and not exists (select 1 from fl_prospect_location n
+            and not exists (select 1 from fl_portfolio_location n
                              where n.id = md5('node:' || e.id)::uuid::text)`,
         [survey.dealId, input.surveyId, input.actor, survey.prospectSiteId, ...nodeEntryIds]
       );

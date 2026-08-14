@@ -66,6 +66,36 @@ export function isEstimable(fieldType: string): boolean {
   return (ESTIMABLE_TYPES as readonly string[]).includes(fieldType);
 }
 
+/**
+ * F-02, as ruled 14 Aug: the estimation key is DERIVED, not typed. A number
+ * question is question text + number + unit, and the key that lets a rate
+ * card find the answer is generated from those — which removes naming drift
+ * (`total_sqft` vs `sqft_total` vs `TotalSqFt`) without a managed registry
+ * (the superseded D-23). Deterministic: the same question text and unit always
+ * derive the same key, so re-saving a template never silently re-keys it.
+ *
+ * The unit is part of the key when present — "total area" in sqft and "total
+ * area" in sqm are different priceable facts and must never collide.
+ */
+export function deriveEstimationKey(label: string, unit?: string | null): string {
+  const slug = label
+    .toLowerCase()
+    // Words that carry no pricing meaning, dropped so keys stay short and two
+    // phrasings of one question ("what is the total area", "total area?")
+    // land on the same key.
+    .replace(/\b(what|is|the|are|of|a|an|in|for|to|how|many|much|please|their|there)\b/g, " ")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "")
+    .split("_")
+    .slice(0, 5)
+    .join("_");
+
+  const u = (unit ?? "").trim().toLowerCase();
+  if (!slug) return u ? `question_${u}` : "question";
+  return u && !slug.includes(u) ? `${slug}_${u}` : slug;
+}
+
 export type LevelBinding = "per_survey" | "per_building" | "per_space";
 
 export const LEVEL_BINDINGS: readonly LevelBinding[] = ["per_survey", "per_building", "per_space"];

@@ -78,7 +78,7 @@ export type ProposalLine = {
   id: string;
   sequenceNo: number;
   description: string | null;
-  facilioServiceId?: string | null;
+  /** A catalogue code (Settings › Services). Null on a custom one-off line. */
   serviceCode?: string | null;
   scopeNodeId?: string | null;
   /** The survey key this line was priced from — the most stable identity there is. */

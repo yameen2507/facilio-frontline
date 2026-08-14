@@ -11,6 +11,9 @@ import {
   labelFor,
   reconciliationBlocker,
   RECONCILIATION_DECISIONS,
+  PRICED_FIELD_KEYS,
+  provenanceLabel,
+  tierFor,
   typeValue,
   valuesAgree,
   type TypedValue,
@@ -51,34 +54,34 @@ describe("the field allowlist — which columns an observation may write", () =>
   });
 
   it("recognises its own keys and nothing else", () => {
-    expect(isFieldKey("area_sqft")).toBe(true);
+    expect(isFieldKey("area")).toBe(true);
     expect(isFieldKey("nonsense")).toBe(false);
     expect(isFieldKey(42)).toBe(false);
   });
 
   it("labels a field for a human, and falls back to the raw key", () => {
-    expect(labelFor("area_sqft")).toBe("Area (sq ft)");
+    expect(labelFor("area")).toBe("Area (sq ft)");
     expect(labelFor("mystery")).toBe("mystery");
   });
 });
 
 describe("typing a value — §5.2's typed columns, never a stringly value", () => {
   it("puts a number in value_number", () => {
-    expect(typeValue("area_sqft", "4500")).toEqual({ valueText: null, valueNumber: 4500 });
+    expect(typeValue("area", "4500")).toEqual({ valueText: null, valueNumber: 4500 });
     expect(typeValue("room_count", 12)).toEqual({ valueText: null, valueNumber: 12 });
   });
 
   it("strips grouping commas", () => {
-    expect(typeValue("area_sqft", "4,500").valueNumber).toBe(4500);
-    expect(typeValue("area_sqft", "1,234,567").valueNumber).toBe(1234567);
+    expect(typeValue("area", "4,500").valueNumber).toBe(4500);
+    expect(typeValue("area", "1,234,567").valueNumber).toBe(1234567);
   });
 
   it("REFUSES a number it cannot parse rather than storing prose", () => {
     // The opposite of the walk's policy, on purpose: a building whose area is
     // "big" is worse than a building with no area at all.
-    expect(() => typeValue("area_sqft", "~4,500 sq ft")).toThrow(/must be a number/);
-    expect(() => typeValue("area_sqft", "about 4.5k")).toThrow(/must be a number/);
-    expect(() => typeValue("area_sqft", "big")).toThrow(/must be a number/);
+    expect(() => typeValue("area", "~4,500 sq ft")).toThrow(/must be a number/);
+    expect(() => typeValue("area", "about 4.5k")).toThrow(/must be a number/);
+    expect(() => typeValue("area", "big")).toThrow(/must be a number/);
   });
 
   it("puts text in value_text, trimmed", () => {
@@ -87,19 +90,19 @@ describe("typing a value — §5.2's typed columns, never a stringly value", () 
 
   it("refuses an empty value for either kind", () => {
     expect(() => typeValue("city", "   ")).toThrow(/needs a value/);
-    expect(() => typeValue("area_sqft", "")).toThrow(/needs a value/);
+    expect(() => typeValue("area", "")).toThrow(/needs a value/);
     expect(() => typeValue("city", null)).toThrow(/needs a value/);
   });
 
   it("never lets zero read as absent", () => {
     // `0` is falsy and this is the classic place it gets dropped. A ground-floor
     // count of zero is a real answer.
-    expect(typeValue("floor_count", 0)).toEqual({ valueText: null, valueNumber: 0 });
-    expect(typeValue("floor_count", "0").valueNumber).toBe(0);
+    expect(typeValue("no_of_floors", 0)).toEqual({ valueText: null, valueNumber: 0 });
+    expect(typeValue("no_of_floors", "0").valueNumber).toBe(0);
   });
 
   it("knows which kind each field is", () => {
-    expect(kindFor("area_sqft")).toBe("number");
+    expect(kindFor("area")).toBe("number");
     expect(kindFor("city")).toBe("text");
   });
 
@@ -114,7 +117,7 @@ describe("typing a value — §5.2's typed columns, never a stringly value", () 
 describe("agreement — three spellings of one measurement are not a conflict", () => {
   it("compares numbers as numbers", () => {
     expect(valuesAgree(num(4500), num(4500))).toBe(true);
-    expect(valuesAgree(typeValue("area_sqft", "4,500"), num(4500))).toBe(true);
+    expect(valuesAgree(typeValue("area", "4,500"), num(4500))).toBe(true);
   });
 
   it("compares text trimmed and case-insensitively", () => {
@@ -243,5 +246,120 @@ describe("resolving a conflict", () => {
     expect(decisionPicks("accepted_rfp")).toBe("rfp");
     expect(decisionPicks("manual_override")).toBeNull();
     expect(decisionPicks("pushed_to_clarification")).toBeNull();
+  });
+});
+
+describe("v1.3 §6.3 — the two-tier rule, so only money interrupts a person", () => {
+  const accepted = (v: number, provenance: string) => ({
+    valueText: null,
+    valueNumber: v,
+    provenance,
+  });
+
+  it("raises a conflict when a PRICED field disagrees", () => {
+    const result = acceptanceFor({
+      incoming: num(5200),
+      currentAccepted: accepted(4500, "rfp"),
+      incomingProvenance: "survey",
+      tier: "priced",
+    });
+    expect(result.outcome).toBe("conflict");
+    expect(result.needsHuman).toBe(true);
+    // Nothing is overwritten until a person chooses — the whole point.
+    expect(result.writesCache).toBe(false);
+  });
+
+  it("lets a DESCRIPTIVE field replace, without interrupting anyone", () => {
+    // Nobody's proposal is mispriced because the RFP said "Dubai" and the
+    // surveyor said "Dubai, UAE".
+    const result = acceptanceFor({
+      incoming: txt("Dubai, UAE"),
+      currentAccepted: { valueText: "Dubai", valueNumber: null, provenance: "rfp" },
+      incomingProvenance: "survey",
+      tier: "descriptive",
+    });
+    expect(result.outcome).toBe("replaced");
+    expect(result.needsHuman).toBe(false);
+    expect(result.writesCache).toBe(true);
+  });
+
+  it("defaults to the SAFE tier when a caller forgets to pass one", () => {
+    const result = acceptanceFor({
+      incoming: num(5200),
+      currentAccepted: accepted(4500, "rfp"),
+      incomingProvenance: "survey",
+    });
+    expect(result.outcome).toBe("conflict");
+  });
+
+  it("never lets a Facilio link win automatically, tier or no tier", () => {
+    // §5.2 — an operational fact quietly overwriting our pricing input would be
+    // the exact silent overwrite the ledger exists to prevent.
+    const result = acceptanceFor({
+      incoming: txt("Tower A"),
+      currentAccepted: { valueText: "Tower 1", valueNumber: null, provenance: "survey" },
+      incomingProvenance: "facilio_link",
+      tier: "descriptive",
+    });
+    expect(result.outcome).toBe("conflict");
+    expect(result.writesCache).toBe(false);
+  });
+
+  it("prices exactly the fields §6.3 lists, and nothing else", () => {
+    expect([...PRICED_FIELD_KEYS].sort()).toEqual(
+      [
+        "area",
+        "ceiling_height_band",
+        "gross_floor_area",
+        "max_occupancy",
+        "no_of_buildings",
+        "no_of_floors",
+        "operation_hours_end",
+        "operation_hours_start",
+        "restroom_count",
+        "room_count",
+      ].sort()
+    );
+    // The address block is the case that motivated the rule.
+    expect(tierFor("city")).toBe("descriptive");
+    expect(tierFor("country")).toBe("descriptive");
+    expect(tierFor("name")).toBe("descriptive");
+    expect(tierFor("area")).toBe("priced");
+  });
+
+  it("agreement still short-circuits before the tier is consulted", () => {
+    const result = acceptanceFor({
+      incoming: num(4500),
+      currentAccepted: accepted(4500, "rfp"),
+      incomingProvenance: "survey",
+      tier: "priced",
+    });
+    expect(result.outcome).toBe("agrees");
+    expect(result.needsHuman).toBe(false);
+  });
+});
+
+describe("§6.2 — one vocabulary, and no raw enum reaches a user", () => {
+  it("never lets a bare enum into a sentence", () => {
+    for (const p of ["rfp", "survey", "manual", "crm", "facilio_link"]) {
+      expect(provenanceLabel(p)).not.toBe(p);
+      expect(provenanceLabel(p)).not.toMatch(/_/);
+    }
+  });
+
+  it("says 'from documents' rather than 'rfp' in a conflict message", () => {
+    const result = acceptanceFor({
+      incoming: num(5200),
+      currentAccepted: { ...num(4500), provenance: "rfp" },
+      incomingProvenance: "survey",
+      tier: "priced",
+    });
+    expect(result.reason).toContain("from documents");
+    expect(result.reason).not.toContain("rfp");
+  });
+
+  it("falls back to neutral words rather than printing null", () => {
+    expect(provenanceLabel(null)).toBe("the recorded");
+    expect(provenanceLabel("nonsense")).toBe("the recorded");
   });
 });

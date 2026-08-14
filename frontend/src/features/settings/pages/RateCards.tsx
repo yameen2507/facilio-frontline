@@ -68,6 +68,7 @@ import {
   type RateCard,
   type RateCardRow,
 } from "../api/ratecards-util";
+import { listServices, type Service } from "../api/settings-util";
 
 /** Radix Select forbids an empty item value, so "not set" needs a sentinel. */
 const UNSET = "__unset";
@@ -170,6 +171,7 @@ function RowDialog({
   cardId,
   row,
   currency,
+  services,
   onSaved,
 }: {
   open: boolean;
@@ -178,6 +180,8 @@ function RowDialog({
   /** The row being edited; null creates. */
   row: RateCardRow | null;
   currency: string;
+  /** The catalogue, already filtered to what is still being sold. */
+  services: Service[];
   onSaved: () => void;
 }) {
   // The record survives the exit animation — the parent clears its state the
@@ -186,8 +190,7 @@ function RowDialog({
   const [record, setRecord] = useState<RateCardRow | null>(row);
   if (open && record !== row) setRecord(row);
 
-  const [serviceCode, setServiceCode] = useState("");
-  const [facilioServiceId, setFacilioServiceId] = useState("");
+  const [serviceCode, setServiceCode] = useState(UNSET);
   const [description, setDescription] = useState("");
   const [estimationKey, setEstimationKey] = useState("");
   const [pricingBasis, setPricingBasis] = useState<string>("unit");
@@ -210,8 +213,11 @@ function RowDialog({
     const stored = row?.pricingBasis ?? "unit";
     const basis = UNITS_BY_BASIS[stored] ? stored : "unit";
     const units = UNITS_BY_BASIS[basis];
-    setServiceCode(row?.serviceCode ?? "");
-    setFacilioServiceId(row?.facilioServiceId ?? "");
+    // A row may name a service that has since been retired — it keeps pricing
+    // the proposals that used it, and the dropdown says so rather than
+    // silently resetting the row to nothing. See `options` below.
+    const match = services.find((s) => s.code.toUpperCase() === row?.serviceCode?.toUpperCase());
+    setServiceCode(match?.code ?? row?.serviceCode ?? UNSET);
     setDescription(row?.description ?? "");
     setEstimationKey(row?.estimationKey ?? "");
     setPricingBasis(basis);
@@ -220,12 +226,27 @@ function RowDialog({
     setPrice(row?.price !== null && row?.price !== undefined ? String(row.price) : "");
     setConfirmRemove(false);
     setError(null);
-  }, [open, row]);
+  }, [open, row, services]);
 
   const units = UNITS_BY_BASIS[pricingBasis] ?? UNITS_BY_BASIS.unit;
   const priceValue = Number(price);
   const priceValid = price.trim() !== "" && Number.isFinite(priceValue) && priceValue >= 0;
-  const canSave = serviceCode.trim() !== "" && priceValid && !busy;
+  const canSave = serviceCode !== UNSET && priceValid && !busy;
+
+  /**
+   * The catalogue, plus the row's own service if that is no longer in it.
+   *
+   * A retired service is not offered to new rows — the backend refuses to
+   * price against one — but an existing row that names it must still be
+   * editable, and a dropdown that quietly dropped its own current value would
+   * blank the row on the next save.
+   */
+  const stored = row?.serviceCode?.toUpperCase() ?? null;
+  const known = services.some((s) => s.code.toUpperCase() === stored);
+  const options =
+    row?.serviceCode && !known
+      ? [...services, { id: row.serviceCode, code: row.serviceCode, name: "no longer offered" }]
+      : services;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -236,8 +257,7 @@ function RowDialog({
     const { error: err } = await saveRateCardRow({
       cardId,
       ...(row ? { rowId: row.id } : {}),
-      serviceCode: serviceCode.trim(),
-      facilioServiceId: facilioServiceId.trim(),
+      serviceCode: serviceCode === UNSET ? "" : serviceCode,
       description: description.trim(),
       estimationKey: estimationKey.trim(),
       pricingBasis,
@@ -287,30 +307,32 @@ function RowDialog({
           </DialogHeader>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="flex flex-col gap-1.5">
+            {/* Picked, never typed. A free-text code that names no service is
+                rejected by the backend anyway, and the two-column layout this
+                replaces existed only to hold a Facilio record id beside it. */}
+            <div className="flex flex-col gap-1.5 sm:col-span-2">
               <Label htmlFor="rr-service">
                 Service <span className="text-destructive">*</span>
               </Label>
-              <Input
-                id="rr-service"
-                value={serviceCode}
-                onChange={(e) => setServiceCode(e.target.value)}
-                placeholder="e.g. CLEAN_ROUTINE"
-              />
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="rr-facilio">Facilio Services record</Label>
-              <Input
-                id="rr-facilio"
-                className="font-mono"
-                value={facilioServiceId}
-                onChange={(e) => setFacilioServiceId(e.target.value)}
-                placeholder="record id"
-              />
+              <Select value={serviceCode} onValueChange={setServiceCode}>
+                <SelectTrigger id="rr-service" className="w-full">
+                  <SelectValue placeholder="Pick the service this row prices" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={UNSET} disabled>
+                    Pick a service
+                  </SelectItem>
+                  {options.map((s) => (
+                    <SelectItem key={s.code} value={s.code}>
+                      {s.code} · {s.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <span className="text-muted-foreground text-xs">
-                A quoted service references the Facilio record, never the local line — the ids live
-                on the Service links page.
+                {options.length
+                  ? "From the catalogue in Settings › Services. A row can only price something we sell."
+                  : "Nothing to pick yet — add a service in Settings › Services first."}
               </span>
             </div>
 
@@ -453,8 +475,8 @@ function RowDialog({
                 type="submit"
                 disabled={!canSave}
                 title={
-                  !serviceCode.trim()
-                    ? "Name the service this row prices"
+                  serviceCode === UNSET
+                    ? "Pick the service this row prices"
                     : !priceValid
                       ? "Give the row a price"
                       : undefined
@@ -526,6 +548,26 @@ export function RateCards() {
 
   // Visibility and the record are one state: null closed, {row: null} creates.
   const [rowDialog, setRowDialog] = useState<{ row: RateCardRow | null } | null>(null);
+
+  /**
+   * The catalogue a pricing row picks from — read once, not per dialog open.
+   *
+   * A failure here is deliberately not surfaced as a page error: the cards
+   * still list and their prices still read. What it costs is the row dialog's
+   * dropdown, which says so itself when the list is empty.
+   */
+  const [services, setServices] = useState<Service[]>([]);
+
+  useEffect(() => {
+    let live = true;
+    listServices().then(({ data }) => {
+      if (!live || !data) return;
+      setServices(data.services.filter((s) => s.active !== "false"));
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
 
   useEffect(() => {
     let live = true;
@@ -683,6 +725,9 @@ export function RateCards() {
 
   const rows = selected?.rows ?? [];
   const currency = draft.currency;
+  // Keyed upper-case, because a row may spell its code differently from the
+  // catalogue and a missing name would read as "this service does not exist".
+  const serviceName = Object.fromEntries(services.map((s) => [s.code.toUpperCase(), s.name]));
 
   return (
     <>
@@ -871,7 +916,17 @@ export function RateCards() {
                 <ClickRow key={r.id} onClick={() => setRowDialog({ row: r })}>
                   <TableCell className="px-4 py-3">
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-medium">{r.serviceCode ?? "Unnamed service"}</div>
+                      <div className="truncate text-sm font-medium">
+                        {r.serviceCode ?? "Unnamed service"}
+                        {/* The catalogue's own words for it, so the table is
+                            readable without memorising the codes. */}
+                        {serviceName[(r.serviceCode ?? "").toUpperCase()] ? (
+                          <span className="text-muted-foreground font-normal">
+                            {" · "}
+                            {serviceName[(r.serviceCode ?? "").toUpperCase()]}
+                          </span>
+                        ) : null}
+                      </div>
                       <div className="text-muted-foreground truncate text-xs">
                         {r.description ?? "No description"}
                       </div>
@@ -939,6 +994,7 @@ export function RateCards() {
         cardId={selected?.id ?? ""}
         row={rowDialog?.row ?? null}
         currency={currency}
+        services={services}
         onSaved={() => setReloadKey((k) => k + 1)}
       />
     </>

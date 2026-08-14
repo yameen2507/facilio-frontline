@@ -52,8 +52,12 @@ export type Survey = {
   templateName?: string | null;
   templateVersionNo?: number | null;
   leadUserEmail?: string | null;
+  /** Joined on the list read (X-05) — null when the lead predates fl_user. */
+  leadUserName?: string | null;
   contractIntent?: ContractIntent | null;
   targetCompletionDate?: string | null;
+  /** D-33: the earliest still-planned visit, joined on the list read. */
+  nextVisitAt?: string | null;
   revisionNo?: number | null;
   reworkCount?: number | null;
   /** Null when nothing is owed — see the file header. */
@@ -92,10 +96,26 @@ export type Visit = {
 export type Assignee = {
   id: string;
   userEmail: string;
+  /** Resolved from fl_user at assign time (F-22); null only on legacy rows. */
+  userId?: string | null;
+  /** Joined server-side, so this surface never prints a raw email (X-05). */
+  userName?: string | null;
   /** `surveyor` | `observer` — an observer may capture but cannot lead. */
   participation?: string | null;
   disciplineIds?: string[] | null;
   assignedAt?: string | null;
+};
+
+/** `survey.user-list` — who can be assigned, and how loaded they are. */
+export type AssignableUser = {
+  id: string;
+  name: string;
+  email: string;
+  roleName: string | null;
+  team: string | null;
+  region: string | null;
+  /** Planned visits over the coming week on surveys this user is assigned to. */
+  weekVisits: number;
 };
 
 /**

@@ -156,3 +156,89 @@ export function stampColumnFor(to: LeadStatus): string | null {
       return null;
   }
 }
+
+// ── Estimated value (D-05) ────────────────────────────────────────────────────
+
+/**
+ * The 14 Aug ruling on D-05, verbatim: MINIMAL SPLIT. One amount box stays;
+ * what was added is the distinction a single number destroys — whether that
+ * 12,000 happens once, every month (a 144k contract), or both. `both` keeps
+ * the single amount deliberately: Sudharsan chose the toggle over a full
+ * two-amount split, so the amount reads as the headline figure and the type
+ * says what kind of figure it is.
+ */
+export type ValueType = "one_off" | "recurring" | "both";
+
+export const VALUE_TYPES: readonly ValueType[] = ["one_off", "recurring", "both"];
+
+export type ValueFrequency = "monthly" | "quarterly" | "annual";
+
+export const VALUE_FREQUENCIES: readonly ValueFrequency[] = ["monthly", "quarterly", "annual"];
+
+export function isValueType(value: unknown): value is ValueType {
+  return typeof value === "string" && (VALUE_TYPES as readonly string[]).includes(value);
+}
+
+export function isValueFrequency(value: unknown): value is ValueFrequency {
+  return typeof value === "string" && (VALUE_FREQUENCIES as readonly string[]).includes(value);
+}
+
+/**
+ * Why the trio (type, frequency, amount) is unusable, or null when fine.
+ * Absent type is ALLOWED — the widget and legacy rows predate the field, and
+ * refusing them would close the front door to fix a form. But a frequency on a
+ * one-off, or a recurring value with no frequency, is a contradiction the row
+ * would carry forever, so those are refused at the door.
+ */
+export function valueFieldsBlocker(input: {
+  valueType?: string | null;
+  valueFrequency?: string | null;
+}): string | null {
+  const type = input.valueType ?? null;
+  const freq = input.valueFrequency ?? null;
+
+  if (type !== null && !isValueType(type)) {
+    return `valueType must be one of: ${VALUE_TYPES.join(", ")}`;
+  }
+  if (freq !== null && !isValueFrequency(freq)) {
+    return `valueFrequency must be one of: ${VALUE_FREQUENCIES.join(", ")}`;
+  }
+  if (freq && (type === null || type === "one_off")) {
+    return "a frequency only makes sense on a recurring value";
+  }
+  if ((type === "recurring" || type === "both") && !freq) {
+    return "a recurring value needs its frequency (monthly, quarterly or annual)";
+  }
+  return null;
+}
+
+// ── Channel vs source (D-10) ──────────────────────────────────────────────────
+
+/**
+ * The 14 Aug ruling: TWO FIELDS. Channel = how the enquiry arrived (the
+ * existing `source` column: widget, tender, inapp — refined by source_detail).
+ * Source = where it CAME FROM, which is this list. Mixing them is what made
+ * "how many wins came from referrals" unanswerable. The column name `source`
+ * was already taken by the channel and table shapes are permanent here, so the
+ * where-it-came-from field is called ORIGIN in the API and "Source" in the UI.
+ */
+export type LeadOrigin =
+  | "referral"
+  | "existing_client"
+  | "marketing"
+  | "hubspot"
+  | "cold_outreach"
+  | "other";
+
+export const LEAD_ORIGINS: readonly LeadOrigin[] = [
+  "referral",
+  "existing_client",
+  "marketing",
+  "hubspot",
+  "cold_outreach",
+  "other",
+];
+
+export function isLeadOrigin(value: unknown): value is LeadOrigin {
+  return typeof value === "string" && (LEAD_ORIGINS as readonly string[]).includes(value);
+}

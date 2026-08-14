@@ -20,8 +20,10 @@ const GROUPS: NavGroup[] = [
   {
     label: "Services",
     items: [
+      // The catalogue leads: coverage is a matrix OF these, so an empty
+      // catalogue makes the coverage page unreadable rather than merely empty.
+      { to: "/settings/services", label: "Services" },
       { to: "/settings", label: "Service coverage" },
-      { to: "/settings/service-links", label: "Service links" },
     ],
   },
   {

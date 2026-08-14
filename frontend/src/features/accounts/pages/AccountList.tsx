@@ -17,8 +17,11 @@
 
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Building2, Clock3, Handshake, Users } from "lucide-react";
+import { Building2, Clock3, Handshake, Plus, Users } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { PageShell } from "../../../app/shell/PageShell";
+import { useActor } from "../../../app/auth";
+import { AccountFormDialog } from "../components/AccountDialogs";
 import { ago, plural } from "../../../lib/format";
 import { Chip } from "../../../ui/Chip";
 import { Card } from "../../../ui/Card";
@@ -79,9 +82,10 @@ export const SyncChip = ({
   account.facilioClientId ? (
     <Chip tone="green" dot small={small}>{`client ${account.facilioClientId}`}</Chip>
   ) : (
-    <Chip tone="orange" dot small={small}>
-      not in Facilio yet
-    </Chip>
+    // X-16: NEUTRAL, not alarm-toned — pre-Won this is the CORRECT state (the
+    // client is created when a deal is won, F-08), and painting the normal
+    // case orange taught people to ignore the colour.
+    <Chip small={small}>not in Facilio yet</Chip>
   );
 
 /** A count cell: tabular so columns of numbers align digit-for-digit. */
@@ -93,6 +97,7 @@ const NumCell = ({ value }: { value: number }) => (
 
 export function AccountList() {
   const navigate = useNavigate();
+  const actor = useActor();
 
   const [search, setSearch] = useState("");
   const [term, setTerm] = useState("");
@@ -100,6 +105,9 @@ export function AccountList() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  /** F-18: an account can be raised by hand — a client-to-be does not have to
+      enquire first. */
+  const [creating, setCreating] = useState(false);
 
   // Debounce: one request per pause in typing, not per keystroke.
   useEffect(() => {
@@ -131,7 +139,13 @@ export function AccountList() {
       title="Accounts"
       // What the page IS, not how many rows it holds — the count (and the
       // first-page hint) already live on the table's footer line below.
-      subtitle="Companies from converted leads"
+      subtitle="Companies from converted leads, or added by hand"
+      actions={
+        <Button size="sm" onClick={() => setCreating(true)}>
+          <Plus className="size-4" />
+          New account
+        </Button>
+      }
       // …except on phones, where the footer is gone with the full-bleed list
       // and the TOTAL sits beside the title. The truncation hint doesn't
       // survive the move — a phone header has room for one number.
@@ -221,11 +235,19 @@ export function AccountList() {
         ) : (
           <Empty
             title="No accounts yet"
-            body="A company appears here when a qualified lead is converted to a deal."
+            body="A company appears here when a qualified lead is converted to a deal — or add one by hand."
             action={<LinkButton to="/leads">Go to the lead inbox</LinkButton>}
           />
         )}
       </Card>
+
+      <AccountFormDialog
+        open={creating}
+        onOpenChange={setCreating}
+        account={null}
+        actor={actor}
+        onDone={(accountId) => navigate(`/accounts/${accountId}`)}
+      />
     </PageShell>
   );
 }

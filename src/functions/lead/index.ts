@@ -52,8 +52,21 @@ import {
   ANALYST_LINK_SETTING,
   buildAnalystInput,
 } from "../../modules/analysis";
-import { recordTurn, startSession, submitSession, transcript } from "../../modules/intake";
-import { accountDetail, listAccounts } from "../../modules/account";
+import {
+  recordTurn,
+  saveWidgetSettings,
+  startSession,
+  submitSession,
+  transcript,
+  widgetSettings,
+} from "../../modules/intake";
+import {
+  accountDetail,
+  createAccount,
+  listAccounts,
+  saveContact,
+  updateAccount,
+} from "../../modules/account";
 import { convertLead } from "../../modules/convert";
 import { drain, retry, syncStatus } from "../../modules/sync";
 import {
@@ -63,10 +76,10 @@ import {
   DEFAULT_ANALYST_TASK,
   saveArea,
   saveCoverage,
-  saveServiceLine,
   SCOPE_NOTES_SETTING,
   setSetting,
 } from "../../modules/settings";
+import { catalogueView, PRICING_BASES, saveService, UNITS_BY_BASIS } from "../../modules/service";
 import { LEAD_STATUSES, DISPOSITION_REASONS } from "../../domain/lead-state";
 
 const S = (description: string) => ({ description, type: "string" as const });
@@ -149,26 +162,20 @@ server.addHandler({
         created.areas++;
       }
 
+      // Service lines travel with coverage so a seed can declare both in one
+      // call. Editing the catalogue itself is `service-save` — this path only
+      // ever names and switches, and never touches the catalogue fields.
       const lineIdsByCode = new Map<string, string>();
       for (const raw of optArray(p, "serviceLines") ?? []) {
         const l = raw as Record<string, unknown>;
         if (typeof l.code !== "string" || !l.code.trim())
           throw new Error("each service line needs a code");
-        // C23: the Facilio Services id a line maps to. "" clears the link
-        // (same convention as scopeNotes); a field left out leaves it alone.
-        const facilioServiceId =
-          typeof l.facilioServiceId === "string"
-            ? l.facilioServiceId.trim() || null
-            : l.facilioServiceId === null
-              ? null
-              : undefined;
-        const id = saveServiceLine({
+        const saved = saveService({
           code: l.code.trim(),
           name: typeof l.name === "string" && l.name.trim() ? l.name.trim() : l.code.trim(),
           active: l.active !== false,
-          facilioServiceId,
         });
-        lineIdsByCode.set(l.code.trim(), id);
+        lineIdsByCode.set(saved.code, saved.id);
         created.serviceLines++;
       }
 
@@ -178,8 +185,13 @@ server.addHandler({
       const known = configData();
       const areaId = (name: string) =>
         areaIdsByName.get(name) ?? known.areas.find((a) => a.name === name)?.id;
-      const lineId = (code: string) =>
-        lineIdsByCode.get(code) ?? known.serviceLines.find((l) => l.code === code)?.id;
+      // Upper-cased on both sides: `saveService` normalises a code on the way
+      // in, so a seed that spells its coverage in lower case must still find
+      // the service it just created.
+      const lineId = (code: string) => {
+        const key = code.trim().toUpperCase();
+        return lineIdsByCode.get(key) ?? known.serviceLines.find((l) => l.code === key)?.id;
+      };
 
       for (const raw of optArray(p, "coverage") ?? []) {
         const c = raw as Record<string, unknown>;
@@ -242,6 +254,66 @@ server.addHandler({
     }),
 });
 
+// --- the service catalogue --------------------------------------------------
+// This app owns what it sells (2026-08-15). A service is created and retired
+// here, and every priced row names one by `code`.
+
+server.addHandler({
+  name: "service-list",
+  description:
+    "The service catalogue with a usage count per service — how many active rate card rows and proposal lines name each one.",
+  parameters: { ...ENV },
+  execute: async () =>
+    handle(() => ({
+      ...catalogueView(),
+      // The masters travel with the list so the browser never hard-codes a
+      // second copy of them — the unit list depends on the basis, and two
+      // copies drift into a unit the backend then refuses.
+      pricingBases: PRICING_BASES,
+      unitsByBasis: UNITS_BY_BASIS,
+    })),
+});
+
+server.addHandler({
+  name: "service-save",
+  description:
+    "Create or update one service. `code` is the natural key and is IMMUTABLE — saving an existing code updates it, and a new code creates a new service rather than renaming anything. Fields left out keep their stored value; send an empty string to clear description, basis or unit.",
+  parameters: {
+    ...ENV,
+    code: S("Service code — letters, digits, _ and -, e.g. KEC. Upper-cased. Immutable"),
+    name: S("What this service is called, e.g. Kitchen extract cleaning"),
+    description: S("What the service covers, in words a proposal line can borrow"),
+    defaultPricingBasis: S(`Prefills a rate card row: ${PRICING_BASES.join(" | ")}`),
+    defaultUom: S("Prefills a rate card row's unit. Must belong to the basis"),
+    active: S('"false" retires the service; "true" brings a retired one back'),
+  },
+  execute: async (args) =>
+    handle(() => {
+      const p = parsePayload(args);
+      const code = str(p, "code");
+      const name = str(p, "name");
+
+      // `in` rather than optStr, so "" CLEARS a field instead of reading as
+      // "leave it alone" — the same rule the prompt settings follow above.
+      // Only the payload envelope can express that.
+      const clearable = (key: string): string | null | undefined =>
+        key in p ? (String(p[key] ?? "").trim() || null) : undefined;
+
+      const saved = saveService({
+        code,
+        name,
+        description: clearable("description"),
+        defaultPricingBasis: clearable("defaultPricingBasis"),
+        defaultUom: clearable("defaultUom"),
+        // Unmentioned leaves it alone — see `saveService`.
+        active: optBool(p, "active") ?? undefined,
+      });
+
+      // The whole catalogue back, so the page never follows a save with a read.
+      return { ...saved, ...catalogueView() };
+    }),
+});
+
 // --- capture ----------------------------------------------------------------
 
 server.addHandler({
@@ -262,8 +334,11 @@ server.addHandler({
     siteAddress: S("Site street address"),
     siteCity: S("Site city"),
     siteRegion: S("Site region or emirate"),
-    estimatedValue: N("Rough opportunity value"),
+    estimatedValue: N("Estimated opportunity value (D-05: one number, typed by valueType)"),
     currency: S("Currency code, e.g. AED"),
+    valueType: S("one_off | recurring | both — what kind of number estimatedValue is"),
+    valueFrequency: S("monthly | quarterly | annual — required when the value recurs"),
+    origin: S("D-10, where it came from: referral | existing_client | marketing | hubspot | cold_outreach | other"),
     facilioAssetId: S("Originating Facilio asset id, for defect-sourced leads"),
     actorEmail: ACTOR,
   },
@@ -285,6 +360,9 @@ server.addHandler({
         siteRegion: optStr(p, "siteRegion"),
         estimatedValue: optNum(p, "estimatedValue"),
         currency: optStr(p, "currency"),
+        valueType: optStr(p, "valueType"),
+        valueFrequency: optStr(p, "valueFrequency"),
+        origin: optStr(p, "origin"),
         facilioAssetId: optStr(p, "facilioAssetId"),
         actor: optStr(p, "actorEmail"),
         extra: (p.extra as Record<string, unknown>) ?? {},
@@ -346,6 +424,8 @@ const EDITABLE_KEYS = [
   "siteCity",
   "siteRegion",
   "estimatedValue",
+  "valueType",
+  "valueFrequency",
   "currency",
   "nurtureUntil",
 ] as const;
@@ -364,8 +444,10 @@ server.addHandler({
     siteAddress: S("Site street address"),
     siteCity: S("Site city"),
     siteRegion: S("Site region or emirate"),
-    estimatedValue: N("Rough opportunity value"),
+    estimatedValue: N("Estimated opportunity value"),
     currency: S("Currency code"),
+    valueType: S("one_off | recurring | both (D-05)"),
+    valueFrequency: S("monthly | quarterly | annual — required when the value recurs"),
     nurtureUntil: S("ISO date to bring a nurtured lead back"),
   },
   execute: async (args) =>
@@ -540,6 +622,7 @@ server.addHandler({
     dealTitle: S("Title for the deal"),
     estimatedValue: N("Deal value, defaults to the lead's"),
     salesOwnerEmail: S("Sales owner to hand the deal to"),
+    overrideAssessment: S("'true' to convert past a not_relevant verdict (F-06) — recorded on the trail"),
     actorEmail: ACTOR,
   },
   execute: async (args) =>
@@ -553,6 +636,7 @@ server.addHandler({
           dealTitle: optStr(p, "dealTitle"),
           estimatedValue: optNum(p, "estimatedValue"),
           salesOwnerEmail: optStr(p, "salesOwnerEmail"),
+          overrideAssessment: p.overrideAssessment === true || p.overrideAssessment === "true",
         }),
         leadId
       );
@@ -592,6 +676,104 @@ server.addHandler({
     "One account with its contacts, its deals, and every lead that resolved to this company — repeat enquiries included.",
   parameters: { ...ENV, accountId: ACCOUNT_ID },
   execute: async (args) => handle(() => accountDetail(str(parsePayload(args), "accountId"))),
+});
+
+server.addHandler({
+  name: "account-create",
+  description:
+    "F-18: add an account by hand — a client-to-be does not have to enquire first. Dedupes on domain, email and name, naming the existing record instead of creating a twin. No Facilio write: the client belongs to the deal's Won moment.",
+  parameters: {
+    ...ENV,
+    name: S("Company name — required"),
+    email: S("Company email"),
+    phone: S("Company phone"),
+    websiteDomain: S("Company website or domain"),
+    street: S("Street address"),
+    city: S("City"),
+    state: S("Region or emirate"),
+    actorEmail: ACTOR,
+  },
+  execute: async (args) =>
+    handle(() => {
+      const p = parsePayload(args);
+      return createAccount({
+        name: str(p, "name"),
+        email: optStr(p, "email"),
+        phone: optStr(p, "phone"),
+        websiteDomain: optStr(p, "websiteDomain"),
+        address: {
+          street: optStr(p, "street"),
+          city: optStr(p, "city"),
+          state: optStr(p, "state"),
+        },
+        actor: optStr(p, "actorEmail"),
+      });
+    }),
+});
+
+server.addHandler({
+  name: "account-update",
+  description:
+    "F-19: edit an account's descriptive fields. LOCAL only — the connection has no update-client action, so a client already in Facilio is not changed by this.",
+  parameters: {
+    ...ENV,
+    accountId: ACCOUNT_ID,
+    name: S("Company name"),
+    email: S("Company email"),
+    phone: S("Company phone"),
+    websiteDomain: S("Company website or domain"),
+    street: S("Street address"),
+    city: S("City"),
+    state: S("Region or emirate"),
+    actorEmail: ACTOR,
+  },
+  execute: async (args) =>
+    handle(() => {
+      const p = parsePayload(args);
+      const fields: Record<string, unknown> = {};
+      for (const key of ["name", "email", "phone", "websiteDomain"]) {
+        if (p[key] !== undefined) fields[key] = p[key];
+      }
+      if (p.street !== undefined || p.city !== undefined || p.state !== undefined) {
+        fields.address = {
+          street: optStr(p, "street"),
+          city: optStr(p, "city"),
+          state: optStr(p, "state"),
+        };
+      }
+      return updateAccount(str(p, "accountId"), fields, optStr(p, "actorEmail"));
+    }),
+});
+
+server.addHandler({
+  name: "account-contact-save",
+  description:
+    "D-37: add or edit a contact on an account. One primary per account, enforced in the write. A NEW contact with an email is queued for Facilio through the outbox; the drain defers it until the client itself has synced.",
+  parameters: {
+    ...ENV,
+    accountId: ACCOUNT_ID,
+    contactId: S("Contact id — omit to create"),
+    name: S("Contact name — required"),
+    email: S("Contact email"),
+    phone: S("Contact phone"),
+    isPrimary: S("'true' to make this the primary contact"),
+    actorEmail: ACTOR,
+  },
+  execute: async (args) =>
+    handle(() => {
+      const p = parsePayload(args);
+      return saveContact(
+        str(p, "accountId"),
+        {
+          id: optStr(p, "contactId"),
+          name: str(p, "name"),
+          email: optStr(p, "email"),
+          phone: optStr(p, "phone"),
+          isPrimary: p.isPrimary === true || p.isPrimary === "true",
+        },
+        optStr(p, "actorEmail")
+      );
+    }),
 });
 
 // --- outbox -----------------------------------------------------------------
@@ -688,6 +870,36 @@ server.addHandler({
   description: "Turn the conversation into a lead. Idempotent — a session yields at most one lead.",
   parameters: { ...ENV, sessionToken: S("Session token") },
   execute: async (args) => handle(() => submitSession(str(parsePayload(args), "sessionToken"))),
+});
+
+// The widget's presentation, published from the console and read by every
+// surface that renders the widget — the playground today, the embed later.
+// No secrets in it: the whole config ships to the visitor's browser.
+
+server.addHandler({
+  name: "widget-get",
+  description: "The web widget's published presentation config and per-turn agent guidance",
+  parameters: {},
+  execute: async () => handle(() => ({ config: widgetSettings() })),
+});
+
+server.addHandler({
+  name: "widget-put",
+  description:
+    "Publish the web widget's presentation. Partial — a sent field is saved, an empty one clears, an absent one keeps its stored value.",
+  parameters: {
+    ...ENV,
+    companyName: S("Name shown in the widget header"),
+    tagline: S("The line under the company name"),
+    accent: S("Hex bubble/button colour like #2563eb; empty follows the theme"),
+    greeting: S("First agent message; empty uses the shipped greeting"),
+    guidance: S("Operator instructions the intake agent follows on every turn"),
+    logo: S("Small data:image/… URL; empty shows the company initial"),
+  },
+  // The logo travels inside `payload` in practice: a flat connection-action
+  // field can carry it too, but the console always sends the envelope so ""
+  // can clear (flat blanks are dropped upstream as unresolved templates).
+  execute: async (args) => handle(() => ({ config: saveWidgetSettings(parsePayload(args)) })),
 });
 
 server.execute();

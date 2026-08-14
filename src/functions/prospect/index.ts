@@ -45,6 +45,7 @@ import {
 } from "../../domain/prospect-state";
 import {
   convertPreflight,
+  convertRun,
   copyForward,
   decideObservation,
   createLocation,
@@ -60,10 +61,12 @@ import {
   reparentLocation,
   setDecision,
   setVerdict,
+  updateLocation,
 } from "../../modules/prospect";
-import { handle, optBool, optStr, oneOf, parsePayload, str } from "../../shared/envelope";
+import { handle, optBool, optNum, optStr, oneOf, parsePayload, str } from "../../shared/envelope";
 
 const S = (description: string) => ({ description, type: "string" as const });
+const N = (description: string) => ({ description, type: "number" as const });
 
 /** Every handler accepts the envelope as an alternative to flat fields. */
 const ENV = { payload: S("Optional: the whole input as a JSON object string") };
@@ -79,22 +82,28 @@ const server = new StudioFunctions({ name: "prospect" });
 server.addHandler({
   name: "create",
   description:
-    "Create one location at any level. `name` is the ONLY mandatory descriptive field — a phone call gives you 'the Bleecker Street store' and nothing else. Level rules: a site has no parent, a building hangs off a site, a space off a building OR directly off a site (a car park has no building). ancestry_path is stamped here.",
+    "Create one location at any level. `name` is the ONLY mandatory descriptive field — a phone call gives you 'the Bleecker Street store' and nothing else. OWNERSHIP: pass at least one of leadId, accountId or dealId; a building named in an enquiry exists before any deal does. LEVELS: a site has no parent, a building hangs off a site, a floor off a building, a space off a floor OR a building OR directly off a site (25,110 live Facilio spaces have no building), and a space may nest inside a space five deep. ancestry_path AND the site_id/building_id/floor_id columns are stamped here.",
   parameters: {
     ...ENV,
-    dealId: DEAL_ID,
+    leadId: S("The enquiry that named this building, before any deal exists"),
+    accountId: S("The client it belongs to, across every deal"),
+    dealId: S("The pursuit this row is scoped to"),
     type: S(`One of: ${LOCATION_TYPES.join(", ")}`),
     name: S("What it is called — required"),
     parentId: S("Parent location id — omit for a site"),
     provenance: S(`Where it came from. One of: ${PROVENANCES.join(", ")}. Defaults to manual`),
     surveyId: S("The survey that created it, when it came off a walk"),
+    buildingKey: S("Shared key for the same physical building across pursuits"),
+    description: S("Free note that travels to Facilio at convert"),
     code: S("The client's own reference for it — tenders are scored against their numbering"),
     clientLevelLabel: S("What the CLIENT calls this level — facility, tower, block, unit"),
-    addressLine: S("Street address"),
+    locationName: S("Facilio's Location record carries its own name"),
+    street: S("Street address"),
     city: S("City"),
-    region: S("Region or emirate"),
-    country: S("Country code"),
-    postcode: S("Postcode"),
+    state: S("State, province or emirate"),
+    country: S("Country code — decides whether we can serve here at all"),
+    zip: S("Postcode"),
+    locationPhone: S("The site's own number, not the account's"),
     sourceAttachmentId: S("The document this was extracted from, if any"),
     verdict: S(`Initial verdict. One of: ${VERDICTS.join(", ")}. Defaults to unverified`),
     actorEmail: ACTOR,
@@ -103,21 +112,68 @@ server.addHandler({
     handle(() => {
       const p = parsePayload(args);
       return createLocation({
-        dealId: str(p, "dealId"),
+        leadId: optStr(p, "leadId"),
+        accountId: optStr(p, "accountId"),
+        dealId: optStr(p, "dealId"),
         type: oneOf(p, "type", LOCATION_TYPES),
         name: str(p, "name"),
         parentId: optStr(p, "parentId"),
         provenance: optStr(p, "provenance") as never,
         surveyId: optStr(p, "surveyId"),
+        buildingKey: optStr(p, "buildingKey"),
+        description: optStr(p, "description"),
         code: optStr(p, "code"),
         clientLevelLabel: optStr(p, "clientLevelLabel"),
-        addressLine: optStr(p, "addressLine"),
+        locationName: optStr(p, "locationName"),
+        street: optStr(p, "street"),
         city: optStr(p, "city"),
-        region: optStr(p, "region"),
+        state: optStr(p, "state"),
         country: optStr(p, "country"),
-        postcode: optStr(p, "postcode"),
+        zip: optStr(p, "zip"),
+        locationPhone: optStr(p, "locationPhone"),
         sourceAttachmentId: optStr(p, "sourceAttachmentId"),
         verdict: optStr(p, "verdict") as never,
+        actor: optStr(p, "actorEmail"),
+      });
+    }),
+});
+
+server.addHandler({
+  name: "update",
+  description:
+    "★ THE ONE EDIT FORM'S SAVE. Send any subset of the editable fields as a JSON object in `fields` and every CHANGED one is recorded, in one call. This replaces the old one-field-at-a-time 'record a measurement' flow. A field you omit, or send empty, is left alone — clearing a value is deliberate and is not what a blank box means. Underneath, each changed field still goes through the acceptance ledger: a priced field that disagrees with what is already accepted raises a conflict for a person to settle, a descriptive one simply replaces it and keeps the history. Returns what changed, what was skipped, and how many conflicts were raised.",
+  parameters: {
+    ...ENV,
+    locationId: LOCATION_ID,
+    fields: S(
+      `JSON object of field → value. Editable fields: ${FIELD_KEYS.join(", ")}`
+    ),
+    provenance: S(
+      `Which feed this save represents: ${PROVENANCES.join(", ")}. Defaults to manual`
+    ),
+    surveyId: S("The survey it came from, when it came off a walk"),
+    visitId: S("The visit it came from"),
+    actorEmail: ACTOR,
+  },
+  execute: async (args) =>
+    handle(() => {
+      const p = parsePayload(args);
+      const raw = p.fields;
+      // `fields` arrives as a JSON string because handler parameters may only be
+      // "string" or "number" on this platform — complex input always travels
+      // encoded. Accept an already-parsed object too, so an internal caller does
+      // not have to stringify just to be re-parsed.
+      const fields =
+        typeof raw === "string" ? JSON.parse(raw || "{}") : ((raw ?? {}) as Record<string, unknown>);
+      if (typeof fields !== "object" || Array.isArray(fields) || fields === null) {
+        throw new Error("fields must be a JSON object of field → value");
+      }
+      return updateLocation({
+        locationId: str(p, "locationId"),
+        fields: fields as Record<string, unknown>,
+        provenance: optStr(p, "provenance") as never,
+        surveyId: optStr(p, "surveyId"),
+        visitId: optStr(p, "visitId"),
         actor: optStr(p, "actorEmail"),
       });
     }),
@@ -133,20 +189,44 @@ server.addHandler({
 server.addHandler({
   name: "list",
   description:
-    "The whole tree for a pursuit, ordered by ancestry_path — which IS depth-first tree order, so no client-side sort is needed. no_bid rows are excluded unless includeNoBid is true, because a no_bid drops out of every total.",
+    "EVERY property, with the pursuit as one filter among several. Pass no scope at all and you get the whole portfolio — that is what makes this a module rather than a tab on a deal. Pass leadId, accountId or dealId to scope it to one surface. Ordered by ancestry_path then name: ancestry_path IS depth-first tree order, and the name tiebreak keeps identical rows adjacent instead of scattered. no_bid rows are excluded unless includeNoBid is true, because a no_bid drops out of every total. Everything full-scans — there are no indexes on this database.",
   parameters: {
     ...ENV,
-    dealId: DEAL_ID,
+    leadId: S("Scope to one enquiry — the sites named before any deal existed"),
+    accountId: S("Scope to one client — every building ever pursued for them"),
+    dealId: S("Scope to one pursuit"),
     type: S(`Filter to one level: ${LOCATION_TYPES.join(", ")}`),
     includeNoBid: S("true to include locations marked no_bid"),
+    pursuitDecision: S(`Filter by decision: ${PURSUIT_DECISIONS.join(", ")}`),
+    verdict: S(`Filter by verdict: ${VERDICTS.join(", ")}`),
+    inFacilio: S("true for rows already in Facilio, false for those not yet"),
+    country: S("Filter by country — service-area matching"),
+    state: S("Filter by state, province or emirate"),
+    city: S("Filter by city"),
+    tag: S("Filter by one tag — zone, cluster, precinct, phase"),
+    needsAttention: S(
+      "The work queue. One of: unsettled (a value two feeds disagree on), missing_area (nothing to price it with), not_visited"
+    ),
+    search: S("Matches name, client reference, Facilio number or street"),
   },
   execute: async (args) =>
     handle(() => {
       const p = parsePayload(args);
       return listLocations({
-        dealId: str(p, "dealId"),
+        leadId: optStr(p, "leadId"),
+        accountId: optStr(p, "accountId"),
+        dealId: optStr(p, "dealId"),
         type: optStr(p, "type") as never,
         includeNoBid: optBool(p, "includeNoBid") ?? false,
+        pursuitDecision: optStr(p, "pursuitDecision") as never,
+        verdict: optStr(p, "verdict") as never,
+        inFacilio: optBool(p, "inFacilio") ?? null,
+        country: optStr(p, "country"),
+        state: optStr(p, "state"),
+        city: optStr(p, "city"),
+        tag: optStr(p, "tag"),
+        needsAttention: optStr(p, "needsAttention") as never,
+        search: optStr(p, "search"),
       });
     }),
 });
@@ -301,7 +381,7 @@ server.addHandler({
 server.addHandler({
   name: "convert-preflight",
   description:
-    "READ-ONLY. What a convert run WOULD do: create / skip / flag per location, plus the blockers a person must clear first — including C3's ordering dependency, that a parent must be in Facilio before its child. Enrichment happens at THIS gate, not after (C26). Touches Facilio not at all. The RUN itself is not built: it is blocked on G1 (L9, L20, L21, L22).",
+    "READ-ONLY. What a convert run WOULD do: create / skip / flag per location, plus the blockers a person must clear first — including C3's ordering dependency, that a parent must be in Facilio before its child. Enrichment happens at THIS gate, not after (C26). Touches Facilio not at all. The RUN is `convert-to-facilio`.",
   parameters: {
     ...ENV,
     dealId: DEAL_ID,
@@ -315,6 +395,31 @@ server.addHandler({
         dealIsWon: optBool(p, "dealIsWon") ?? false,
       });
     }),
+});
+
+server.addHandler({
+  name: "convert-to-facilio",
+  description:
+    "THE RUN — prospect portfolio → Facilio's portfolio, at Won only (checked server-side against the deal, not trusted from the caller). Creates site/building/floor/space parent-first, stamps facilio_id and logs every attempt in fl_prospect_convert_log. Batched: call again until `remaining` is 0. Idempotent — an already-converted location is skipped, and a create that landed in Facilio but crashed before stamping is recovered from the log, never duplicated.",
+  parameters: {
+    ...ENV,
+    dealId: DEAL_ID,
+    batch: N("Locations to write this call (default 4, max 8 — Facilio calls are serialised at ~10s each)"),
+    actorEmail: ACTOR,
+  },
+  execute: async (args) => {
+    const p = parsePayload(args);
+    try {
+      const data = await convertRun({
+        dealId: str(p, "dealId"),
+        actor: optStr(p, "actorEmail"),
+        batchSize: optNum(p, "batch") ?? undefined,
+      });
+      return { ok: true, data };
+    } catch (e) {
+      return { ok: false, error: String((e as Error)?.message ?? e) };
+    }
+  },
 });
 
 // ── Observations (§4.3) ──────────────────────────────────────────────────────

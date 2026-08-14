@@ -3,31 +3,40 @@
  * values side by side when the feeds disagree.
  *
  * THE PAGE ONLY MAKES SENSE IF ONE RULE IS VISIBLE (§4.3): every attribute shown
- * here is a *cache of the latest accepted observation*, not a field someone typed.
- * So there is no "edit" button anywhere on this page. Changing an area means
- * recording what you observed; if it agrees with what is accepted, it lands
- * silently, and if it disagrees, both values stay and a person chooses. That is
- * why the attribute rows carry a provenance chip: the value is always *somebody's
- * claim*, never an anonymous fact.
+ * here is a *cache of the latest accepted value*, not a field someone typed. That
+ * is why the attribute rows carry a provenance chip — the value is always
+ * *somebody's claim*, never an anonymous fact.
  *
- * WHY THAT IS WORTH THE EXTRA STEP, because "just let me type it" is the obvious
- * objection: the RFP says 4,500 sqft and the surveyor measured 5,200. Both are
- * true, from different sources, at different times. A form field would keep
- * whichever was saved last and destroy the other, and six weeks into a negotiation
- * nobody could say which number the price was built on or who stood behind it.
+ * WHY THAT MATTERS, because "just let me type it" is the obvious objection: the
+ * RFP says 4,500 sqft and the surveyor measured 5,200. Both are true, from
+ * different sources, at different times. A plain form field would keep whichever
+ * was saved last and destroy the other, and six weeks into a negotiation nobody
+ * could say which number the price was built on or who stood behind it.
+ *
+ * ⚠ v1.3 §6.1 SUPERSEDES WHAT THIS FILE USED TO SAY. It used to claim there was
+ * no Edit button anywhere on this page, and treated that as the rule made
+ * visible. It was the rule made UNUSABLE: every field went through a modal called
+ * "Record a measurement", so an address and a size took eight round-trips, and
+ * Country and Name were filed under MEASUREMENTS. The storage model had been
+ * shipped as the user interface. There is now one Edit button and one form.
+ *
+ * The rule itself did not move. `prospect.update` still records each changed
+ * field through the same ledger, so a PRICED field that disagrees still stops and
+ * waits for a person (§6.3) — what changed is that a descriptive field no longer
+ * interrupts anyone, and that the word "observation" never reaches this screen.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import { AlertTriangle, Plus } from "lucide-react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { AlertTriangle, MoreHorizontal, Pencil, Plus } from "lucide-react";
 import { useActor } from "../../../app/auth";
 import { PageShell } from "../../../app/shell/PageShell";
-import { onDay } from "../../../lib/format";
+import { onDay, placeLine, plural } from "../../../lib/format";
 import { Card, SectionTitle } from "../../../ui/Card";
 import { Empty, ErrorState } from "../../../ui/States";
 import { SimpleRows } from "../../../ui/Skeleton";
 import { Button } from "@/components/ui/button";
-import { getLocation, listObservations } from "../api/prospects-util";
+import { getLocation, listLocations, listObservations } from "../api/prospects-util";
 import {
   ConvertChip,
   DecisionChip,
@@ -36,13 +45,32 @@ import {
   TypeChip,
   VerdictChip,
 } from "../components/ProspectChips";
-import { ObserveDialog, ResolveDialog } from "../components/ObservationDialogs";
+import { ResolveDialog } from "../components/ObservationDialogs";
+import {
+  DecisionDialog,
+  LinkFacilioDialog,
+  NewLocationDialog,
+  RemoveDialog,
+  ReparentDialog,
+  VerdictDialog,
+} from "../components/ActionDialogs";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { EditLocationDialog } from "../components/EditLocationDialog";
 import {
   isAcceptedObservation,
   observationValue,
+  childTypesOf,
   OBSERVABLE_FIELD_LABEL,
-  OBSERVABLE_FIELDS,
+  RECONCILIATION_DECISION_LABEL,
+  TYPE_LABEL,
   type ProspectLocation,
+  type ReconciliationDecision,
   type ProspectObservation,
 } from "../types/prospect";
 
@@ -87,9 +115,40 @@ export function LocationDetail() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [observeOpen, setObserveOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
   const [resolving, setResolving] = useState<FieldGroup | null>(null);
   const [resolveOpen, setResolveOpen] = useState(false);
+
+  /** Which field rows have their history open. Shut by default — the history
+      is detail on demand, not the headline. */
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggleExpanded = (key: string) =>
+    setExpanded((e) => {
+      const next = new Set(e);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  const openSettle = (g: FieldGroup) => {
+    setResolving(g);
+    setResolveOpen(true);
+  };
+
+  /** Every action the tree row menu offers, offered here too (X-19). */
+  const [addChildOpen, setAddChildOpen] = useState(false);
+  const [verdictOpen, setVerdictOpen] = useState(false);
+  const [decisionOpen, setDecisionOpen] = useState(false);
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [removeOpen, setRemoveOpen] = useState(false);
+
+  /**
+   * The rest of this property's own portfolio, for the children list and for
+   * the move dialog's legal destinations. Scoped to whichever owner this row
+   * carries, which is the same set the tree would show.
+   */
+  const [siblings, setSiblings] = useState<ProspectLocation[]>([]);
 
   const load = useCallback(() => {
     if (!id) return;
@@ -99,8 +158,23 @@ export function LocationDetail() {
       setLoading(false);
       const err = loc.error ?? obs.error;
       if (err) return setError(err);
-      setLocation(loc.data?.location ?? null);
+      const found = loc.data?.location ?? null;
+      setLocation(found);
       setObservations(obs.data?.observations ?? []);
+
+      // Second hop, deliberately not awaited with the first: the page is
+      // readable without it, and the children list is the only thing that
+      // waits.
+      if (found) {
+        listLocations(
+          {
+            ...(found.leadId ? { leadId: found.leadId } : {}),
+            ...(found.accountId ? { accountId: found.accountId } : {}),
+            ...(found.dealId ? { dealId: found.dealId } : {}),
+          },
+          true
+        ).then(({ data }) => setSiblings(data?.locations ?? []));
+      }
     });
   }, [id]);
 
@@ -110,22 +184,87 @@ export function LocationDetail() {
   const contested = groups.filter((g) => g.pending.length);
   const linked = Boolean((location?.facilioId ?? "").trim());
 
+  const children = useMemo(
+    () => siblings.filter((s) => s.parentId === location?.id),
+    [siblings, location?.id]
+  );
+  const canHoldChildren = location ? childTypesOf(location.type).length > 0 : false;
+
+  /** The chain above this row, read straight off `ancestryPath`. */
+  const ancestors = useMemo(() => {
+    if (!location) return [];
+    const ids = (location.ancestryPath ?? "").split("/").filter(Boolean).slice(0, -1);
+    return ids
+      .map((aid) => siblings.find((s) => s.id === aid))
+      .filter((a): a is ProspectLocation => Boolean(a));
+  }, [location, siblings]);
+
+  /** Legal destinations for a move: anything that may hold this level, minus
+      itself and its own subtree (which would be a cycle). */
+  const moveCandidates = useMemo(
+    () =>
+      location
+        ? siblings.filter(
+            (o) =>
+              o.id !== location.id &&
+              !(o.ancestryPath ?? "").startsWith(`${location.ancestryPath}/`) &&
+              childTypesOf(o.type).includes(location.type)
+          )
+        : [],
+    [siblings, location]
+  );
+
   return (
     <PageShell
       title={location?.name ?? "Location"}
       subtitle={
+        // placeLine drops the "Dubai, Dubai" stutter (X-15).
         location
-          ? [location.addressLine, location.city, location.region].filter(Boolean).join(", ") ||
-            undefined
+          ? placeLine(location.street, location.city, location.state) || undefined
           : undefined
       }
       onBack={() => navigate(-1)}
       actions={
         location ? (
-          <Button size="sm" onClick={() => setObserveOpen(true)}>
-            <Plus className="size-4" />
-            Record a measurement
-          </Button>
+          /* X-19 — the detail page used to carry ONE action. Every action the
+             tree row offers is reachable here too now, because the page you are
+             reading a property on is where you decide things about it. Edit
+             stays promoted; the rest sit behind a menu so the header does not
+             become a toolbar. */
+          <div className="flex items-center gap-2">
+            <Button size="sm" onClick={() => setEditOpen(true)}>
+              <Pencil className="size-4" />
+              Edit
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="outline" aria-label="More actions">
+                  <MoreHorizontal className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {canHoldChildren ? (
+                  <DropdownMenuItem onSelect={() => setAddChildOpen(true)}>
+                    Add inside
+                  </DropdownMenuItem>
+                ) : null}
+                <DropdownMenuItem onSelect={() => setVerdictOpen(true)}>
+                  Set the verdict
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setDecisionOpen(true)}>
+                  Bid or no bid
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setMoveOpen(true)}>Move</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setLinkOpen(true)}>
+                  Link to Facilio
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem variant="destructive" onSelect={() => setRemoveOpen(true)}>
+                  Remove from the pursuit
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         ) : null
       }
     >
@@ -143,6 +282,23 @@ export function LocationDetail() {
         </Card>
       ) : (
         <div className="flex flex-col gap-4">
+          {/* X-19's missing breadcrumb. `onBack` is browser history, which
+              answers "where was I", not "where is this". A space three levels
+              down needs to say which building it is in. */}
+          {ancestors.length ? (
+            <div className="text-muted-foreground -mt-1 flex flex-wrap items-center gap-1 text-xs">
+              {ancestors.map((a) => (
+                <span key={a.id} className="flex items-center gap-1">
+                  <Link to={`/portfolio/${a.id}`} className="hover:text-foreground hover:underline">
+                    {a.name}
+                  </Link>
+                  <span aria-hidden="true">/</span>
+                </span>
+              ))}
+              <span className="text-foreground">{location.name}</span>
+            </div>
+          ) : null}
+
           {/* What the location IS — the four states that decide what happens to
               it, in one row, because they are read together or not at all. */}
           <Card>
@@ -227,97 +383,251 @@ export function LocationDetail() {
             </Card>
           ) : null}
 
-          <Card pad={false} title="Measurements">
+          {/**
+            * ONE PANEL, NOT TWO.
+            *
+            * This used to be "What we know" followed by "Everything anyone has
+            * said about this location" — and with one observation per field they
+            * rendered the same four rows twice, which read as a bug. The history
+            * is not a separate subject; it is the SAME row, in more detail. So a
+            * field expands to show who said what, and only when it has something
+            * more to say.
+            */}
+          <Card pad={false} title="What we know">
             {!groups.length ? (
               <Empty
                 tight
-                title="Nothing measured yet"
-                body="Area, floors, rooms and restrooms all arrive as observations — from the RFP, from a walk, or typed in. Every value keeps the feed that said it, so two sources disagreeing becomes a question rather than a lost number."
+                title="Nothing recorded yet"
+                body="Area, floors, rooms and restrooms can come from the RFP, from a walk, or be typed in. Every value keeps the feed it came from, so two sources disagreeing becomes a question rather than a lost number."
                 action={
-                  <Button size="sm" onClick={() => setObserveOpen(true)}>
-                    Record the first one
+                  <Button size="sm" onClick={() => setEditOpen(true)}>
+                    Fill this in
                   </Button>
                 }
               />
             ) : (
-              groups.map((g) => (
-                <div
-                  key={g.fieldKey}
-                  className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-2.5 last:border-b-0"
-                >
-                  <span className="text-muted-foreground w-36 shrink-0 text-xs">{g.label}</span>
-                  <span className="text-sm font-medium">
-                    {g.accepted ? observationValue(g.accepted) : <em className="font-normal">unsettled</em>}
-                  </span>
-                  {g.accepted ? <ProvenanceChip provenance={g.accepted.provenance} /> : null}
-                  <span className="min-w-2 flex-1" />
-                  {g.pending.length ? (
-                    <span className="text-xs text-orange-600 dark:text-orange-500">
-                      {g.pending.length} other value{g.pending.length === 1 ? "" : "s"} waiting
-                    </span>
-                  ) : null}
-                  {g.history.length ? (
-                    <span className="text-muted-foreground text-xs">
-                      {g.history.length} earlier
-                    </span>
-                  ) : null}
-                </div>
-              ))
+              groups.map((g) => {
+                const extra = g.pending.length + g.history.length;
+                const open = expanded.has(g.fieldKey);
+                return (
+                  <div key={g.fieldKey} className="border-b last:border-b-0">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5">
+                      <span className="text-muted-foreground w-36 shrink-0 text-xs">{g.label}</span>
+                      <span className="text-sm font-medium">
+                        {g.accepted ? (
+                          observationValue(g.accepted)
+                        ) : (
+                          <em className="font-normal">unsettled</em>
+                        )}
+                      </span>
+                      {g.accepted ? <ProvenanceChip provenance={g.accepted.provenance} /> : null}
+                      <span className="min-w-2 flex-1" />
+
+                      {g.pending.length ? (
+                        <Button size="sm" variant="outline" onClick={() => openSettle(g)}>
+                          Settle {plural(g.pending.length, "value", "values")}
+                        </Button>
+                      ) : null}
+
+                      {/* Only offered when there IS more — a disclosure that
+                          opens onto nothing is worse than no disclosure. */}
+                      {extra ? (
+                        <button
+                          type="button"
+                          onClick={() => toggleExpanded(g.fieldKey)}
+                          aria-expanded={open}
+                          className="text-muted-foreground hover:text-foreground shrink-0 text-xs"
+                        >
+                          {open ? "Hide" : `${plural(extra, "entry", "entries")}`}
+                        </button>
+                      ) : null}
+                    </div>
+
+                    {open ? (
+                      <div className="bg-muted/30 flex flex-col">
+                        {[...g.pending, ...g.history].map((o) => (
+                          <div
+                            key={o.id}
+                            className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 pl-[calc(1rem+9rem)]"
+                          >
+                            <span
+                              className={
+                                o.supersededByObservationId
+                                  ? "text-muted-foreground text-sm line-through"
+                                  : "text-sm"
+                              }
+                            >
+                              {observationValue(o)}
+                            </span>
+                            <ProvenanceChip provenance={o.provenance} />
+                            {o.supersededByObservationId ? (
+                              <span className="text-muted-foreground text-xs">
+                                replaced
+                                {o.reconciliationDecision
+                                  ? ` · ${
+                                      RECONCILIATION_DECISION_LABEL[
+                                        o.reconciliationDecision as ReconciliationDecision
+                                      ] ?? "settled"
+                                    }`
+                                  : ""}
+                              </span>
+                            ) : (
+                              <span className="text-xs text-orange-600 dark:text-orange-500">
+                                waiting
+                              </span>
+                            )}
+                            <span className="min-w-2 flex-1" />
+                            <span className="text-muted-foreground shrink-0 text-xs">
+                              {o.observedBy ?? "unknown"}
+                              {o.observedAt ? ` · ${onDay(o.observedAt)}` : ""}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })
             )}
           </Card>
 
-          {/* The audit trail. Superseded values are kept rather than deleted, so
-              "why is this 5,200?" is answerable without anyone remembering. */}
-          {observations.length ? (
-            <Card pad={false} title="Everything anyone has said about this location">
-              {observations.map((o) => (
-                <div
-                  key={o.id}
-                  className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-2 last:border-b-0"
+          {/* What is INSIDE this one — and the way to add to it. A property with
+              no way to gain a floor from its own page sends the user back to the
+              tree to do something they are already looking at. */}
+          <Card
+            pad={false}
+            title={`Inside this ${TYPE_LABEL[location.type].toLowerCase()}`}
+            meta={
+              canHoldChildren ? (
+                <Button size="sm" variant="outline" onClick={() => setAddChildOpen(true)}>
+                  <Plus className="size-4" />
+                  Add
+                </Button>
+              ) : null
+            }
+          >
+            {!canHoldChildren ? (
+              <Empty
+                tight
+                title="Nothing goes inside a space"
+                body="A space is the deepest level that holds anything — sub-spaces hang off it, and those are added from the tree."
+              />
+            ) : !children.length ? (
+              <Empty
+                tight
+                title="Nothing inside yet"
+                body={`A ${TYPE_LABEL[location.type].toLowerCase()} can hold ${childTypesOf(
+                  location.type
+                )
+                  .map((t) => TYPE_LABEL[t].toLowerCase())
+                  .join(", ")}.`}
+                action={
+                  <Button size="sm" onClick={() => setAddChildOpen(true)}>
+                    <Plus className="size-4" />
+                    Add the first one
+                  </Button>
+                }
+              />
+            ) : (
+              children.map((c) => (
+                <Link
+                  key={c.id}
+                  to={`/portfolio/${c.id}`}
+                  className="hover:bg-muted/40 flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-2.5 last:border-b-0"
                 >
-                  <span className="text-muted-foreground w-36 shrink-0 text-xs">
-                    {OBSERVABLE_FIELD_LABEL[o.fieldKey] ?? o.fieldKey}
-                  </span>
-                  <span
-                    className={
-                      o.supersededByObservationId
-                        ? "text-muted-foreground text-sm line-through"
-                        : "text-sm"
-                    }
-                  >
-                    {observationValue(o)}
-                  </span>
-                  <ProvenanceChip provenance={o.provenance} />
-                  {isAcceptedObservation(o) ? (
-                    <span className="text-xs text-green-600 dark:text-green-500">in use</span>
-                  ) : o.supersededByObservationId ? (
-                    <span className="text-muted-foreground text-xs">
-                      replaced{o.reconciliationDecision ? ` · ${o.reconciliationDecision}` : ""}
-                    </span>
-                  ) : (
-                    <span className="text-xs text-orange-600 dark:text-orange-500">waiting</span>
-                  )}
+                  <TypeChip type={c.type} clientLabel={c.clientLevelLabel} />
+                  <span className="text-sm font-medium">{c.name}</span>
+                  {c.code ? (
+                    <span className="text-muted-foreground font-mono text-xs">{c.code}</span>
+                  ) : null}
+                  {c.area ? (
+                    <span className="text-muted-foreground text-xs">{c.area} sq ft</span>
+                  ) : null}
                   <span className="min-w-2 flex-1" />
-                  <span className="text-muted-foreground shrink-0 text-xs">
-                    {o.observedBy ?? "unknown"}
-                    {o.observedAt ? ` · ${onDay(o.observedAt)}` : ""}
-                  </span>
-                </div>
-              ))}
-            </Card>
-          ) : null}
+                  <VerdictChip verdict={c.verdict} />
+                </Link>
+              ))
+            )}
+          </Card>
         </div>
       )}
 
       {location ? (
         <>
-          <ObserveDialog
-            open={observeOpen}
-            onOpenChange={setObserveOpen}
+          <EditLocationDialog
+            open={editOpen}
+            onOpenChange={setEditOpen}
             location={location}
-            fields={OBSERVABLE_FIELDS}
+            actor={actor}
+            onSaved={load}
+            // A conflict raised by the save is settled in the same place every
+            // other contested value is, rather than in a second bespoke screen.
+            onShowContested={() => {
+              const first = contested[0];
+              if (!first) return;
+              setResolving(first);
+              setResolveOpen(true);
+            }}
+          />
+          <NewLocationDialog
+            open={addChildOpen}
+            onOpenChange={setAddChildOpen}
+            owner={{
+              ...(location.leadId ? { leadId: location.leadId } : {}),
+              ...(location.accountId ? { accountId: location.accountId } : {}),
+              ...(location.dealId ? { dealId: location.dealId } : {}),
+            }}
+            parent={location}
             actor={actor}
             onDone={load}
+          />
+          <VerdictDialog
+            open={verdictOpen}
+            onOpenChange={setVerdictOpen}
+            location={location}
+            actor={actor}
+            onDone={load}
+          />
+          <DecisionDialog
+            open={decisionOpen}
+            onOpenChange={setDecisionOpen}
+            location={location}
+            actor={actor}
+            onDone={load}
+          />
+          <ReparentDialog
+            open={moveOpen}
+            onOpenChange={setMoveOpen}
+            location={location}
+            candidates={moveCandidates}
+            descendantCount={
+              siblings.filter((o) =>
+                (o.ancestryPath ?? "").startsWith(`${location.ancestryPath}/`)
+              ).length
+            }
+            actor={actor}
+            onDone={load}
+          />
+          <LinkFacilioDialog
+            open={linkOpen}
+            onOpenChange={setLinkOpen}
+            location={location}
+            actor={actor}
+            onDone={load}
+          />
+          <RemoveDialog
+            open={removeOpen}
+            onOpenChange={setRemoveOpen}
+            location={location}
+            descendantCount={
+              siblings.filter((o) =>
+                (o.ancestryPath ?? "").startsWith(`${location.ancestryPath}/`)
+              ).length
+            }
+            actor={actor}
+            // Removing the thing you are looking at should not leave you
+            // looking at it.
+            onDone={() => navigate("/portfolio")}
           />
           <ResolveDialog
             open={resolveOpen}

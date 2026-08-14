@@ -2,9 +2,9 @@
  * Settings › Service coverage — what we do and where.
  *
  * Read-only: coverage decides what the AI counts as in-scope, and it arrives
- * with the seed import. The Facilio Services links are the sibling section
- * (pages/ServiceLinks.tsx); the analyst's briefing lives on the Web widget
- * page with the rest of the intake pipeline.
+ * with the seed import. It is a matrix OF the service catalogue, which is the
+ * sibling section and the editable one (pages/Services.tsx); the analyst's
+ * briefing lives on the Intake agent page with the rest of the intake pipeline.
  *
  * DELIBERATELY NOT HERE any more (removed 2026-08-14, defaults rule):
  * the response targets and the survey-capture card. Both run on the seeded

@@ -10,9 +10,12 @@
 
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { CalendarDays, Clock, Globe, Mail, MapPin, Phone } from "lucide-react";
+import { CalendarDays, Clock, Globe, Mail, MapPin, Pencil, Phone, Plus } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { PageShell } from "../../../app/shell/PageShell";
-import { ago, money } from "../../../lib/format";
+import { useActor } from "../../../app/auth";
+import { AccountFormDialog, ContactDialog } from "../components/AccountDialogs";
+import { ago, money, placeLine } from "../../../lib/format";
 import { LinkButton } from "../../../ui/Button";
 import { Card } from "../../../ui/Card";
 import { Chip, type Tone } from "../../../ui/Chip";
@@ -25,13 +28,17 @@ import { AccountDetailSkeleton } from "../../../ui/Skeleton";
 import { Empty, ErrorState } from "../../../ui/States";
 import { Tabs, type Tab } from "../../../ui/Tabs";
 import { getAccount, listAccountSurveys, type AccountSurvey } from "../api/accounts-util";
-import type { AccountDetailResponse } from "../types/account";
+import type { AccountDetailResponse, Contact } from "../types/account";
+import { PortfolioTree } from "../../prospects/pages/PortfolioTree";
 import { SyncChip } from "./AccountList";
 
 /** The work area's panes. */
-type AccountTab = "enquiries" | "deals" | "surveys";
+type AccountTab = "enquiries" | "deals" | "portfolio" | "surveys";
 
-const STAGE_TONE: Record<string, Tone> = { open: "blue", won: "green", lost: "neutral" };
+// Slim on purpose: everything mid-funnel reads blue here, and the deal's own
+// pages carry the full stage vocabulary (features/deals/components/DealChips).
+const STAGE_TONE: Record<string, Tone> = { won: "green", lost: "red" };
+const stageTone = (stage: string): Tone => STAGE_TONE[stage] ?? "blue";
 
 /** Survey status tones, mirroring the survey feature's chips without importing them. */
 const SURVEY_STAGE_TONE: Record<string, Tone> = {
@@ -47,11 +54,16 @@ const SURVEY_STAGE_TONE: Record<string, Tone> = {
 export function AccountDetail() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
+  const actor = useActor();
 
   const [detail, setDetail] = useState<AccountDetailResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [tab, setTab] = useState<AccountTab>("enquiries");
+  /** F-19: the page stops being read-only. */
+  const [editing, setEditing] = useState(false);
+  /** D-37: null = closed; a Contact = editing it; NEW = adding one. */
+  const [contactDialog, setContactDialog] = useState<Contact | "new" | null>(null);
 
   // Fetched alongside, not inside, `account-get`: surveys belong to the survey
   // function, and widening the lead function's account view would cross the
@@ -99,7 +111,9 @@ export function AccountDetail() {
 
   const { account, contacts, deals, leads } = detail;
   const address = account.address ?? {};
-  const place = [address.street, address.city, address.state].filter(Boolean).join(", ");
+  // placeLine drops the "Dubai, Dubai" stutter (X-15) — city and region are
+  // separate facts that are often the same word.
+  const place = placeLine(address.street, address.city, address.state);
 
   return (
     // The header stays a bare title — identity detail and the sync state live
@@ -127,8 +141,20 @@ export function AccountDetail() {
                   email={account.email}
                   className="size-10"
                 />
-                <div className="mt-2.5 truncate text-base font-semibold tracking-tight">
-                  {account.name ?? "Unnamed account"}
+                <div className="flex items-center gap-2">
+                  <div className="mt-2.5 min-w-0 flex-1 truncate text-base font-semibold tracking-tight">
+                    {account.name ?? "Unnamed account"}
+                  </div>
+                  {/* F-19: the record edits where it is read. */}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-muted-foreground mt-2 shrink-0"
+                    onClick={() => setEditing(true)}
+                  >
+                    <Pencil className="size-3.5" />
+                    Edit
+                  </Button>
                 </div>
                 {/* A flex row, not inline spans: icons, text and the sync chip
                     all centre on one axis instead of chasing a text baseline. */}
@@ -193,12 +219,23 @@ export function AccountDetail() {
                 {contacts.length ? (
                   <ul className="flex list-none flex-col gap-3.5">
                     {contacts.map((c, i) => (
-                      <li key={c.email ?? i} className="text-sm">
+                      <li key={c.id ?? c.email ?? i} className="text-sm">
                         <div className="flex items-center gap-2">
                           <b className="min-w-0 truncate">{c.name ?? "—"}</b>
                           {/* The flag is the STRING "true" — there is no boolean
                               column type, so comparing to `true` never matches. */}
                           {String(c.isPrimary) === "true" ? <Chip small>primary</Chip> : null}
+                          <span className="flex-1" aria-hidden="true" />
+                          {/* D-37: a contact is editable where it is read. */}
+                          {c.id ? (
+                            <button
+                              type="button"
+                              className="text-muted-foreground hover:text-foreground text-xs underline underline-offset-2"
+                              onClick={() => setContactDialog(c)}
+                            >
+                              Edit
+                            </button>
+                          ) : null}
                         </div>
                         <div className="text-muted-foreground mt-0.5 text-xs tabular-nums">
                           {c.email ?? ""}
@@ -213,9 +250,19 @@ export function AccountDetail() {
                   // even when the contact synced (ARCHITECTURE.md §8a), and a "—" there
                   // would read as a failure.
                   <p className="text-muted-foreground text-sm">
-                    No contact captured. The intake agent adds one when a visitor gives a name.
+                    No contact captured. The intake agent adds one when a visitor gives a name —
+                    or add one here.
                   </p>
                 )}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-muted-foreground mt-2 w-fit"
+                  onClick={() => setContactDialog("new")}
+                >
+                  <Plus className="size-3.5" />
+                  Add contact
+                </Button>
               </RailSection>
             </div>
           </OverlayScrollbar>
@@ -236,6 +283,11 @@ export function AccountDetail() {
                     [
                       { id: "enquiries", label: "Enquiries", count: leads.length },
                       { id: "deals", label: "Deals", count: deals.length },
+                      // §5.1 — every building ever pursued for this client,
+                      // across deals. This is the repeat-business question the
+                      // module exists to answer: which of their buildings have
+                      // we already been inside?
+                      { id: "portfolio", label: "Portfolio" },
                       // No count until the surveys request lands — inventing a 0
                       // while it loads would read as an answer.
                       { id: "surveys", label: "Surveys", count: surveys?.length },
@@ -279,7 +331,11 @@ export function AccountDetail() {
                       <table className="w-full border-collapse text-sm [&_tr:last-child_td]:border-b-0">
                         <tbody>
                           {deals.map((d) => (
-                            <tr key={d.refNo}>
+                            <tr
+                              key={d.refNo}
+                              className="hover:bg-muted/50 cursor-pointer"
+                              onClick={() => navigate(`/deals/${d.id}`)}
+                            >
                               <td className="border-b border-dashed py-1">
                                 <b>{d.title ?? "Untitled deal"}</b>
                                 <div className="text-muted-foreground text-xs tabular-nums">
@@ -291,7 +347,7 @@ export function AccountDetail() {
                                 {money(d.estimatedValue, d.currency ?? "AED")}
                               </td>
                               <td className="border-b border-dashed py-1 text-right">
-                                <Chip tone={STAGE_TONE[d.stage] ?? "neutral"}>{d.stage}</Chip>
+                                <Chip tone={stageTone(d.stage)}>{d.stage.replace(/_/g, " ")}</Chip>
                               </td>
                             </tr>
                           ))}
@@ -302,6 +358,12 @@ export function AccountDetail() {
                     <Empty title="No deals yet" body="Converting a qualified lead creates the first one." />
                   )}
                 </Card>
+              </div>
+
+              {/* Mounted only when open — it fetches on mount, and the other
+                  tabs should not pay for a request nobody asked for. */}
+              <div className={tab === "portfolio" ? undefined : "hidden"}>
+                {tab === "portfolio" ? <PortfolioTree scope={{ accountId: account.id }} /> : null}
               </div>
 
               <div className={tab === "surveys" ? undefined : "hidden"}>
@@ -350,6 +412,23 @@ export function AccountDetail() {
           </OverlayScrollbar>
         </div>
       </div>
+
+      <AccountFormDialog
+        open={editing}
+        onOpenChange={setEditing}
+        account={account}
+        actor={actor}
+        onDone={() => setReloadKey((k) => k + 1)}
+      />
+      <ContactDialog
+        open={contactDialog !== null}
+        onOpenChange={(open) => !open && setContactDialog(null)}
+        accountId={id}
+        contact={contactDialog === "new" ? null : contactDialog}
+        hasPrimary={contacts.some((c) => String(c.isPrimary) === "true")}
+        actor={actor}
+        onDone={() => setReloadKey((k) => k + 1)}
+      />
     </PageShell>
   );
 }

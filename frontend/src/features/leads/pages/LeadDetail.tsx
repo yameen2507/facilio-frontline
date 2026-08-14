@@ -54,9 +54,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { useAccess } from "../../../app/access";
+import { useUserDirectory } from "../../../app/users";
 import { useActor } from "../../../app/auth";
 import { PageShell } from "../../../app/shell/PageShell";
-import { ago, humanise, money, onDay, plural } from "../../../lib/format";
+import { ago, humanise, onDay, placeLine, plural, typedMoney } from "../../../lib/format";
 import { errMessage } from "../../../lib/request";
 import { vibe } from "../../../lib/vibe";
 import { Button } from "../../../ui/Button";
@@ -65,7 +66,6 @@ import { CompanyLogo } from "../../../ui/CompanyLogo";
 import { FactList } from "../../../ui/FactList";
 import OverlayScrollbar from "../../../ui/OverlayScrollbar";
 import { RailSection } from "../../../ui/RailSection";
-import { Chip } from "../../../ui/Chip";
 import { LeadDetailSkeleton } from "../../../ui/Skeleton";
 import { ErrorState } from "../../../ui/States";
 import { useToast } from "../../../ui/Toast";
@@ -92,13 +92,14 @@ import { SlaChip } from "../components/LeadChips";
 import { SurveysPane } from "../components/SurveysPane";
 import { LifecycleSteps } from "../components/LifecycleSteps";
 import { ResponseClocks } from "../components/ResponseClocks";
+import { PortfolioTree } from "../../prospects/pages/PortfolioTree";
 import { Ownership, Timeline } from "../components/Timeline";
 import { TranscriptPane } from "../components/TranscriptCard";
 import { Tabs, type Tab } from "../../../ui/Tabs";
 import type { DealSurvey, LeadDetail as LeadDetailShape } from "../types/lead";
 
 /** The right-hand container's panes. */
-type DetailTab = "assessment" | "surveys" | "activity" | "conversation";
+type DetailTab = "assessment" | "portfolio" | "surveys" | "activity" | "conversation";
 
 /**
  * How each channel presents in the header — the same vocabulary the new-lead
@@ -116,6 +117,8 @@ export function LeadDetail() {
   const { id = "" } = useParams();
   const actor = useActor();
   const { can, loading: accessLoading } = useAccess();
+  // People render by name, never by address (X-05).
+  const { nameOf } = useUserDirectory();
   const toast = useToast();
 
   const [detail, setDetail] = useState<LeadDetailShape | null>(null);
@@ -328,8 +331,14 @@ export function LeadDetail() {
     convert: {
       label: "Convert to deal",
       run: async () => {
+        // F-06: a not_relevant verdict gets a dialog, not a click-through —
+        // the server enforces the same rule, this just asks BEFORE failing.
+        if (detail?.lead.verdict === "not_relevant") {
+          setPending("convert-override");
+          return;
+        }
         const r = unwrap(await convertLead(id, actor));
-        if (r) settled(r, `${r.dealRefNo} created · ${r.queued.length} Facilio writes queued`);
+        if (r) settled(r, `${r.dealRefNo} created`);
       },
     },
     close: { label: "Close", run: () => setPending("close") },
@@ -371,6 +380,15 @@ export function LeadDetail() {
     const r = unwrap(await transitionLead(id, "closed", actor, { dispositionReason: reason }));
     if (!r) return false;
     settled(r, "Closed");
+    setPending(null);
+    return true;
+  };
+
+  /** F-06's deliberate path: convert past a not_relevant verdict, recorded. */
+  const submitConvertOverride = async (): Promise<boolean> => {
+    const r = unwrap(await convertLead(id, actor, true));
+    if (!r) return false;
+    settled(r, `${r.dealRefNo} created — assessment overridden`);
     setPending(null);
     return true;
   };
@@ -463,6 +481,8 @@ export function LeadDetail() {
               <span className="flex items-center gap-1">
                 <source.Icon className="size-3.5 opacity-70" aria-hidden="true" />
                 {source.label}
+                {/* D-10: where it came from, beside how it arrived. */}
+                {lead.origin ? ` · from ${humanise(lead.origin)}` : ""}
               </span>
               <span aria-hidden="true" className="opacity-40">·</span>
               <span className="flex items-center gap-1">
@@ -552,10 +572,22 @@ export function LeadDetail() {
                 {
                   icon: MapPin,
                   label: "Location",
-                  value: `${lead.siteCity ?? "—"}${lead.siteAddress ? `, ${lead.siteAddress}` : ""}`,
+                  // placeLine drops the "Dubai, Dubai" stutter (X-15).
+                  value: placeLine(lead.siteCity, lead.siteAddress) || "—",
                 },
-                { icon: Banknote, label: "Est. value", value: money(lead.estimatedValue, lead.currency ?? "AED") },
-                { icon: UserCheck, label: "Owner", value: lead.ownerEmail ?? "unclaimed" },
+                {
+                  icon: Banknote,
+                  label: "Est. value",
+                  // D-05: the number plus what kind of number — 12,000/mo and
+                  // 12,000 one-off must never read the same.
+                  value: typedMoney(
+                    lead.estimatedValue,
+                    lead.currency ?? "AED",
+                    lead.valueType,
+                    lead.valueFrequency
+                  ),
+                },
+                { icon: UserCheck, label: "Owner", value: lead.ownerEmail ? nameOf(lead.ownerEmail) : "unclaimed" },
                 {
                   icon: Handshake,
                   label: "Deal",
@@ -563,7 +595,7 @@ export function LeadDetail() {
                   // where the deal is, not three pages away.
                   value: lead.dealId ? (
                     <span className="flex flex-wrap items-center gap-2">
-                      <Chip tone="green">created</Chip>
+                      <Link to={`/deals/${lead.dealId}`}>View deal</Link>
                       <Link to={`/surveys?new=${lead.dealId}`}>Raise survey</Link>
                     </span>
                   ) : (
@@ -691,7 +723,14 @@ export function LeadDetail() {
             <Tabs<DetailTab>
               items={
                 [
-                  { id: "assessment", label: "AI assessment" },
+                  // X-08: the glossary says "analysis" — one word everywhere.
+                  { id: "assessment", label: "AI analysis" },
+                  // §5.1 — the sites named in the enquiry, before any deal
+                  // exists. "The address of the sites… the full addresses"
+                  // arrives with the RFP, and until now those rows had nowhere
+                  // to be seen. Unlike Surveys this tab does NOT wait on a deal:
+                  // having no deal yet is exactly when it is the only view.
+                  { id: "portfolio", label: "Portfolio" },
                   // Surveys exist only once a deal does — a tab that can never
                   // hold content is noise on an unconverted lead.
                   ...(lead.dealId
@@ -724,6 +763,10 @@ export function LeadDetail() {
               <SurveysPane dealId={lead.dealId} surveys={surveys} error={surveysError} />
             </div>
           ) : null}
+          <div className={tab === "portfolio" ? undefined : "hidden"}>
+            {tab === "portfolio" ? <PortfolioTree scope={{ leadId: lead.id }} /> : null}
+          </div>
+
           <div className={tab === "activity" ? undefined : "hidden"}>
             <Timeline events={detail.timeline} />
           </div>
@@ -743,10 +786,12 @@ export function LeadDetail() {
           if (!open) setPending(null);
         }}
         defaultAssignee={actor}
+        score={lead.score ?? null}
         onLogCall={submitLogCall}
         onNurture={submitNurture}
         onAssign={submitAssign}
         onCloseLead={submitClose}
+        onConvertOverride={submitConvertOverride}
       />
     </PageShell>
   );

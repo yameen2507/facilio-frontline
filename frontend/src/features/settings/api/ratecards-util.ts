@@ -18,8 +18,8 @@
  * Region, Client, Effective To, Frequency and Estimation key are all nullable
  * BY DESIGN — a null region means "every region". Clearing one means sending an
  * empty string, and a blank flat field is dropped upstream (the same reason
- * `putServiceLines` in settings-util.ts uses the envelope). Through `payload`
- * the empty string survives, so a scope an admin set can also be un-set.
+ * `saveService` in settings-util.ts uses the envelope). Through `payload` the
+ * empty string survives, so a scope an admin set can also be un-set.
  *
  * ── "none" IS A THIRD SPELLING OF NULL ───────────────────────────────────────
  * `blank()` in src/domain/proposal-pricing.ts treats null, "", whitespace AND
@@ -58,7 +58,9 @@ export const BASIS_LABEL: Record<string, string> = {
 
 /**
  * The Unit master depends on the basis (roles&response §4.3), mirroring
- * `UNITS_BY_BASIS` in src/modules/proposal.ts. Change one and change both.
+ * `UNITS_BY_BASIS` in src/domain/service-catalogue.ts. Change one and change
+ * both. (`service-list` also serves the pair, for the one screen that has it
+ * to hand — the labels below only exist here, so this copy stays.)
  */
 export const UNITS_BY_BASIS: Record<string, readonly string[]> = {
   unit: ["sq_ft", "sq_m", "washroom", "room", "person", "site", "each"],
@@ -103,10 +105,8 @@ export const FREQUENCY_LABEL: Record<string, string> = {
 
 export type RateCardRow = {
   id: string;
-  /** The service this row prices. */
+  /** The catalogue code this row prices (Settings › Services). */
   serviceCode: string | null;
-  /** The Facilio Services record — what a quote line actually references. */
-  facilioServiceId: string | null;
   /** What the generated proposal line will read; the row's human label. */
   description: string | null;
   /** The join to the survey walk. Without one the row can never be auto-drafted. */
@@ -176,7 +176,6 @@ export const toMinor = (major: number): number => Math.round(major * 100);
 const readRow = (raw: Wire): RateCardRow => ({
   id: String(raw.id ?? ""),
   serviceCode: text(raw.serviceCode),
-  facilioServiceId: text(raw.facilioServiceId),
   description: text(raw.description),
   estimationKey: text(raw.estimationKey),
   pricingBasis: text(raw.pricingBasis) ?? "unit",
@@ -244,7 +243,6 @@ export type CardRowInput = {
   /** Omit to create. */
   rowId?: string;
   serviceCode: string;
-  facilioServiceId: string;
   description: string;
   estimationKey: string;
   pricingBasis: string;

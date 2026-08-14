@@ -149,10 +149,20 @@
 @layer base {
   * {
     @apply border-border outline-ring/50;
+    /* No rubber band, anywhere. The shell never document-scrolls, so the
+       bounce a user actually feels comes from the ~30 inner `overflow-y-auto`
+       panes hitting their ends — and overscroll-behavior does NOT inherit, so
+       the universal selector is what reaches them. It is inert on anything
+       that isn't a scroll port, and `none` rather than `contain` because
+       `contain` only stops the chaining and leaves the local bounce, which is
+       the part that reads as elastic. In @layer base so a Tailwind
+       `overscroll-auto` utility can still opt one surface back out. */
+    overscroll-behavior: none;
   }
   html,
   body {
     height: 100%;
+    overscroll-behavior: none;
   }
   body {
     @apply bg-background text-foreground text-sm antialiased;

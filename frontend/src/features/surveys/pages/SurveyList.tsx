@@ -20,18 +20,20 @@ import {
   ChevronsUpDown,
   ClipboardList,
   Clock3,
+  FileText,
   Footprints,
   Gauge,
   Hourglass,
   Plus,
   UserCheck,
+  XCircle,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useCounts } from "../../../app/counts";
 import { PageShell } from "../../../app/shell/PageShell";
-import { ago, onDay } from "../../../lib/format";
+import { onDay, when } from "../../../lib/format";
 import { Card } from "../../../ui/Card";
 import { TableCell } from "@/components/ui/table";
 import {
@@ -59,8 +61,9 @@ type Filter = SurveyStatus | "all" | "overdue";
 /**
  * The pulse strip IS the filter — stat tiles doubling as tabs, so the page
  * carries one row of controls instead of two saying the same thing.
- * `draft` and `cancelled` are deliberately not tiles: the working set is what
- * is live. Both remain reachable through All and search.
+ * X-02: `draft` and `cancelled` ARE tiles now — three of nine surveys were
+ * reachable only via All, which made them effectively lost. Every status is a
+ * value.
  *
  * `chip` carries each slice's tone from the SAME vocabulary the status chips
  * use (ui/Chip's five tones — see SURVEY_TONE), so a tile and the chips in the
@@ -70,6 +73,12 @@ type Filter = SurveyStatus | "all" | "overdue";
  */
 const PULSE: { id: Filter; label: string; icon: LucideIcon; chip: string }[] = [
   { id: "all", label: "All", icon: ClipboardList, chip: "bg-muted text-muted-foreground" },
+  {
+    id: "draft",
+    label: "Draft",
+    icon: FileText,
+    chip: "bg-muted text-muted-foreground",
+  },
   {
     id: "scheduled",
     label: "Scheduled",
@@ -106,6 +115,12 @@ const PULSE: { id: Filter; label: string; icon: LucideIcon; chip: string }[] = [
     icon: AlarmClock,
     chip: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400",
   },
+  {
+    id: "cancelled",
+    label: "Cancelled",
+    icon: XCircle,
+    chip: "bg-muted text-muted-foreground",
+  },
 ];
 
 // No max-sm classes — below `sm` the table yields to the MobileList and its
@@ -116,7 +131,9 @@ const COLS: Col[] = [
   { label: "Progress", icon: Gauge, className: "max-md:hidden w-32", skel: "text" },
   { label: "Visits", icon: Footprints, className: "w-20", skel: "num" },
   { label: "Target", icon: CalendarClock, className: "max-lg:hidden w-32", skel: "text" },
-  { label: "Created", icon: Clock3, className: "max-md:hidden w-24", skel: "text" },
+  // D-33: the next planned visit — the one date a coordinator scans this list
+  // for. Created-ago moved to the detail page, where nostalgia belongs.
+  { label: "Next visit", icon: Clock3, className: "max-md:hidden w-32", skel: "text" },
 ];
 
 /** The entity cell's second line, shared by the table cell and the phone card
@@ -126,7 +143,9 @@ const SurveyMeta = ({ survey: s }: { survey: Survey }) => (
     {s.accountName ?? "No account"}
     {s.templateName ? ` · ${s.templateName}` : " · from scratch"}
     {" · "}
-    {s.leadUserEmail ? s.leadUserEmail.split("@")[0] : <em>no lead yet</em>}
+    {/* The joined name where one exists (X-05); the email's local part only
+        for legacy leads that predate user records. */}
+    {s.leadUserName ?? (s.leadUserEmail ? s.leadUserEmail.split("@")[0] : <em>no lead yet</em>)}
   </>
 );
 
@@ -411,8 +430,10 @@ export function SurveyList() {
                       <span className="text-muted-foreground">—</span>
                     )}
                   </TableCell>
-                  <TableCell className="text-muted-foreground w-24 px-4 py-3 text-xs max-md:hidden">
-                    {s.createdAt ? ago(s.createdAt) : "—"}
+                  <TableCell className="text-muted-foreground w-32 px-4 py-3 text-xs max-md:hidden">
+                    {/* D-33: when somebody is next on site — or an honest dash
+                        for a survey with nothing planned. */}
+                    {s.nextVisitAt ? when(s.nextVisitAt) : "—"}
                   </TableCell>
                 </ClickRow>
               ))}

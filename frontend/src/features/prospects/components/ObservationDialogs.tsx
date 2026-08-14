@@ -30,6 +30,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { autoFocusField } from "@/lib/utils";
 import { decideObservation, observe } from "../api/prospects-util";
 import { ProvenanceChip } from "./ProspectChips";
 import {
@@ -151,7 +152,7 @@ export function ObserveDialog({
                 onChange={(e) => setValue(e.target.value)}
                 inputMode={numeric ? "decimal" : undefined}
                 placeholder={numeric ? "4500" : ""}
-                autoFocus
+                autoFocus={autoFocusField()}
               />
               {numeric ? (
                 <span className="text-muted-foreground text-xs">
@@ -344,7 +345,7 @@ export function ResolveDialog({
                 id="rs-manual"
                 value={manualValue}
                 onChange={(e) => setManualValue(e.target.value)}
-                autoFocus
+                autoFocus={autoFocusField()}
               />
               <span className="text-muted-foreground text-xs">
                 For when neither reading was right — a re-measure, or a corrected drawing.

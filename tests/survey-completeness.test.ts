@@ -15,6 +15,9 @@ const counts = (over: Partial<SurveyCounts> = {}): SurveyCounts => ({
   notVisitedNodes: 0,
   requiredQuestions: 0,
   answeredRequired: 0,
+  // Defaults to a walked survey — D-22's empty-survey gate is tested
+  // explicitly below, not smuggled into every other case.
+  answeredQuestions: 1,
   openReconciliationItems: 0,
   openVisits: 0,
   ...over,
@@ -151,5 +154,23 @@ describe("isConditionSurveyComplete", () => {
 
   it("is false when there are no spaces at all — nothing was surveyed", () => {
     expect(isConditionSurveyComplete(0, 0)).toBe(false);
+  });
+});
+
+describe("the D-22 submission gate — an empty survey never leaves the walk", () => {
+  it("blocks review when nothing at all was answered", () => {
+    const g = reviewGuard(counts({ answeredQuestions: 0 }));
+    expect(g.ok).toBe(false);
+    expect(g.blockers.join(" ")).toMatch(/cannot be submitted empty/);
+  });
+
+  it("blocks completion the same way — the lead's direct path has no side door", () => {
+    const g = submitGuard(counts({ answeredQuestions: 0 }), 0);
+    expect(g.ok).toBe(false);
+    expect(g.blockers.join(" ")).toMatch(/cannot be completed empty/);
+  });
+
+  it("one answer opens the gate — the floor, not required-ness", () => {
+    expect(reviewGuard(counts({ answeredQuestions: 1 })).ok).toBe(true);
   });
 });

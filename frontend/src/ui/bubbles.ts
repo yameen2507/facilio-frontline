@@ -8,8 +8,10 @@
 /** The scrolling message column. */
 export const MSGS = "flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4";
 
-/** What either side's bubble shares: cap width, bubble shape, body type. */
-const MSG = "max-w-[78%] rounded-xl px-4 py-2.5 text-sm";
+/** What either side's bubble shares: cap width, bubble shape, body type.
+    Exported for surface variants (the widget's glass bubble) to extend —
+    re-deriving it is how the geometry drifts. */
+export const MSG = "max-w-[78%] rounded-xl px-4 py-2.5 text-sm";
 
 /** The agent's bubble — muted surface, anchored left, flat lower-left corner. */
 export const MSG_AGENT = `${MSG} bg-muted self-start rounded-bl-sm border`;

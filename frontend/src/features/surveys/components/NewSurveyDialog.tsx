@@ -9,9 +9,10 @@
  * and the surveyor was dispatched with no address (`P-08`).
  *
  * The site list is deal-scoped, so a deal's first survey always names a new
- * property. That is not a gap in the picker — `fl_prospect_node` has no
- * `previous_pursuit_id`, so a building genuinely cannot be carried forward from
- * an earlier pursuit yet (§3b point 3).
+ * property. That is not a gap in the picker — carrying a building forward from
+ * an earlier pursuit is the portfolio's job (`prospect.copy-forward`, the
+ * "From a previous pursuit" flow), and a copied site then shows up here like
+ * any other (§3b point 3).
  *
  * A template must be PUBLISHED — the picker only offers those — and starting
  * without one is allowed (D-S3): the walk is empty until the lead adds ad-hoc
@@ -41,13 +42,8 @@ import { Input } from "@/components/ui/input";
 import { DateTimeField, plusHours } from "../../../ui/DateField";
 import { Separator } from "@/components/ui/separator";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { autoFocusField } from "@/lib/utils";
+import { Combobox } from "../../../ui/Combobox";
 import {
   createSurvey,
   listDeals,
@@ -89,7 +85,10 @@ export function NewSurveyDialog({
   const [sitesLoading, setSitesLoading] = useState(false);
   /** The list could not be read. Naming a new property still works. */
   const [sitesUnavailable, setSitesUnavailable] = useState(false);
-  const [templateId, setTemplateId] = useState(SCRATCH);
+  // D-15: nothing preselected — the author PICKS a published template, and
+  // "start from scratch" is a choice made on purpose, never a default slipped
+  // through. Empty submits as scratch, but only after the picker was seen.
+  const [templateId, setTemplateId] = useState("");
   const [title, setTitle] = useState("");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
@@ -105,7 +104,7 @@ export function NewSurveyDialog({
     setSiteId("");
     setSiteName("");
     setSites([]);
-    setTemplateId(SCRATCH);
+    setTemplateId("");
     setTitle("");
     setStart("");
     setEnd("");
@@ -197,7 +196,7 @@ export function NewSurveyDialog({
 
     const { data, error: err } = await createSurvey(dealId, actor, {
       ...(siteId === NEW_SITE ? { siteName: siteName.trim() } : { prospectSiteId: siteId }),
-      ...(templateId !== SCRATCH ? { templateId } : {}),
+      ...(templateId && templateId !== SCRATCH ? { templateId } : {}),
       ...(title.trim() ? { title: title.trim() } : {}),
       // datetime-local is the browser's local wall clock; the ISO conversion
       // pins it, and the IANA zone records which wall the clock was on.
@@ -232,19 +231,23 @@ export function NewSurveyDialog({
               <Label htmlFor="ns-deal">
                 Deal <span className="text-destructive">*</span>
               </Label>
-              <Select value={dealId} onValueChange={setDealId} disabled={loading}>
-                <SelectTrigger id="ns-deal" className="w-full">
-                  <SelectValue placeholder={loading ? "Loading deals…" : "Pick the deal"} />
-                </SelectTrigger>
-                <SelectContent>
-                  {deals.map((d) => (
-                    <SelectItem key={d.id} value={d.id}>
-                      {d.refNo} — {d.title ?? d.accountName ?? "Untitled"}
-                      {d.surveyCount ? ` (${d.surveyCount} surveyed)` : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {/* D-35: the one searchable lookup — a plain select stops being
+                  a choice at a dozen deals, and this list is every open
+                  pursuit. Search hits the ref, the title and the account. */}
+              <Combobox
+                id="ns-deal"
+                options={deals.map((d) => ({
+                  id: d.id,
+                  label: `${d.refNo} — ${d.title ?? d.accountName ?? "Untitled"}`,
+                  meta: d.accountName,
+                  badge: d.surveyCount ? `${d.surveyCount} surveyed` : null,
+                }))}
+                value={dealId || null}
+                onChange={setDealId}
+                placeholder="Pick the deal"
+                searchPlaceholder="Search deals…"
+                loading={loading}
+              />
               {!loading && !deals.length ? (
                 <span className="text-muted-foreground text-xs">
                   No deals yet — a survey is always raised against one.
@@ -260,33 +263,28 @@ export function NewSurveyDialog({
                   the picker is not rendered at all — a select whose only option
                   is "add a new one" is a control pretending to be a choice. */}
               {sitesUnavailable ? null : (
-                <Select
-                  value={siteId}
-                  onValueChange={setSiteId}
-                  disabled={!dealId || sitesLoading}
-                >
-                  <SelectTrigger id="ns-site" className="w-full">
-                    <SelectValue
-                      placeholder={
-                        !dealId
-                          ? "Pick the deal first"
-                          : sitesLoading
-                            ? "Loading properties…"
-                            : "Pick the property"
-                      }
-                    />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {sites.map((s) => (
-                      <SelectItem key={s.id} value={s.id}>
-                        {s.name}
-                        {s.code ? ` · ${s.code}` : ""}
-                        {s.facilioId ? " · in Facilio" : ""}
-                      </SelectItem>
-                    ))}
-                    <SelectItem value={NEW_SITE}>Add a new property…</SelectItem>
-                  </SelectContent>
-                </Select>
+                // D-35: searchable — a portfolio deal carries dozens of
+                // properties, and scrolling a select is how the wrong one
+                // gets picked. "Add a new property…" stays a real option, at
+                // the end where an escape hatch belongs.
+                <Combobox
+                  id="ns-site"
+                  options={[
+                    ...sites.map((s) => ({
+                      id: s.id,
+                      label: s.name,
+                      meta: s.code || null,
+                      badge: s.facilioId ? "in Facilio" : null,
+                    })),
+                    { id: NEW_SITE, label: "Add a new property…" },
+                  ]}
+                  value={siteId || null}
+                  onChange={setSiteId}
+                  placeholder={!dealId ? "Pick the deal first" : "Pick the property"}
+                  searchPlaceholder="Search properties…"
+                  disabled={!dealId}
+                  loading={Boolean(dealId) && sitesLoading}
+                />
               )}
 
               {siteId === NEW_SITE ? (
@@ -295,7 +293,7 @@ export function NewSurveyDialog({
                   onChange={(e) => setSiteName(e.target.value)}
                   placeholder="e.g. Al Bayt Grill — Downtown"
                   aria-label="New property name"
-                  autoFocus
+                  autoFocus={autoFocusField()}
                 />
               ) : null}
 
@@ -316,20 +314,25 @@ export function NewSurveyDialog({
 
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="ns-template">Template</Label>
-              <Select value={templateId} onValueChange={setTemplateId} disabled={loading}>
-                <SelectTrigger id="ns-template" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={SCRATCH}>Start from scratch</SelectItem>
-                  {templates.map((t) => (
-                    <SelectItem key={t.id} value={t.id}>
-                      {t.name} · v{t.versionNo}
-                      {t.questionCount ? ` · ${t.questionCount} questions` : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {/* D-15, as ruled: published templates ARE the list, and "Start
+                  from scratch" is the last row, not the default — it caused
+                  exactly the UX overload Sudharsan named. D-35: searchable. */}
+              <Combobox
+                id="ns-template"
+                options={[
+                  ...templates.map((t) => ({
+                    id: t.id,
+                    label: t.name,
+                    meta: `v${t.versionNo}${t.questionCount ? ` · ${t.questionCount} questions` : ""}`,
+                  })),
+                  { id: SCRATCH, label: "Start from scratch" },
+                ]}
+                value={templateId || null}
+                onChange={setTemplateId}
+                placeholder={templates.length ? "Pick a template" : "Start from scratch"}
+                searchPlaceholder="Search templates…"
+                loading={loading}
+              />
               {!loading && !templates.length ? (
                 <span className="text-muted-foreground text-xs">
                   No published templates yet — publish one under Templates, or start from scratch.
@@ -339,10 +342,12 @@ export function NewSurveyDialog({
 
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="ns-title">Title</Label>
+              {/* X-14: capped — an uncapped title broke the list rows. */}
               <Input
                 id="ns-title"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
+                maxLength={120}
                 placeholder="Defaults to the template or deal title"
               />
             </div>

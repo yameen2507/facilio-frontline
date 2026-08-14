@@ -1,10 +1,12 @@
 /**
  * Settings data layer. Both endpoints are LIVE — no seam here.
  *
- * | handler        | returns / accepts                                        |
- * | -------------- | -------------------------------------------------------- |
- * | `settings-get` | `Settings`                                                |
- * | `settings-put` | SLA minutes as flat fields, or `payload` as a JSON string  |
+ * | handler         | returns / accepts                                       |
+ * | --------------- | ------------------------------------------------------- |
+ * | `settings-get`  | `Settings`                                               |
+ * | `settings-put`  | SLA minutes as flat fields, or `payload` as a JSON string|
+ * | `service-list`  | `Catalogue` — the services, their usage, the masters     |
+ * | `service-save`  | one service through `payload`; answers with `Catalogue`  |
  */
 
 import { request, requestFrom } from "../../../lib/request";
@@ -31,20 +33,28 @@ export const putSurveySettings = (fields: {
     ...fields,
   });
 
-export type ServiceLine = {
+/**
+ * One service this company sells.
+ *
+ * This app owns them (2026-08-15). `code` is how a rate card row, a proposal
+ * line and a survey recommendation all name a service, so it is the identifier
+ * that matters and it never changes once a service exists — see `saveService`.
+ */
+export type Service = {
   id: string;
   code: string;
   name: string;
   /** "true"/"false" string, like every boolean column. */
   active?: string;
-  /**
-   * The Facilio Services record id this line maps to. Every service referenced
-   * on a quote line, rate card entry or survey template must ultimately be a
-   * Facilio Services id, never the local line — null means "not linked yet",
-   * which is every line until the Services read is verified on the connection.
-   */
-  facilioServiceId?: string | null;
+  description?: string | null;
+  /** Prefills a rate card row. Null means the row picks its own. */
+  defaultPricingBasis?: string | null;
+  /** Belongs to `defaultPricingBasis`; null when that is null. */
+  defaultUom?: string | null;
 };
+
+/** Coverage's word for the same record. */
+export type ServiceLine = Service;
 export type Area = { id: string; name: string; country?: string | null };
 /** `active` is the string "true"/"false" — there is no boolean column type. */
 export type Coverage = { areaId: string; serviceLineId: string; active: string };
@@ -62,6 +72,33 @@ export type Settings = {
 
 export const getSettings = () => request<Settings>("settings-get");
 
+// ── The Facilio outbox (F-09) ────────────────────────────────────────────────
+
+/** A queued Facilio write that gave up — shaped by fl_sync_task. */
+export type SyncFailure = {
+  id: string;
+  aggregateType: string;
+  aggregateId: string;
+  action: string;
+  attempts: number | string;
+  lastError: string | null;
+  updatedAt?: string | null;
+};
+
+/** `sync-status` — outbox counts by status plus the recent failures. A write
+    that failed silently was F-09; this is where it stops being silent. */
+export const getSyncStatus = () =>
+  request<{ counts: Record<string, number | string>; failures: SyncFailure[] }>("sync-status");
+
+/** `sync-retry` — requeue one failed task, attempts reset. */
+export const retrySyncTask = (taskId: string) => request<{ ok: boolean }>("sync-retry", { taskId });
+
+/** `sync-drain` — process queued writes now instead of waiting for the timer. */
+export const drainSync = () =>
+  request<{ results: Array<{ action: string; outcome: string; detail?: string }> }>("sync-drain", {
+    batchSize: 5,
+  });
+
 // putSla is gone with its card (removed 2026-08-14): the response targets run
 // on the seeded defaults and stay editable via `lead.settings-put` without UI.
 // The `sla` field stays on the Settings type because `settings-get` returns it
@@ -73,12 +110,46 @@ export const getSettings = () => request<Settings>("settings-get");
 // `prompt`/`brief`/`agent` fields stay on the Settings type above because
 // `settings-get` still returns them.
 
+// ── The service catalogue ────────────────────────────────────────────────────
+
 /**
- * Service-line saves travel through the payload envelope for the same reason
- * the prompt fields do: clearing a Facilio link means sending
- * `facilioServiceId: ""`, and a blank flat field is dropped upstream. `active`
- * is passed back exactly as it came, so saving links never reactivates a line.
+ * The catalogue with its usage counts, plus the basis/unit masters.
+ *
+ * `usage` is how many active rate card rows and proposal lines name each
+ * service, keyed by code. It is what makes retiring a service an informed
+ * decision rather than a surprise the estimator finds later.
  */
-export const putServiceLines = (
-  lines: Array<{ code: string; name: string; active: boolean; facilioServiceId: string }>
-) => request<unknown>("settings-put", { payload: JSON.stringify({ serviceLines: lines }) });
+export type Catalogue = {
+  services: Service[];
+  usage: Record<string, number>;
+  pricingBases: string[];
+  /** The unit list DEPENDS on the basis — never hard-code a second copy. */
+  unitsByBasis: Record<string, string[]>;
+};
+
+export const listServices = () => request<Catalogue>("service-list");
+
+export type ServiceInput = {
+  /** IMMUTABLE. An unrecognised code creates; a known one updates. */
+  code: string;
+  name: string;
+  description: string;
+  defaultPricingBasis: string;
+  defaultUom: string;
+  active: boolean;
+};
+
+/**
+ * Create or update one service, through the payload envelope.
+ *
+ * The envelope is not optional here: clearing a description or a default basis
+ * means sending `""`, and a blank flat field is dropped upstream — the same
+ * reason the rate card saves use it. Through `payload` the empty string
+ * survives, so a default an admin set can also be un-set.
+ *
+ * Answers with the whole refreshed catalogue, so a save needs no second read.
+ */
+export const saveService = (input: ServiceInput) =>
+  request<Catalogue>("service-save", {
+    payload: JSON.stringify({ ...input, active: input.active ? "true" : "false" }),
+  });

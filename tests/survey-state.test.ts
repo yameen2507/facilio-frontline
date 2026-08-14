@@ -8,6 +8,7 @@ import {
   requiresReason,
   siteSelectionBlocker,
   stampColumnsFor,
+  submitTarget,
   SURVEY_STATUSES,
   transitionCode,
   validateSurveyTransition,
@@ -96,10 +97,15 @@ describe("the explicitly forbidden transitions", () => {
 });
 
 describe("who may move it", () => {
-  it("reserves T5, T6 and T7 for the lead", () => {
-    expect(requiresLead("in_progress", "pending_review")).toBe(true);
+  it("reserves the review verbs (T6, T7) for the lead — T5 is any assignee's (P-06)", () => {
+    expect(requiresLead("in_progress", "pending_review")).toBe(false);
     expect(requiresLead("pending_review", "in_progress")).toBe(true);
     expect(requiresLead("pending_review", "completed")).toBe(true);
+  });
+
+  it("routes one Submit onto both gates (P-06)", () => {
+    expect(submitTarget(false)).toBe("pending_review");
+    expect(submitTarget(true)).toBe("completed");
   });
 
   it("lets the BD do the early moves and the cancel", () => {

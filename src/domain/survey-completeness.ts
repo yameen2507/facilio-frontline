@@ -28,6 +28,8 @@ export interface SurveyCounts {
   requiredQuestions: number;
   /** Of those, answered OR explicitly marked not-applicable. */
   answeredRequired: number;
+  /** Questions answered at all, required or not — D-22's submission gate. */
+  answeredQuestions: number;
   /** Reconciliation rows still awaiting a person's decision. */
   openReconciliationItems: number;
   /** Visits still `planned` or `in_progress`. */
@@ -92,6 +94,13 @@ export function reviewGuard(c: SurveyCounts): GuardResult {
     );
   }
 
+  // D-22, as ruled: at least ONE question answered before a survey can be
+  // submitted. The lightest rule that makes an empty walk impossible and
+  // Progress computable — required-ness stays per-question, this is the floor.
+  if (c.answeredQuestions === 0) {
+    blockers.push("nothing has been answered — a survey cannot be submitted empty");
+  }
+
   return { ok: blockers.length === 0, blockers, warnings: [] };
 }
 
@@ -126,6 +135,12 @@ export function submitGuard(
 
   if (c.openVisits > 0) {
     blockers.push(`${c.openVisits} visit(s) still open`);
+  }
+
+  // D-22's floor holds at T7 too: the lead's direct-complete path (P-06) must
+  // not slip an empty survey past the gate the surveyor path enforces.
+  if (c.answeredQuestions === 0) {
+    blockers.push("nothing has been answered — a survey cannot be completed empty");
   }
 
   const nv = notVisitedPct(c);

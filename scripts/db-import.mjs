@@ -717,7 +717,7 @@ const tables = {
     city: "Seedville",
     region: "Seed Region",
     country: "AE",
-    postcode: "00000",
+    postcode: "P-00000",
     latitude: 0,
     longitude: 0,
     // SIZE AND SHAPE
@@ -767,6 +767,139 @@ const tables = {
     run_id: SEED_ID,
     attempted_by: "seed@example.com",
     attempted_at: NOW,
+    is_active: "false",
+  },
+
+  // ---- the v1.3 portfolio table -------------------------------------------
+  //
+  // WHY THIS IS A NEW TABLE AND NOT AN ALTERED ONE.
+  //
+  // `fl_prospect_location` above was imported on 14 Aug carrying v1.1's column
+  // names. Spec v1.3 §9 assumed the fallback would be "add the renamed columns
+  // alongside and abandon the old ones in place" — that needs ALTER, which this
+  // role does not have (§3a P1), and re-import returns 500 (verified against a
+  // throwaway table, 15 Aug). So the v1.1 table is FROZEN. The only route to the
+  // §3 shape is a new name plus a copy-forward, exactly the move that carried
+  // fl_prospect_node into fl_prospect_location a day earlier.
+  //
+  // The name changes with the model, as it did then: this is the Prospect
+  // PORTFOLIO module, and `node` and then `location` were both superseded
+  // vocabulary. `fl_prospect_location` is left in place, never hard-deleted.
+  //
+  // ⚠ THIS SHAPE IS PERMANENT. §3 is the complete and final column list and
+  // §13 point 9 is the standing instruction: cut screens, not columns. Every
+  // column v1.3 names is here even where no screen reads it yet.
+  //
+  // Type inference is the whole risk (see the header). Anything meant to be
+  // text carries a seed value that cannot parse as a number — `zip` is
+  // "P-00000" and not "00000" precisely because a numeric zip column would
+  // reject "SW1A 1AA" forever, and `location_phone` keeps its leading '+'.
+  fl_portfolio_location: {
+    ...common,
+    // Written null until the Organization module lands — handlers receive no
+    // org context — but the column cannot be added later, so it ships now.
+    org_id: SEED_ID,
+
+    // --- §3.1 identity, ownership, lineage ---------------------------------
+    // Three nullable owners, at least one always set (§4). Enforced in the
+    // function layer; no CHECK constraint is creatable.
+    lead_id: SEED_ID,
+    account_id: SEED_ID,
+    deal_id: SEED_ID,
+    survey_id: SEED_ID,
+    // ★ §4.3, approved 14 Aug. Same value on every row that is the same
+    // physical building across pursuits. This is what lets the global list show
+    // one building instead of one row per bid, without walking the chain.
+    building_key: "seed-building-key",
+    previous_pursuit_id: SEED_ID,
+    // §2.3 — the platform's own five words, so convert is a copy.
+    type: "site",
+    parent_id: SEED_ID,
+    // §2.3 rule 4 — materialised ancestry, the shape BaseSpace actually uses.
+    // Kept ALONGSIDE parent_id/ancestry_path, not instead of them.
+    site_id: SEED_ID,
+    building_id: SEED_ID,
+    floor_id: SEED_ID,
+    space_id_1: SEED_ID,
+    space_id_2: SEED_ID,
+    space_id_3: SEED_ID,
+    space_id_4: SEED_ID,
+    space_id_5: SEED_ID,
+    ancestry_path: "/seed",
+    name: "Seed Location",
+    description: "Seed description",
+    // Theirs, not ours — a tender response is scored against their numbering.
+    code: "SEED",
+    // Facilio's own human-readable number, back-filled at convert.
+    local_id: 0,
+    client_level_label: "facility",
+    // L15 answered: CSV inference has no jsonb, so this is text holding JSON,
+    // exactly as every other structured value in this repo is stored.
+    tags: "[]",
+
+    // --- §3.2 address, as a Location record --------------------------------
+    // Facilio does not put the address on the site: Site/Building/Space all
+    // carry LOCATION_ID pointing at a separate Location. Convert writes that
+    // record first and holds its id here so a second convert never mints a
+    // second Location.
+    location_name: "Seed Location Record",
+    street: "1 Seed Street",
+    city: "Seedville",
+    state: "Seed State",
+    zip: "P-00000",
+    country: "AE",
+    lat: 25.2048,
+    lng: 55.2708,
+    // Spaces, not just a leading '+': "+971000000000" parses as a number and
+    // would freeze this column numeric, losing every real-world phone format.
+    location_phone: "+971 4 000 0000",
+    facilio_location_id: "none",
+
+    // --- §3.3 size and shape -----------------------------------------------
+    // Area is the single most load-bearing number in soft-services pricing.
+    area: 0,
+    // Gross and net are frequently the RFP's number and the surveyor's number.
+    // Two columns is how that argument gets settled instead of relitigated.
+    gross_floor_area: 0,
+    no_of_buildings: 0,
+    no_of_floors: 0,
+    no_of_independent_spaces: 0,
+    no_of_sub_spaces: 0,
+    // ★ replaces floor_label. An integer: -1 basement, 0 ground, 1 first.
+    // The floor's NAME ("Mezzanine") goes in `name` like any other level.
+    floor_level: 0,
+    max_occupancy: 0,
+    // When the building is open decides when the crew can work, which decides
+    // the rate.
+    operation_hours_start: 8,
+    operation_hours_end: 18,
+    space_category_id: "none",
+    site_type: "none",
+    classification: "none",
+    // Ours, not Facilio's — restrooms are priced and scored separately in
+    // every cleaning contract.
+    room_count: 0,
+    restroom_count: 0,
+    // An enum, never a free number: it changes the crew and the equipment, so
+    // it changes the price.
+    ceiling_height_band: "standard_8_10ft",
+
+    // --- §3.5 decision, origin, verdict, convert ---------------------------
+    pursuit_decision: "undecided",
+    pursuit_decision_note: "seed",
+    provenance: "manual",
+    source_attachment_id: SEED_ID,
+    verdict: "unverified",
+    verdict_note: "seed",
+    verdict_by: "seed@example.com",
+    verdict_at: NOW,
+    verdict_visit_id: SEED_ID,
+    facilio_id: "none",
+    facilio_module: "none",
+    convert_state: "not_converted",
+
+    created_by: "seed@example.com",
+    updated_by: "seed@example.com",
     is_active: "false",
   },
 
@@ -855,12 +988,17 @@ const tables = {
   // replace the never-imported fl_quote / fl_quote_line / fl_rate_card_entry
   // drafts; the platform never had them, so this is a redraw, not a migration.
   //
-  // The survey lane's three seed rules apply unchanged. Two columns are C23
-  // landmines if seeded wrong: `facilio_service_id` is a Facilio Services id —
-  // a numeric string in the wild, seeded "none" so it stays text, and NULLABLE
-  // until the G1 pass answers L10. `service_code` is OUR catalogue code
-  // (fl_service_line.code), never a copied Facilio name. `client_account_id`
-  // on the rate card is the same shape and the same trap.
+  // The survey lane's three seed rules apply unchanged. `service_code` is the
+  // one that matters: it is a code from this app's own catalogue
+  // (fl_service_line.code, written by src/modules/service.ts) and it is what
+  // every priced row stores. `client_account_id` is a foreign id seeded "none"
+  // so type inference keeps it text — the usual trap.
+  //
+  // `facilio_service_id` is ORPHANED as of 2026-08-15. It held a Facilio
+  // Services record id back when a service was a link rather than a record we
+  // own; nothing reads or writes it now. It stays in the header because these
+  // tables cannot be ALTERed, and re-importing to drop a column would mean
+  // rebuilding the table and migrating every priced row.
   //
   // MONEY: every amount column is numeric(14,2) holding MAJOR units. JS holds
   // integer MINOR units end to end (ARCHITECTURE.md §7) and converts at the db

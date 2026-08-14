@@ -101,13 +101,24 @@ export function requiresReason(from: SurveyStatus, to: SurveyStatus): boolean {
 }
 
 /**
- * From `in_progress` onward only the lead moves the survey (T5, T6, T7).
- * The BD creates, schedules, assigns and may cancel; the lead owns completeness.
+ * P-06, as ruled 14 Aug: the SURVEYOR taps Submit, so T5 is open to any
+ * assignee — it is the review verbs that stay the lead's alone (T6 send-back,
+ * T7 complete). The BD creates, schedules, assigns and may cancel; the lead
+ * owns what leaves review.
  */
 export function requiresLead(from: SurveyStatus, to: SurveyStatus): boolean {
-  if (from === "in_progress" && to === "pending_review") return true;
-  if (from === "pending_review" && (to === "in_progress" || to === "completed")) return true;
-  return false;
+  return from === "pending_review" && (to === "in_progress" || to === "completed");
+}
+
+/**
+ * P-06's one-button routing: both gates, one control. A surveyor's Submit
+ * lands in review for the lead; the lead's own Submit IS the review — sending
+ * work to yourself for approval is theatre, so it goes straight through and
+ * the payload freezes. The chain is still T5 then T7 underneath: the audit
+ * trail keeps both gates even when one tap crossed them.
+ */
+export function submitTarget(actorIsLead: boolean): SurveyStatus {
+  return actorIsLead ? "completed" : "pending_review";
 }
 
 export interface SurveyTransitionInput {

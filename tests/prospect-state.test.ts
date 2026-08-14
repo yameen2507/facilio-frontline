@@ -20,7 +20,7 @@ import {
   type Verdict,
 } from "../src/domain/prospect-state";
 
-describe("§5.1 levels — site → building → space, and the independent space", () => {
+describe("v1.3 §2.3 levels — the five Facilio actually has", () => {
   it("makes a site the top level", () => {
     expect(parentBlocker("site", null)).toBeNull();
     expect(parentBlocker("site", "site")).toMatch(/top level/);
@@ -33,18 +33,40 @@ describe("§5.1 levels — site → building → space, and the independent spac
     expect(parentBlocker("building", "space")).toMatch(/only site/);
   });
 
-  it("lets a space hang off a building OR straight off a site", () => {
-    // The car park / lawn case. Refusing this would be modelling the
-    // integration rather than the world — L20 is open on Facilio's API, not on
-    // whether car parks exist.
+  it("puts a floor under a building — it is a real module, not a count", () => {
+    // v1.0 through v1.2 modelled floors as a number on the building and
+    // defended it with a citation from a customer's walkthrough tool. The
+    // platform disagrees: `floor` is SPACE_TYPE 3, its own table, 10,139 live
+    // rows. Where a customer artifact and the platform disagree about the
+    // platform, the platform wins.
+    expect(parentBlocker("floor", "building")).toBeNull();
+    expect(parentBlocker("floor", null)).toMatch(/needs a parent/);
+    expect(parentBlocker("floor", "site")).toMatch(/only building/);
+  });
+
+  it("lets a space hang off a floor, a building OR straight off a site", () => {
+    // The car park / lawn case, and L20 is now ANSWERED: 25,110 live production
+    // spaces carry no BUILDING_ID and are not broken. Every level is optional
+    // except site.
+    expect(parentBlocker("space", "floor")).toBeNull();
     expect(parentBlocker("space", "building")).toBeNull();
     expect(parentBlocker("space", "site")).toBeNull();
     expect(parentBlocker("space", null)).toMatch(/needs a parent/);
-    expect(parentBlocker("space", "space")).toMatch(/cannot hang off a space/);
   });
 
-  it("has no fourth level — floors are a number, not a level", () => {
-    expect(LOCATION_TYPES).toEqual(["site", "building", "space"]);
+  it("nests a sub-space inside a space — SPACE_ID1..5", () => {
+    expect(parentBlocker("space", "space")).toBeNull();
+  });
+
+  it("treats a zone as a grouping on a site, never a rung in the chain", () => {
+    expect(parentBlocker("zone", "site")).toBeNull();
+    expect(parentBlocker("zone", "building")).toMatch(/only site/);
+    // Nothing hangs off a zone — it groups, it does not contain.
+    expect(parentBlocker("space", "zone")).toMatch(/cannot hang off a zone/);
+  });
+
+  it("carries Facilio's own five words, so convert translates nothing", () => {
+    expect(LOCATION_TYPES).toEqual(["site", "building", "floor", "space", "zone"]);
   });
 });
 

@@ -6,6 +6,7 @@ import {
   requiresReason,
   stampColumnFor,
   validateTransition,
+  valueFieldsBlocker,
 } from "../src/domain/lead-state";
 
 describe("lead status transitions", () => {
@@ -94,5 +95,37 @@ describe("requiresReason / stampColumnFor", () => {
     expect(stampColumnFor("converted")).toBe("converted_at");
     expect(stampColumnFor("closed")).toBe("closed_at");
     expect(stampColumnFor("nurture")).toBeNull();
+  });
+});
+
+describe("estimated value fields (D-05)", () => {
+  it("accepts the three shapes the ruling names", () => {
+    expect(valueFieldsBlocker({ valueType: "one_off" })).toBeNull();
+    expect(valueFieldsBlocker({ valueType: "recurring", valueFrequency: "monthly" })).toBeNull();
+    expect(valueFieldsBlocker({ valueType: "both", valueFrequency: "quarterly" })).toBeNull();
+  });
+
+  it("allows an absent type — the widget and legacy rows predate the field", () => {
+    expect(valueFieldsBlocker({})).toBeNull();
+    expect(valueFieldsBlocker({ valueType: null, valueFrequency: null })).toBeNull();
+  });
+
+  it("refuses a recurring value with no frequency", () => {
+    expect(valueFieldsBlocker({ valueType: "recurring" })).toMatch(/frequency/);
+    expect(valueFieldsBlocker({ valueType: "both" })).toMatch(/frequency/);
+  });
+
+  it("refuses a frequency on a one-off or untyped value", () => {
+    expect(valueFieldsBlocker({ valueType: "one_off", valueFrequency: "monthly" })).toMatch(
+      /recurring/
+    );
+    expect(valueFieldsBlocker({ valueFrequency: "monthly" })).toMatch(/recurring/);
+  });
+
+  it("names an unknown type or frequency instead of guessing", () => {
+    expect(valueFieldsBlocker({ valueType: "weekly" })).toMatch(/valueType/);
+    expect(
+      valueFieldsBlocker({ valueType: "recurring", valueFrequency: "fortnightly" })
+    ).toMatch(/valueFrequency/);
   });
 });

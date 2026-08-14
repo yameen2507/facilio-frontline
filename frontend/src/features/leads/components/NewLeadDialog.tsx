@@ -40,8 +40,15 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import { autoFocusField, cn } from "@/lib/utils";
 import { humanise } from "@/lib/format";
-import { createLead, type NewLeadFields } from "../api/leads-util";
+import {
+  createLead,
+  getCoverageOptions,
+  type CoverageOptions,
+  type NewLeadFields,
+} from "../api/leads-util";
+import { Combobox } from "../../../ui/Combobox";
 import type { CreatedLead, LeadSource } from "../types/lead";
 
 /**
@@ -73,7 +80,40 @@ const BLANK = {
   siteRegion: "",
   estimatedValue: "",
   currency: "AED",
+  // D-05: what kind of number the value is. One toggle, per the ruling — the
+  // single amount box stays, the distinction it was destroying does not.
+  valueType: "one_off",
+  valueFrequency: "monthly",
+  // D-10: where it came from. "" = not said — never guessed.
+  origin: "",
 };
+
+/** D-10's second axis, with the labels a BDR would use. */
+const ORIGINS = [
+  { id: "referral", label: "Referral" },
+  { id: "existing_client", label: "Existing client" },
+  { id: "marketing", label: "Marketing / campaign" },
+  { id: "hubspot", label: "HubSpot" },
+  { id: "cold_outreach", label: "Cold outreach" },
+  { id: "other", label: "Other" },
+] as const;
+
+/** The explicit escape hatch on the city picker (D-04) — it names itself so an
+    out-of-coverage enquiry is a recorded fact, not a mis-picked city. */
+const OUTSIDE_AREAS = "__outside__";
+
+/** The D-05 toggle, in the order the ruling names them. */
+const VALUE_TYPES = [
+  { id: "one_off", label: "One-off" },
+  { id: "recurring", label: "Recurring" },
+  { id: "both", label: "Both" },
+] as const;
+
+const VALUE_FREQUENCIES = [
+  { id: "monthly", label: "per month" },
+  { id: "quarterly", label: "per quarter" },
+  { id: "annual", label: "per year" },
+] as const;
 
 /** How the duplicate was spotted, said the way a person would say it. */
 const MATCHED_ON: Record<string, string> = {
@@ -102,6 +142,17 @@ export function NewLeadDialog({
   /** Set only when the capture landed as a duplicate — see the header. */
   const [duplicate, setDuplicate] = useState<CreatedLead | null>(null);
 
+  /**
+   * D-04: the coverage catalogue feeding the city and service pickers — the
+   * same matrix Settings edits and the AI scores against. Loaded per open;
+   * when the read fails the pickers fall back to the free-text inputs rather
+   * than blocking intake on a config lookup.
+   */
+  const [catalogue, setCatalogue] = useState<CoverageOptions | null>(null);
+  const [areaId, setAreaId] = useState<string>("");
+  const [serviceIds, setServiceIds] = useState<string[]>([]);
+  const [serviceOther, setServiceOther] = useState("");
+
   // Fields reset on OPEN, so a half-typed enquiry never resurfaces a week later
   // attached to a different phone call.
   useEffect(() => {
@@ -110,10 +161,33 @@ export function NewLeadDialog({
     setError(null);
     setDuplicate(null);
     setBusy(false);
+    setAreaId("");
+    setServiceIds([]);
+    setServiceOther("");
+    getCoverageOptions().then(({ data }) => setCatalogue(data));
   }, [open]);
 
   const set = (key: keyof typeof BLANK) => (value: string) =>
     setForm((f) => ({ ...f, [key]: value }));
+
+  const areas = (catalogue?.areas ?? []).filter((a) => a.active === "true");
+  const area = areas.find((a) => a.id === areaId) ?? null;
+  const outside = areaId === OUTSIDE_AREAS;
+  // Service lines scoped by the chosen city (D-04); everything active when no
+  // city is chosen yet or the enquiry is outside coverage.
+  const coveredIds = area
+    ? new Set(
+        (catalogue?.coverage ?? [])
+          .filter((c) => c.active === "true" && c.areaId === area.id)
+          .map((c) => c.serviceLineId)
+      )
+    : null;
+  const serviceLines = (catalogue?.serviceLines ?? []).filter(
+    (l) => l.active === "true" && (!coveredIds || coveredIds.has(l.id))
+  );
+
+  const toggleService = (id: string) =>
+    setServiceIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
 
   const company = form.companyName.trim();
   // A value that is not a number would be rejected server-side, so it is caught
@@ -128,6 +202,13 @@ export function NewLeadDialog({
     setBusy(true);
     setError(null);
 
+    // What the columns receive: picked services by NAME plus the free-text
+    // remainder — controlled vocabulary first, catch-all last (D-04).
+    const pickedNames = serviceLines
+      .filter((l) => serviceIds.includes(l.id))
+      .map((l) => l.name);
+    const serviceType = [...pickedNames, serviceOther.trim()].filter(Boolean).join(", ");
+
     const fields: NewLeadFields = {
       source: form.source,
       companyName: company,
@@ -136,14 +217,25 @@ export function NewLeadDialog({
       contactEmail: form.contactEmail.trim(),
       contactPhone: form.contactPhone.trim(),
       websiteDomain: form.websiteDomain.trim(),
-      serviceType: form.serviceType.trim(),
+      serviceType: serviceType || form.serviceType.trim(),
       description: form.description.trim(),
       siteAddress: form.siteAddress.trim(),
-      siteCity: form.siteCity.trim(),
-      siteRegion: form.siteRegion.trim(),
+      // A picked area writes its own name and region; "outside our areas" and
+      // a failed catalogue read fall back to what was typed.
+      siteCity: area ? area.name : form.siteCity.trim(),
+      siteRegion: area ? (area.region ?? area.name) : form.siteRegion.trim(),
+      ...(form.origin ? { origin: form.origin } : {}),
       // Only send a currency alongside a value — a currency on an empty amount
-      // says nothing and still writes a column.
-      ...(value ? { estimatedValue: Number(value), currency: form.currency } : {}),
+      // says nothing and still writes a column. The D-05 pair travels the same
+      // way: a type on no amount types nothing.
+      ...(value
+        ? {
+            estimatedValue: Number(value),
+            currency: form.currency,
+            valueType: form.valueType,
+            ...(form.valueType !== "one_off" ? { valueFrequency: form.valueFrequency } : {}),
+          }
+        : {}),
     };
 
     const { data, error: err } = await createLead(fields, actor);
@@ -235,7 +327,7 @@ export function NewLeadDialog({
                   value={form.companyName}
                   onChange={(e) => set("companyName")(e.target.value)}
                   placeholder="Al Manzil Restaurant"
-                  autoFocus
+                  autoFocus={autoFocusField()}
                 />
               </div>
 
@@ -270,6 +362,25 @@ export function NewLeadDialog({
                     onChange={(e) => set("sourceDetail")(e.target.value)}
                     placeholder={form.source === "tender" ? "ADGPG" : "Inbound call"}
                   />
+                </div>
+
+                <div className="flex min-w-0 flex-col gap-1.5 sm:col-span-2">
+                  {/* D-10's second axis: HOW it arrived is above; this is WHERE
+                      it came from. Two fields, so "how many wins came from
+                      referrals" finally has an answer. */}
+                  <Label htmlFor="nl-origin">Where it came from</Label>
+                  <Select value={form.origin || undefined} onValueChange={set("origin")}>
+                    <SelectTrigger id="nl-origin" className="w-full">
+                      <SelectValue placeholder="Not said" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ORIGINS.map((o) => (
+                        <SelectItem key={o.id} value={o.id}>
+                          {o.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
 
@@ -326,13 +437,50 @@ export function NewLeadDialog({
               <Separator />
 
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="nl-service">Service wanted</Label>
+                <Label>Service wanted</Label>
+                {/* D-04: the catalogue, not a text box — the one input the
+                    whole scoring engine depends on stops being unconstrained.
+                    Multi-select (an enquiry often wants two services), scoped
+                    by the chosen city, free text as catch-all — never as the
+                    primary path. When the catalogue cannot be read, the free
+                    text IS the field, honestly labelled. */}
+                {serviceLines.length ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {serviceLines.map((l) => (
+                      <button
+                        key={l.id}
+                        type="button"
+                        aria-pressed={serviceIds.includes(l.id)}
+                        onClick={() => toggleService(l.id)}
+                        className={cn(
+                          "rounded-md border px-2.5 py-1 text-xs transition-colors",
+                          serviceIds.includes(l.id)
+                            ? "border-primary bg-muted font-medium"
+                            : "text-muted-foreground hover:text-foreground"
+                        )}
+                      >
+                        {l.name}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
                 <Input
                   id="nl-service"
-                  value={form.serviceType}
-                  onChange={(e) => set("serviceType")(e.target.value)}
-                  placeholder="Kitchen hood cleaning"
+                  value={serviceLines.length ? serviceOther : form.serviceType}
+                  onChange={(e) =>
+                    serviceLines.length
+                      ? setServiceOther(e.target.value)
+                      : set("serviceType")(e.target.value)
+                  }
+                  placeholder={
+                    serviceLines.length ? "Anything else they asked for" : "Kitchen hood cleaning"
+                  }
                 />
+                {area && serviceLines.length === 0 && catalogue?.serviceLines.length ? (
+                  <span className="text-muted-foreground text-xs">
+                    {`Nothing in the catalogue covers ${area.name} — describe the service above and it will be scored as out of coverage.`}
+                  </span>
+                ) : null}
               </div>
 
               <div className="flex flex-col gap-1.5">
@@ -362,24 +510,74 @@ export function NewLeadDialog({
                 </div>
                 <div className="flex min-w-0 flex-col gap-1.5">
                   <Label htmlFor="nl-city">City</Label>
-                  <Input
-                    id="nl-city"
-                    value={form.siteCity}
-                    onChange={(e) => set("siteCity")(e.target.value)}
-                    placeholder="Dubai"
-                  />
+                  {/* D-04: a picker from the coverage list, with "outside our
+                      areas" as an explicit, recorded answer. Free text only
+                      when the catalogue itself is empty or unreadable. */}
+                  {areas.length ? (
+                    <Combobox
+                      id="nl-city"
+                      options={[
+                        ...areas.map((a) => ({
+                          id: a.id,
+                          label: a.name,
+                          meta: a.region && a.region !== a.name ? a.region : null,
+                        })),
+                        { id: OUTSIDE_AREAS, label: "Outside our areas…" },
+                      ]}
+                      value={areaId || null}
+                      onChange={(id) => {
+                        setAreaId(id);
+                        // A change of city re-scopes the service chips; picks
+                        // that no longer apply are dropped, not smuggled.
+                        setServiceIds([]);
+                      }}
+                      placeholder="Pick the city"
+                      searchPlaceholder="Search cities…"
+                    />
+                  ) : (
+                    <Input
+                      id="nl-city"
+                      value={form.siteCity}
+                      onChange={(e) => set("siteCity")(e.target.value)}
+                      placeholder="Dubai"
+                    />
+                  )}
                 </div>
+                {outside || !areas.length ? (
+                  <>
+                    {outside ? (
+                      <div className="flex min-w-0 flex-col gap-1.5">
+                        <Label htmlFor="nl-city-free">Which city</Label>
+                        <Input
+                          id="nl-city-free"
+                          value={form.siteCity}
+                          onChange={(e) => set("siteCity")(e.target.value)}
+                          placeholder="Muscat"
+                        />
+                      </div>
+                    ) : null}
+                    <div className="flex min-w-0 flex-col gap-1.5">
+                      <Label htmlFor="nl-region">Region</Label>
+                      <Input
+                        id="nl-region"
+                        value={form.siteRegion}
+                        onChange={(e) => set("siteRegion")(e.target.value)}
+                        placeholder="Dubai"
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex min-w-0 flex-col gap-1.5">
+                    <Label>Region</Label>
+                    {/* Follows the picked city — one fact, entered once. */}
+                    <Input value={area ? (area.region ?? area.name) : ""} disabled placeholder="From the city" />
+                  </div>
+                )}
                 <div className="flex min-w-0 flex-col gap-1.5">
-                  <Label htmlFor="nl-region">Region</Label>
-                  <Input
-                    id="nl-region"
-                    value={form.siteRegion}
-                    onChange={(e) => set("siteRegion")(e.target.value)}
-                    placeholder="Dubai"
-                  />
-                </div>
-                <div className="flex min-w-0 flex-col gap-1.5">
-                  <Label htmlFor="nl-value">Rough value</Label>
+                  {/* D-05, as ruled: renamed, one amount box, one toggle. A
+                      12,000 one-off and 12,000/month are different commercial
+                      objects — this is where the difference is captured. */}
+                  <Label htmlFor="nl-value">Estimated value</Label>
                   <div className="flex gap-2">
                     <Select value={form.currency} onValueChange={set("currency")}>
                       <SelectTrigger id="nl-currency" className="w-24" aria-label="Currency">
@@ -406,6 +604,46 @@ export function NewLeadDialog({
                     <span className="text-destructive text-xs">
                       The value has to be a number — leave it blank if it is not known yet.
                     </span>
+                  ) : null}
+                  {value && !valueInvalid ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex gap-1" role="radiogroup" aria-label="Value type">
+                        {VALUE_TYPES.map((t) => (
+                          <button
+                            key={t.id}
+                            type="button"
+                            role="radio"
+                            aria-checked={form.valueType === t.id}
+                            onClick={() => set("valueType")(t.id)}
+                            className={cn(
+                              "rounded-md border px-2.5 py-1 text-xs transition-colors",
+                              form.valueType === t.id
+                                ? "border-primary bg-muted font-medium"
+                                : "text-muted-foreground hover:text-foreground"
+                            )}
+                          >
+                            {t.label}
+                          </button>
+                        ))}
+                      </div>
+                      {form.valueType !== "one_off" ? (
+                        <Select value={form.valueFrequency} onValueChange={set("valueFrequency")}>
+                          <SelectTrigger
+                            className="h-7 w-32 text-xs"
+                            aria-label="Recurring frequency"
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {VALUE_FREQUENCIES.map((f) => (
+                              <SelectItem key={f.id} value={f.id}>
+                                {f.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : null}
+                    </div>
                   ) : null}
                 </div>
               </div>

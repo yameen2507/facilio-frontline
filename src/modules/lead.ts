@@ -17,9 +17,12 @@ import { slaSnapshot } from "../domain/sla";
 import { queuePriority, scoreBand } from "../domain/scoring";
 import {
   type DispositionReason,
+  LEAD_ORIGINS,
   type LeadStatus,
+  isLeadOrigin,
   stampColumnFor,
   validateTransition,
+  valueFieldsBlocker,
 } from "../domain/lead-state";
 import { slaTargets } from "./settings";
 
@@ -54,6 +57,13 @@ export interface Lead {
   siteRegion: string | null;
   estimatedValue: number | null;
   currency: string | null;
+  /** D-05: one_off | recurring | both. Null on rows that predate the field. */
+  valueType: string | null;
+  /** monthly | quarterly | annual — present exactly when the value recurs. */
+  valueFrequency: string | null;
+  /** D-10: where the enquiry CAME FROM (referral, existing client, …).
+      `source` is how it ARRIVED — the two axes are deliberately separate. */
+  origin: string | null;
   status: LeadStatus;
   dispositionReason: string | null;
   duplicateOfLeadId: string | null;
@@ -83,6 +93,9 @@ export interface Lead {
 const COLUMNS = `id, ref_no, company_name, contact_name, contact_email, contact_phone,
   website_domain, source, source_detail, service_type, description,
   site_address, site_city, site_region, estimated_value, currency,
+  data_json::json->>'valueType' as value_type,
+  data_json::json->>'valueFrequency' as value_frequency,
+  data_json::json->>'origin' as origin,
   status, disposition_reason, duplicate_of_lead_id, nurture_until,
   owner_email, sales_owner_email, account_id, contact_id, deal_id,
   score, verdict, analysed_at,
@@ -165,6 +178,12 @@ export interface CreateLeadInput {
   siteRegion?: string | null;
   estimatedValue?: number | null;
   currency?: string | null;
+  /** D-05: one_off | recurring | both. Optional — the widget predates it. */
+  valueType?: string | null;
+  /** monthly | quarterly | annual. Required by the domain when recurring. */
+  valueFrequency?: string | null;
+  /** D-10: where it came from — one of LEAD_ORIGINS. */
+  origin?: string | null;
   facilioAssetId?: string | null;
   actor?: string | null;
   extra?: Record<string, unknown>;
@@ -185,6 +204,17 @@ export interface CreateLeadResult {
  * throwing the second enquiry away would hide it.
  */
 export function createLead(input: CreateLeadInput): CreateLeadResult {
+  // D-05: a contradictory value trio is refused at the door — a recurring
+  // value with no frequency would sit unanswerable in the pipeline forever.
+  const valueBlock = valueFieldsBlocker(input);
+  if (valueBlock) throw new Error(valueBlock);
+
+  // D-10: origin is a controlled list or nothing — free text here would put
+  // the channel/source mix right back.
+  if (input.origin != null && input.origin !== "" && !isLeadOrigin(input.origin)) {
+    throw new Error(`origin must be one of: ${LEAD_ORIGINS.join(", ")}`);
+  }
+
   const now = nowIso();
   const keys = dedupKeys(input);
   const duplicate = findDuplicate(keys);
@@ -243,7 +273,14 @@ export function createLead(input: CreateLeadInput): CreateLeadResult {
       due.qualificationDueAt,
       due.assignmentDueAt,
       duplicate ? now : null,
-      JSON.stringify(input.extra ?? {}),
+      // The D-05 fields ride data_json (the table's shape is permanent on this
+      // platform); the read path surfaces them as first-class columns.
+      JSON.stringify({
+        ...(input.extra ?? {}),
+        ...(input.valueType ? { valueType: input.valueType } : {}),
+        ...(input.valueFrequency ? { valueFrequency: input.valueFrequency } : {}),
+        ...(input.origin ? { origin: input.origin } : {}),
+      }),
     ]
   );
 
@@ -405,7 +442,7 @@ export function leadDetail(id: string): LeadDetail {
 
        (select row_to_json(x) from (
           select id, version, verdict, score, understanding_json, relevance_json,
-                 reasons_json, recommendation_json, model_name, created_at
+                 reasons_json, recommendation_json, model_name, prompt_version, created_at
             from fl_lead_analysis
            where lead_id = $1
            order by version desc
@@ -485,15 +522,37 @@ export function updateLead(
   fields: Record<string, unknown>,
   actor?: string | null
 ): Lead {
-  requireLead(id);
+  const current = requireLead(id);
 
   const sets: string[] = [];
   const params: unknown[] = [id];
 
-  for (const key of Object.keys(fields)) {
+  /**
+   * The D-05 pair lives in data_json (the table's shape is permanent), so it
+   * is peeled off before the column loop. Validated MERGED with what the row
+   * already holds — setting the frequency alone is fine when the type is
+   * already recurring, and switching to one_off silently drops a frequency the
+   * caller did not mention, the same way the template builder clears a stale
+   * unit rather than publishing a contradiction.
+   */
+  const { valueType: vtIn, valueFrequency: vfIn, ...columnFields } = fields;
+  if ("valueType" in fields || "valueFrequency" in fields) {
+    const valueType = "valueType" in fields ? (vtIn as string | null) : current.valueType;
+    let valueFrequency =
+      "valueFrequency" in fields ? (vfIn as string | null) : current.valueFrequency;
+    if ((valueType === null || valueType === "one_off") && !("valueFrequency" in fields)) {
+      valueFrequency = null;
+    }
+    const blocker = valueFieldsBlocker({ valueType, valueFrequency });
+    if (blocker) throw new Error(blocker);
+    params.push(JSON.stringify({ valueType, valueFrequency }));
+    sets.push(`data_json = (data_json::jsonb || $${params.length}::jsonb)::text`);
+  }
+
+  for (const key of Object.keys(columnFields)) {
     const column = EDITABLE[key];
     if (!column) throw new Error(`${key} is not editable (status changes go through transition)`);
-    params.push(fields[key]);
+    params.push(columnFields[key]);
     sets.push(`${column} = $${params.length}`);
   }
 

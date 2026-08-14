@@ -65,15 +65,18 @@ import {
   decideReconcileItem,
   getSurvey,
   importNodes,
+  listAssignableUsers,
   removeQualification,
   runReconcile,
   scheduleVisit,
   setLead,
   setNodeVerdict,
+  submitSurvey as submitSurveyApi,
   transitionSurvey,
   transitionVisit,
   updateSurvey,
 } from "../api/surveys-util";
+import { UserPicker } from "../../../ui/UserPicker";
 import { PhotoGallery } from "../components/PhotoGallery";
 import { SurveyStatusChip, VerdictChip, VisitStatusChip } from "../components/SurveyChips";
 import { Chip } from "../../../ui/Chip";
@@ -81,6 +84,7 @@ import {
   SURVEY_STATUS_LABEL,
   SURVEY_TRAIL,
   VERDICT_LABEL,
+  type AssignableUser,
   type NodeVerdict,
   type ProspectNode,
   type ReconciliationItem,
@@ -189,9 +193,11 @@ export function SurveyDetail() {
                 Offering a button the server would refuse is how a UI teaches
                 people not to trust it. */}
             {survey.status === "in_progress" ? (
-              <Button size="sm" variant="outline" onClick={() => setMoving("pending_review")}>
+              // P-06: ONE control. The server routes on lead-ness — a
+              // surveyor's submit lands in review, the lead's completes.
+              <Button size="sm" variant="outline" onClick={() => setMoving("submit")}>
                 <Send className="size-4" />
-                Send for review
+                Submit survey
               </Button>
             ) : null}
             {survey.status === "pending_review" ? (
@@ -265,6 +271,7 @@ export function SurveyDetail() {
             surveyId={id}
             actor={actor}
             hasLead={Boolean(survey?.leadUserEmail)}
+            assigned={(detail?.assignees ?? []).map((a) => a.userEmail)}
             onDone={reload}
           />
           <LifecycleDialog
@@ -272,9 +279,16 @@ export function SurveyDetail() {
             onOpenChange={(open) => !open && setMoving(null)}
             surveyId={id}
             actor={actor}
+            actorIsLead={survey?.leadUserEmail === actor}
             // The gate the SERVER would apply to this exact move, handed
-            // straight down — never re-derived here.
-            gate={moving === "completed" ? detail?.readiness?.submit : detail?.readiness?.review}
+            // straight down — never re-derived here. A lead's submit crosses
+            // both gates in one tap (P-06), and T7's guard set subsumes T5's,
+            // so the fuller list is the honest one to show for both.
+            gate={
+              moving === "completed" || (moving === "submit" && survey?.leadUserEmail === actor)
+                ? detail?.readiness?.submit
+                : detail?.readiness?.review
+            }
             onDone={reload}
           />
           {survey ? (
@@ -772,7 +786,15 @@ function OverviewTab({
                       ? "Copied when the first visit is scheduled"
                       : null,
               },
-              { label: "Lead", value: s.leadUserEmail ?? "Not assigned yet" },
+              {
+                label: "Lead",
+                // The lead is one of the assignees, which carry the joined
+                // name — so the fact shows a person, not an address (X-05).
+                value: s.leadUserEmail
+                  ? (detail.assignees.find((a) => a.userEmail === s.leadUserEmail)?.userName ??
+                    s.leadUserEmail)
+                  : "Not assigned yet",
+              },
               {
                 label: "Contract intent",
                 value: s.contractIntent ? humanise(s.contractIntent) : null,
@@ -1019,7 +1041,13 @@ function TeamTab({ detail }: { detail: SurveyDetailResponse }) {
     <Card pad={false}>
       {detail.assignees.map((a) => (
         <div key={a.id} className="flex flex-wrap items-center gap-4 border-b px-4 py-3 last:border-b-0">
-          <span className="text-sm font-medium">{a.userEmail}</span>
+          {/* Name first, email demoted to the meta slot (X-05). Legacy rows
+              assigned before user records existed have no name — the email is
+              then the honest label, shown once, not twice. */}
+          <span className="text-sm font-medium">{a.userName ?? a.userEmail}</span>
+          {a.userName ? (
+            <span className="text-muted-foreground text-xs">{a.userEmail}</span>
+          ) : null}
           <span className="text-muted-foreground text-xs">{a.participation ?? "surveyor"}</span>
           {detail.survey.leadUserEmail === a.userEmail ? (
             <span className="text-xs font-medium">lead</span>
@@ -1923,6 +1951,7 @@ function AssignDialog({
   surveyId,
   actor,
   hasLead,
+  assigned,
   onDone,
 }: {
   open: boolean;
@@ -1930,26 +1959,37 @@ function AssignDialog({
   surveyId: string;
   actor: string;
   hasLead: boolean;
+  /** Emails already actively assigned — greyed out, not hidden, so the list
+      reads the same every time it opens. */
+  assigned: string[];
   onDone: () => void;
 }) {
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState<string | null>(null);
   const [makeLead, setMakeLead] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [users, setUsers] = useState<AssignableUser[] | null>(null);
+  const [usersError, setUsersError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
-      setEmail("");
+      setEmail(null);
       // The first assignee is almost always the lead — default accordingly.
       setMakeLead(!hasLead);
       setError(null);
+      // Fetched per open, not cached: the week-load numbers are the point of
+      // this list (D-19), and they change every time a visit is scheduled.
+      listAssignableUsers().then(({ data, error: err }) => {
+        setUsers(data?.users ?? []);
+        setUsersError(err);
+      });
     }
   }, [open, hasLead]);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    const address = email.trim().toLowerCase();
-    if (!address.includes("@") || busy) return;
+    const address = (email ?? "").trim().toLowerCase();
+    if (!address || busy) return;
     setBusy(true);
     setError(null);
 
@@ -1995,14 +2035,39 @@ function AssignDialog({
 
           <div className="grid gap-4 py-4">
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="as-email">Email</Label>
-              <Input
-                id="as-email"
-                type="email"
+              <Label htmlFor="as-user">Who goes</Label>
+              {/* D-19: a person picker, never a typed address. The week-load
+                  badge is the availability half of the coordinator's decision;
+                  region and role ride the meta line. */}
+              <UserPicker
+                id="as-user"
+                users={(users ?? []).map((u) => ({
+                  email: u.email,
+                  name: u.name,
+                  roleName: u.roleName,
+                  team: u.team,
+                  region: u.region,
+                  badge: assigned.includes(u.email)
+                    ? "assigned"
+                    : u.weekVisits > 0
+                      ? `${u.weekVisits} visit${u.weekVisits === 1 ? "" : "s"} this wk`
+                      : null,
+                }))}
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="surveyor@facilio.com"
+                onChange={setEmail}
+                placeholder="Pick a surveyor"
+                loading={users === null && !usersError}
               />
+              {usersError ? (
+                <span className="text-destructive text-xs">
+                  {`The user list could not be read: ${usersError}`}
+                </span>
+              ) : null}
+              {users && !users.length && !usersError ? (
+                <span className="text-muted-foreground text-xs">
+                  No active users yet — add the team under Settings → Users first.
+                </span>
+              ) : null}
             </div>
             <label className="flex items-center gap-2 text-sm">
               <input
@@ -2022,7 +2087,7 @@ function AssignDialog({
                 Cancel
               </Button>
             </DialogClose>
-            <Button type="submit" disabled={!email.trim().includes("@") || busy}>
+            <Button type="submit" disabled={!email || busy}>
               {busy ? "Assigning…" : "Assign"}
             </Button>
           </DialogFooter>
@@ -2048,12 +2113,20 @@ function AssignDialog({
  * disabled while any blocker stands — and the server is still the authority,
  * because this list can be stale by the time it is read.
  */
-type LifecycleMove = "pending_review" | "in_progress" | "completed";
+type LifecycleMove = "submit" | "pending_review" | "in_progress" | "completed";
 
 const MOVE_COPY: Record<
   LifecycleMove,
   { title: string; body: string; confirm: string; busy: string; destructive?: boolean; needsReason?: boolean }
 > = {
+  // P-06's one button: both gates, one control. The body is swapped at render
+  // time for the lead (see LifecycleDialog) — same button, different truth.
+  submit: {
+    title: "Submit this survey",
+    body: "Capture closes and the survey goes to the lead for review. They complete it or send it back.",
+    confirm: "Submit survey",
+    busy: "Submitting…",
+  },
   pending_review: {
     title: "Send this survey for review",
     body: "Capture closes and the survey waits for the lead's review. It can still be sent back for rework afterwards.",
@@ -2081,6 +2154,7 @@ function LifecycleDialog({
   onOpenChange,
   surveyId,
   actor,
+  actorIsLead,
   gate,
   onDone,
 }: {
@@ -2090,6 +2164,8 @@ function LifecycleDialog({
   onOpenChange: (open: boolean) => void;
   surveyId: string;
   actor: string;
+  /** Routes P-06's submit: the lead's own submit completes and freezes. */
+  actorIsLead: boolean;
   gate?: { blockers: string[]; warnings: string[] };
   onDone: () => void;
 }) {
@@ -2105,7 +2181,16 @@ function LifecycleDialog({
   }, [move]);
 
   if (!move) return null;
-  const copy = MOVE_COPY[move];
+  const copy =
+    move === "submit" && actorIsLead
+      ? {
+          ...MOVE_COPY.submit,
+          // The lead is told the truth BEFORE the tap: their submit IS the
+          // review, and completed is terminal.
+          body: "You are the survey lead, so submitting completes the survey in one step — the payload freezes and the estimator prices from it. Completed is terminal; a re-walk is a new linked survey.",
+          destructive: true,
+        }
+      : MOVE_COPY[move];
   // Rework has no gate of its own — bouncing a survey back is always allowed.
   const blockers = copy.needsReason ? [] : (gate?.blockers ?? []);
   const warnings = copy.needsReason ? [] : (gate?.warnings ?? []);
@@ -2118,7 +2203,10 @@ function LifecycleDialog({
     setBusy(true);
     setError(null);
 
-    const { error: err } = await transitionSurvey(surveyId, move, reason.trim(), actor);
+    const { error: err } =
+      move === "submit"
+        ? await submitSurveyApi(surveyId, actor)
+        : await transitionSurvey(surveyId, move, reason.trim(), actor);
 
     setBusy(false);
     if (err) {
@@ -2276,10 +2364,12 @@ function EditSurveyDialog({
           <div className="grid gap-4 py-4">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="es-title">Title</Label>
+              {/* X-14: capped — an uncapped title broke the list rows. */}
               <Input
                 id="es-title"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
+                maxLength={120}
                 placeholder="What this survey is called"
               />
             </div>

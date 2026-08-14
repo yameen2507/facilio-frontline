@@ -13,13 +13,14 @@
  */
 
 import {
+  Bot,
   Building2,
   ClipboardList,
+  Handshake,
   Landmark,
   FileSignature,
   FileText,
   Inbox,
-  MessageSquare,
   SlidersHorizontal,
   type LucideIcon,
 } from "lucide-react";
@@ -42,8 +43,10 @@ export type NavItemEntry = {
 
 export type NavEntry =
   | NavItemEntry
-  // A `section` starts a new labelled sidebar group; groups are the divider.
-  | { type: "section"; label: string };
+  // A `section` starts a new sidebar group; groups are the divider. The label
+  // is optional: a group whose one item already names itself (Intake agent)
+  // would just repeat that name as a heading.
+  | { type: "section"; label?: string };
 
 /** Where "/" sends you. */
 export const DEFAULT_ROUTE = "/leads";
@@ -71,6 +74,14 @@ export const NAV_TOP: NavEntry[] = [
   // taken by the lanes that are worked from a phone. Pricing is desk work;
   // Proposals lives in the More sheet, which is a real destination.
   { type: "section", label: "Commercial" },
+  // Deals lead the group: the deal is the pursuit itself — the portfolio is
+  // built FOR one and the proposal is priced AGAINST one, so reading the group
+  // top-to-bottom is again the actual sequence.
+  //
+  // NO `mobile` flag, same arithmetic as the rest of this group: the four tab
+  // slots belong to the lanes worked from a phone, and moving a deal through
+  // its stages is desk work. Deals lives in the More sheet.
+  { type: "item", to: "/deals", icon: Handshake, label: "Deals" },
   // The portfolio sits ABOVE proposals because it is what gets priced: the tree
   // is built during the pursuit, the proposal is priced off it, and the convert
   // runs after the win. Reading the group top-to-bottom is the actual sequence.
@@ -80,11 +91,12 @@ export const NAV_TOP: NavEntry[] = [
   // attachment is desk work, so the portfolio lives in the More sheet.
   { type: "item", to: "/portfolio", icon: Landmark, label: "Portfolio" },
   { type: "item", to: "/proposals", icon: FileSignature, label: "Proposals" },
-  // Its own group at the rail's end: the widget page is the whole intake
-  // pipeline — presentation AND the analyst brief — seen the way a visitor
-  // meets it, not one of the day-to-day work lanes above.
-  { type: "section", label: "Intake" },
-  { type: "item", to: "/chat", icon: MessageSquare, label: "Web widget" },
+  // Its own group at the rail's end: the intake agent is the whole pipeline —
+  // presentation AND the analyst brief — seen the way a visitor meets it, not
+  // one of the day-to-day work lanes above. Unlabelled: "Intake" over a single
+  // "Intake agent" entry read as the same word twice.
+  { type: "section" },
+  { type: "item", to: "/chat", icon: Bot, label: "Intake agent" },
 ];
 
 /** Pinned to the sidebar footer, away from the modules. */

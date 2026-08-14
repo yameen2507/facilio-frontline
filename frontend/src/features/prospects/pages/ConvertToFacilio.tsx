@@ -43,11 +43,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useActor } from "../../../app/auth";
 import {
   canRunConvert,
   CONVERT_BLOCKED_REASON,
   convertPreflight,
+  convertRun,
+  drainFacilioQueue,
   listDeals,
+  type ConvertRunResult,
 } from "../api/prospects-util";
 import { TypeChip } from "../components/ProspectChips";
 import { TYPE_LABEL, type Preflight, type PreflightRow } from "../types/prospect";
@@ -72,6 +76,12 @@ export function ConvertToFacilio() {
   const [data, setData] = useState<Preflight | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const actor = useActor();
+  const [running, setRunning] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
+  const [runLog, setRunLog] = useState<ConvertRunResult["results"]>([]);
+  const [drained, setDrained] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -106,6 +116,49 @@ export function ConvertToFacilio() {
 
   const deal = deals.find((d) => d.id === dealId);
   const blocked = data?.rows.filter((r) => r.blockers.length) ?? [];
+
+  /**
+   * The run, §7.5-shaped: repeated synchronous batches until nothing remains,
+   * never a fire-and-forget. Two exits besides "done": a transport error, and a
+   * round that makes no progress (every remaining row failed or is waiting on a
+   * parent that failed) — looping past that point would hammer the same errors.
+   * After the write, one drain pass: the contract tasks queued at Won defer
+   * until a site exists, and this run may have just created it.
+   */
+  const runConvert = useCallback(async () => {
+    if (!dealId || running) return;
+    setRunning(true);
+    setRunError(null);
+    setRunLog([]);
+    setDrained(null);
+
+    const log: ConvertRunResult["results"] = [];
+    for (;;) {
+      const { data: round, error: err } = await convertRun(dealId, actor);
+      if (err) {
+        setRunError(err);
+        break;
+      }
+      if (!round) break;
+      log.push(...round.results);
+      setRunLog([...log]);
+      if (round.remaining === 0) break;
+      if (round.created + round.recovered === 0) break;
+    }
+
+    const { data: drain } = await drainFacilioQueue();
+    if (drain) {
+      const done = drain.results.filter((r) => r.outcome === "done").length;
+      setDrained(
+        drain.claimed === 0
+          ? "Nothing else was waiting in the sync queue."
+          : `${done} of ${drain.claimed} queued Facilio write(s) completed${drain.deferred ? `, ${drain.deferred} still waiting on a dependency` : ""}.`
+      );
+    }
+
+    setRunning(false);
+    load();
+  }, [dealId, actor, running, load]);
 
   return (
     <PageShell
@@ -236,6 +289,31 @@ export function ConvertToFacilio() {
             </Card>
           ) : null}
 
+          {runLog.length || runError || drained ? (
+            <Card title="This run">
+              <div className="flex flex-col gap-1.5">
+                {runLog.map((r) => (
+                  <div key={r.locationId} className="flex flex-wrap items-center gap-2 text-sm">
+                    <Chip tone={r.outcome === "failed" ? "orange" : "green"} small>
+                      {r.outcome}
+                    </Chip>
+                    <span className="font-medium">{r.name}</span>
+                    {r.facilioId ? (
+                      <span className="text-muted-foreground text-xs">
+                        Facilio {TYPE_LABEL[r.type].toLowerCase()} #{r.facilioId}
+                      </span>
+                    ) : null}
+                    {r.error ? <span className="text-destructive text-xs">{r.error}</span> : null}
+                  </div>
+                ))}
+                {/* The drain line is the contract's heartbeat: the tasks queued at
+                    Won wait for a site, and this run may have just created it. */}
+                {drained ? <span className="text-muted-foreground text-sm">{drained}</span> : null}
+                {runError ? <span className="text-destructive text-sm">{runError}</span> : null}
+              </div>
+            </Card>
+          ) : null}
+
           <div className="flex flex-wrap items-center justify-end gap-3">
             {/* A disabled primary action always says why, in the order the gate
                 actually applies: the switch first, then Won, then the blockers. */}
@@ -246,9 +324,15 @@ export function ConvertToFacilio() {
                   ? "The deal must be Won first"
                   : blocked.length
                     ? `${plural(blocked.length, "property", "properties")} still blocked`
-                    : `${plural(data.willCreate, "property", "properties")} ready`}
+                    : running
+                      ? "Writing to Facilio…"
+                      : `${plural(data.willCreate, "property", "properties")} ready`}
             </span>
-            <Button disabled={!canRunConvert || !data.dealIsWon || blocked.length > 0}>
+            <Button
+              disabled={!canRunConvert || !data.dealIsWon || blocked.length > 0 || running || !data.willCreate}
+              onClick={runConvert}
+            >
+              {running ? <RefreshCw className="size-4 animate-spin" /> : null}
               Convert to Facilio
               <ArrowRight className="size-4" />
             </Button>

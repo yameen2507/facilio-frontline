@@ -21,8 +21,10 @@
 
 import {
   archiveBlocker,
+  deriveEstimationKey,
   editBlocker,
   FIELD_TYPES,
+  isEstimable,
   isTemplateStatus,
   LEVEL_BINDINGS,
   NODE_TYPES,
@@ -379,6 +381,33 @@ export function publishTemplate(templateId: string, actor: string | null): { tem
   );
   if (!updated) throw new Error("template is no longer a draft — reload and try again");
 
+  /**
+   * F-10: one published version per lineage. Publishing vN retires the version
+   * it was cloned from (its parent) and any sibling published off the same
+   * parent — two Published versions of one template meant the survey-create
+   * picker offered both and nobody could say which was current. AFTER the
+   * publish lands, so a failed publish never archives the working version.
+   */
+  if (template.parentTemplateId) {
+    const retired = mutate(
+      `update fl_form_template
+          set status = 'archived', archived_by = $2, archived_at = $3,
+              updated_by = $2, updated_at = $3
+        where is_active = 'true' and status = 'published' and id <> $1
+          and (id = $4 or parent_template_id = $4)`,
+      [templateId, actor, now, template.parentTemplateId]
+    );
+    if (retired) {
+      appendEvent({
+        entityType: "form_template",
+        entityId: templateId,
+        kind: "superseded_prior",
+        actor,
+        body: `v${template.versionNo} published — ${retired} earlier published version(s) archived`,
+      });
+    }
+  }
+
   appendEvent({
     entityType: "form_template",
     entityId: templateId,
@@ -654,14 +683,18 @@ export function importTemplate(input: {
         qp.push(v);
         vals.push(`$${qp.length}`);
       };
+      // F-02: the key is derived (or the Advanced override kept) — see
+      // normalizeEstimation. Import is the builder's save path, so this is
+      // where the rule bites.
+      const est = normalizeEstimation(q);
       add(q.label.trim());
       add(q.helpText ?? null);
       add(q.fieldType);
       add(JSON.stringify(q.options ?? []));
       add(String(q.allowMultiple ?? false));
       add(String(q.isRequired ?? false));
-      add(String(q.feedsEstimation ?? false));
-      add(q.estimationKey ?? null);
+      add(String(est.feedsEstimation));
+      add(est.estimationKey);
       add(q.unit ?? null);
       questionRows.push(
         `(gen_random_uuid()::text, md5($1 || $3 || ${key})::uuid::text, $1, ${vals[0]}, ${vals[1]},
@@ -708,6 +741,19 @@ export function importTemplate(input: {
           set status = 'published', published_by = $2, published_at = $3,
               updated_by = $2, updated_at = $3
         where id = $1 and status = 'draft' and is_active = 'true'`,
+      [templateId, input.actor, now]
+    );
+    // F-10, same rule as publishTemplate: one published version per lineage.
+    // The parent is read by subselect because this path may be re-saving an
+    // existing draft whose row carries it.
+    mutate(
+      `update fl_form_template
+          set status = 'archived', archived_by = $2, archived_at = $3,
+              updated_by = $2, updated_at = $3
+        where is_active = 'true' and status = 'published' and id <> $1
+          and (select parent_template_id from fl_form_template where id = $1) is not null
+          and (id = (select parent_template_id from fl_form_template where id = $1)
+               or parent_template_id = (select parent_template_id from fl_form_template where id = $1))`,
       [templateId, input.actor, now]
     );
     appendEvent({
@@ -979,6 +1025,31 @@ export function reorderSections(templateId: string, orderedIds: string[]): { upd
   return { updated: reorderRows("fl_form_section", "template_id", templateId, orderedIds) };
 }
 
+/**
+ * F-02, as ruled: the estimation key is DERIVED from the question text and
+ * unit, never invented by the author — a typed key box was "some random shit"
+ * and the naming drift it caused is why priced-looking questions fell through
+ * to unpriced. A number question always prices (that is what the type is FOR);
+ * an options question prices only when opted in. A key typed under the
+ * Advanced toggle survives as the override; a blank one derives.
+ */
+function normalizeEstimation(q: {
+  label?: string;
+  fieldType?: string;
+  feedsEstimation?: boolean;
+  estimationKey?: string | null;
+  unit?: string | null;
+}): { feedsEstimation: boolean; estimationKey: string | null } {
+  if (!isEstimable(q.fieldType ?? "")) return { feedsEstimation: false, estimationKey: null };
+  const wants =
+    q.fieldType === "number" || Boolean(q.feedsEstimation) || Boolean(q.estimationKey?.trim());
+  if (!wants) return { feedsEstimation: false, estimationKey: null };
+  return {
+    feedsEstimation: true,
+    estimationKey: q.estimationKey?.trim() || deriveEstimationKey(q.label ?? "", q.unit),
+  };
+}
+
 // ── Questions ─────────────────────────────────────────────────────────────────
 
 export interface QuestionInput {
@@ -1014,6 +1085,8 @@ export function saveQuestion(
       throw new Error(`fieldType is required (one of: ${FIELD_TYPES.join(", ")})`);
     }
 
+    const est = normalizeEstimation(input);
+
     const row = one<FormQuestion>(
       `insert into fl_form_question
          (id, section_id, template_id, label, help_text, field_type, options_json,
@@ -1033,8 +1106,8 @@ export function saveQuestion(
         JSON.stringify(input.options ?? []),
         String(input.allowMultiple ?? false),
         String(input.isRequired ?? false),
-        String(input.feedsEstimation ?? false),
-        input.estimationKey ?? null,
+        String(est.feedsEstimation),
+        est.estimationKey,
         input.unit ?? null,
         actor,
         now,

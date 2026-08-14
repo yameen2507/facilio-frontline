@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  deriveEstimationKey,
   archiveBlocker,
   editBlocker,
   FIELD_TYPES,
@@ -163,5 +164,40 @@ describe("the enum sets the reference handler serves", () => {
 
   it("holds the three level bindings", () => {
     expect(LEVEL_BINDINGS).toEqual(["per_survey", "per_building", "per_space"]);
+  });
+});
+
+describe("deriveEstimationKey — F-02, the key is derived, never typed", () => {
+  it("slugs the question text and appends the unit", () => {
+    expect(deriveEstimationKey("What is the total floor area?", "sqft")).toBe(
+      "total_floor_area_sqft"
+    );
+  });
+
+  it("is deterministic — same question, same key, every save", () => {
+    const a = deriveEstimationKey("Number of extraction hoods", "each");
+    const b = deriveEstimationKey("Number of extraction hoods", "each");
+    expect(a).toBe(b);
+  });
+
+  it("drops filler words so two phrasings land on one key", () => {
+    expect(deriveEstimationKey("What is the total area?", "sqm")).toBe(
+      deriveEstimationKey("Total area", "sqm")
+    );
+  });
+
+  it("keeps sqft and sqm apart — different priceable facts", () => {
+    expect(deriveEstimationKey("Total area", "sqft")).not.toBe(
+      deriveEstimationKey("Total area", "sqm")
+    );
+  });
+
+  it("does not double the unit when the text already names it", () => {
+    expect(deriveEstimationKey("Total sqft", "sqft")).toBe("total_sqft");
+  });
+
+  it("survives an empty label", () => {
+    expect(deriveEstimationKey("", "hours")).toBe("question_hours");
+    expect(deriveEstimationKey("?!", null)).toBe("question");
   });
 });

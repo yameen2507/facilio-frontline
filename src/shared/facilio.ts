@@ -100,5 +100,31 @@ export async function executeAction(
     // Some actions return plain text; keep it as-is.
   }
 
+  // Facilio validation failures arrive as HTTP 200 with `success: false` and
+  // the reason nested inside ("Space Category is mandatory" cost a day to see
+  // because it looked like a success with no record id). Only an explicit
+  // `false` counts — bodies without the field are fine.
+  if (raw && typeof raw === "object" && (raw as Record<string, unknown>).success === false) {
+    const body = raw as Record<string, unknown>;
+    const err = body.error as Record<string, unknown> | string | undefined;
+    const message =
+      (typeof err === "object" && err && typeof err.message === "string" && err.message) ||
+      (typeof err === "string" && err) ||
+      (typeof body.message === "string" && body.message) ||
+      "the action reported success: false";
+    throw new Error(`${connectionSlug}.${actionSlug} rejected: ${message}`);
+  }
+
+  // The FSM v3 API has its own failure dialect: no `success` field at all, just
+  // `{code: <nonzero>, message}` on a 200 ("Contractual sites cannot be empty"
+  // arrived this way and sailed through as a success with no record id).
+  // `code: 0` is its success marker, so only a nonzero number trips this.
+  if (raw && typeof raw === "object") {
+    const body = raw as Record<string, unknown>;
+    if (typeof body.code === "number" && body.code !== 0 && typeof body.message === "string") {
+      throw new Error(`${connectionSlug}.${actionSlug} rejected: ${body.message}`);
+    }
+  }
+
   return { raw, recordId: extractRecordId(raw) };
 }

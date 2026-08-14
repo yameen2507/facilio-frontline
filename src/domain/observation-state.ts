@@ -30,26 +30,168 @@
  * has no business touching — by naming them in a field key. So the map is
  * explicit, and a key that is not in it is refused rather than ignored.
  */
+/**
+ * ⚠ WHICH OF THESE FACILIO ACTUALLY OWNS — read from the live module metadata
+ * (`get-<module>-metadata` on org #2944, 15 Aug), not from the spec.
+ *
+ * `noOfBuildings`, `noOfFloors` and `noOfIndependentSpaces` are **readOnly** in
+ * Facilio: it derives them from the records beneath. They stay editable HERE
+ * because before convert there are no records to derive from — the RFP says
+ * *"about 200, sorry, 200 to 220"* and that guess is a real pricing input. But
+ * **convert must never send them**, or it would push a guess into a field the
+ * platform computes.
+ *
+ * `localId` is readOnly there too — it is Facilio's number, back-filled by
+ * convert, never typed.
+ *
+ * OURS, WITH NO FACILIO COUNTERPART AT ALL: `room_count`, `restroom_count`,
+ * `ceiling_height_band`, `operation_hours_start/_end`. The spec's §3.3 claimed
+ * the operation-hours pair were `BaseSpace` fields; the metadata says they are
+ * not. They are still worth keeping — when a building is open decides when the
+ * crew can work — they just do not travel to Facilio.
+ *
+ * `classification` DOES NOT EXIST on site, building, floor or space. L9 named it
+ * as one of three mandatory Facilio enums; only two of those are real
+ * (`siteType`, `spaceCategory`). The column is minted and harmless, but nothing
+ * will ever map to it.
+ */
 export const OBSERVABLE_FIELDS = {
-  name: { column: "name", kind: "text", label: "Name" },
-  code: { column: "code", kind: "text", label: "Client reference" },
-  area_sqft: { column: "area_sqft", kind: "number", label: "Area (sq ft)" },
-  floor_count: { column: "floor_count", kind: "number", label: "Floors" },
-  room_count: { column: "room_count", kind: "number", label: "Rooms" },
-  restroom_count: { column: "restroom_count", kind: "number", label: "Restrooms" },
-  floor_label: { column: "floor_label", kind: "text", label: "Floor" },
-  ceiling_height_band: { column: "ceiling_height_band", kind: "text", label: "Ceiling height" },
-  space_category: { column: "space_category", kind: "text", label: "Category" },
-  address_line: { column: "address_line", kind: "text", label: "Address" },
-  city: { column: "city", kind: "text", label: "City" },
-  region: { column: "region", kind: "text", label: "Region" },
-  country: { column: "country", kind: "text", label: "Country" },
-  postcode: { column: "postcode", kind: "text", label: "Postcode" },
-  latitude: { column: "latitude", kind: "number", label: "Latitude" },
-  longitude: { column: "longitude", kind: "number", label: "Longitude" },
+  // --- priced (§6.3) — a disagreement here moves money ----------------------
+  area: { column: "area", kind: "number", label: "Area (sq ft)", tier: "priced" },
+  gross_floor_area: {
+    column: "gross_floor_area",
+    kind: "number",
+    label: "Gross floor area (sq ft)",
+    tier: "priced",
+  },
+  no_of_floors: { column: "no_of_floors", kind: "number", label: "Floors", tier: "priced" },
+  no_of_buildings: {
+    column: "no_of_buildings",
+    kind: "number",
+    label: "Buildings",
+    tier: "priced",
+  },
+  room_count: { column: "room_count", kind: "number", label: "Rooms", tier: "priced" },
+  restroom_count: {
+    column: "restroom_count",
+    kind: "number",
+    label: "Restrooms",
+    tier: "priced",
+  },
+  ceiling_height_band: {
+    column: "ceiling_height_band",
+    kind: "text",
+    label: "Ceiling height",
+    tier: "priced",
+  },
+  max_occupancy: {
+    column: "max_occupancy",
+    kind: "number",
+    label: "Maximum occupancy",
+    tier: "priced",
+  },
+  operation_hours_start: {
+    column: "operation_hours_start",
+    kind: "number",
+    label: "Opens at",
+    tier: "priced",
+  },
+  operation_hours_end: {
+    column: "operation_hours_end",
+    kind: "number",
+    label: "Closes at",
+    tier: "priced",
+  },
+
+  // --- descriptive — last write wins, full history kept ---------------------
+  name: { column: "name", kind: "text", label: "Name", tier: "descriptive" },
+  description: { column: "description", kind: "text", label: "Description", tier: "descriptive" },
+  code: { column: "code", kind: "text", label: "Client reference", tier: "descriptive" },
+  client_level_label: {
+    column: "client_level_label",
+    kind: "text",
+    label: "What they call this level",
+    tier: "descriptive",
+  },
+  floor_level: { column: "floor_level", kind: "number", label: "Floor level", tier: "descriptive" },
+  space_category_id: {
+    column: "space_category_id",
+    kind: "text",
+    label: "Category",
+    tier: "descriptive",
+  },
+  site_type: { column: "site_type", kind: "text", label: "Site type", tier: "descriptive" },
+  classification: {
+    column: "classification",
+    kind: "text",
+    label: "Classification",
+    tier: "descriptive",
+  },
+  no_of_independent_spaces: {
+    column: "no_of_independent_spaces",
+    kind: "number",
+    label: "Independent spaces",
+    tier: "descriptive",
+  },
+  no_of_sub_spaces: {
+    column: "no_of_sub_spaces",
+    kind: "number",
+    label: "Sub-spaces",
+    tier: "descriptive",
+  },
+  location_name: {
+    column: "location_name",
+    kind: "text",
+    label: "Location name",
+    tier: "descriptive",
+  },
+  street: { column: "street", kind: "text", label: "Address", tier: "descriptive" },
+  city: { column: "city", kind: "text", label: "City", tier: "descriptive" },
+  state: { column: "state", kind: "text", label: "State / province", tier: "descriptive" },
+  country: { column: "country", kind: "text", label: "Country", tier: "descriptive" },
+  zip: { column: "zip", kind: "text", label: "Postcode", tier: "descriptive" },
+  location_phone: {
+    column: "location_phone",
+    kind: "text",
+    label: "Site phone",
+    tier: "descriptive",
+  },
+  lat: { column: "lat", kind: "number", label: "Latitude", tier: "descriptive" },
+  lng: { column: "lng", kind: "number", label: "Longitude", tier: "descriptive" },
+  local_id: { column: "local_id", kind: "number", label: "Facilio number", tier: "descriptive" },
 } as const;
 
 export type FieldKey = keyof typeof OBSERVABLE_FIELDS;
+
+/**
+ * §6.3 — THE TWO-TIER RULE. A disagreement is worth interrupting a human for
+ * when it moves money, and not otherwise.
+ *
+ * `priced`      both values kept, nothing overwritten, a person settles it.
+ * `descriptive` last write wins; the full history is still recorded.
+ *
+ * Nobody's proposal is mispriced because the RFP said "Dubai" and the surveyor
+ * said "Dubai, UAE" — but today every one of those raises a queue item someone
+ * has to sit down and clear. BOTH TIERS KEEP THE COMPLETE APPEND-ONLY HISTORY,
+ * so nothing is lost and C25 holds; what changes is only what interrupts a
+ * person.
+ *
+ * The counter-argument is real: a tender response is scored against the client's
+ * own numbering, so an RFP that names a building differently from the surveyor
+ * IS worth noticing. The mitigation is that the history still shows both, plus a
+ * "names disagree" notice on the location. If that proves too weak, promoting
+ * `name` and `code` is a one-word edit on their entries above — which is exactly
+ * why the tier lives on the field and not in a branch somewhere.
+ */
+export type FieldTier = "priced" | "descriptive";
+
+export function tierFor(fieldKey: FieldKey): FieldTier {
+  return OBSERVABLE_FIELDS[fieldKey].tier;
+}
+
+export const PRICED_FIELD_KEYS = (
+  Object.keys(OBSERVABLE_FIELDS) as FieldKey[]
+).filter((k) => OBSERVABLE_FIELDS[k].tier === "priced");
 
 export const FIELD_KEYS = Object.keys(OBSERVABLE_FIELDS) as FieldKey[];
 
@@ -134,7 +276,32 @@ export function valuesAgree(a: TypedValue, b: TypedValue): boolean {
 
 // ── The acceptance decision ────────────────────────────────────────────────
 
-export type AcceptanceOutcome = "auto_accept" | "agrees" | "conflict";
+export type AcceptanceOutcome = "auto_accept" | "agrees" | "replaced" | "conflict";
+
+/**
+ * ONE VOCABULARY, EVERYWHERE (§6.2, fixing X-13 and X-14).
+ *
+ * These words go in the chips, in the settle picker, and in every message this
+ * layer produces. NO RAW ENUM MAY REACH A USER — `rfp` leaking into a sentence
+ * that reads "From documents" three pixels away is how the build read as three
+ * different products. Because the reason strings are built here, the fix has to
+ * live here too: a label map in the frontend alone would still leave the server
+ * emitting `rfp` in prose.
+ */
+export const PROVENANCE_LABEL: Record<Provenance, string> = {
+  rfp: "From documents",
+  survey: "From the walk",
+  manual: "Entered by hand",
+  crm: "From an earlier pursuit",
+  facilio_link: "Linked from Facilio",
+};
+
+/** The label, lowercased for mid-sentence use. Never the bare enum. */
+export function provenanceLabel(p: string | null | undefined): string {
+  if (!p) return "the recorded";
+  const label = PROVENANCE_LABEL[p as Provenance];
+  return label ? label.toLowerCase() : "the recorded";
+}
 
 export interface AcceptanceResult {
   outcome: AcceptanceOutcome;
@@ -164,8 +331,11 @@ export function acceptanceFor(input: {
   /** The currently accepted observation for this (location, field), if any. */
   currentAccepted?: (TypedValue & { provenance?: string | null }) | null;
   incomingProvenance: Provenance;
+  /** §6.3. Defaults to `priced` so a caller that forgets gets the safe branch. */
+  tier?: FieldTier;
 }): AcceptanceResult {
   const current = input.currentAccepted;
+  const tier = input.tier ?? "priced";
 
   if (!current) {
     return {
@@ -181,13 +351,15 @@ export function acceptanceFor(input: {
       outcome: "agrees",
       writesCache: true,
       needsHuman: false,
-      reason: `agrees with the ${current.provenance ?? "existing"} value`,
+      reason: `agrees with the value ${provenanceLabel(current.provenance)}`,
     };
   }
 
   // A Facilio link is a READ of a maintained record. It may be recorded, and it
   // may be shown beside a survey finding, but it must never win automatically —
-  // §5.2: "read-only, may never be accepted over a survey value".
+  // §5.2: "read-only, may never be accepted over a survey value". This outranks
+  // the tier: an operational fact quietly overwriting a descriptive field would
+  // be the same silent-overwrite failure the ledger exists to prevent.
   if (input.incomingProvenance === "facilio_link") {
     return {
       outcome: "conflict",
@@ -197,11 +369,24 @@ export function acceptanceFor(input: {
     };
   }
 
+  // §6.3 — a descriptive field does not interrupt anyone. The new value wins,
+  // the old one is superseded, and the complete history stays queryable. This
+  // is the only branch where a value is overwritten without a human, and it is
+  // confined to fields that cannot move a price.
+  if (tier === "descriptive") {
+    return {
+      outcome: "replaced",
+      writesCache: true,
+      needsHuman: false,
+      reason: `replaces the value ${provenanceLabel(current.provenance)} — both are kept in the history`,
+    };
+  }
+
   return {
     outcome: "conflict",
     writesCache: false,
     needsHuman: true,
-    reason: `disagrees with the ${current.provenance ?? "accepted"} value — both are kept until someone chooses`,
+    reason: `disagrees with the value ${provenanceLabel(current.provenance)} — both are kept until someone chooses`,
   };
 }
 

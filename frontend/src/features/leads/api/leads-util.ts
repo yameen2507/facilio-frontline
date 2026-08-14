@@ -58,7 +58,42 @@ export type NewLeadFields = {
   siteRegion?: string;
   estimatedValue?: number;
   currency?: string;
+  /** D-05: one_off | recurring | both — what kind of number the value is. */
+  valueType?: string;
+  /** monthly | quarterly | annual — required by the server when recurring. */
+  valueFrequency?: string;
+  /** D-10: where it came from — referral, existing_client, marketing, hubspot,
+      cold_outreach, other. `source` above is how it ARRIVED. */
+  origin?: string;
 };
+
+// ── The coverage catalogue (D-04) ────────────────────────────────────────────
+
+export type CoverageArea = {
+  id: string;
+  name: string;
+  region: string | null;
+  country: string | null;
+  active: string;
+};
+
+export type CoverageServiceLine = { id: string; code: string; name: string; active: string };
+
+export type CoverageLink = { areaId: string; serviceLineId: string; active: string };
+
+export type CoverageOptions = {
+  areas: CoverageArea[];
+  serviceLines: CoverageServiceLine[];
+  coverage: CoverageLink[];
+};
+
+/**
+ * `lead.settings-get`, read for its catalogue only (D-04): the same matrix
+ * Settings edits and the AI scores against, now feeding the intake pickers —
+ * one vocabulary, three consumers. The response carries more (SLA, prompt);
+ * this type simply doesn't look at it.
+ */
+export const getCoverageOptions = () => request<CoverageOptions>("settings-get");
 
 /**
  * Capture a lead. The handler is the only writer of `fl_lead` — it allocates the
@@ -99,8 +134,13 @@ export const updateLead = (leadId: string, fields: Record<string, unknown>, acto
 export const assignLead = (leadId: string, toUser: string, role: "sales" | "actioner", actorEmail: string) =>
   request<Mutation>("assign", { leadId, toUser, role, reason: "assigned from the lead view", actorEmail });
 
-export const convertLead = (leadId: string, actorEmail: string) =>
-  request<Mutation & { dealRefNo: string; queued: unknown[] }>("convert", { leadId, actorEmail });
+export const convertLead = (leadId: string, actorEmail: string, overrideAssessment = false) =>
+  request<Mutation & { dealRefNo: string; queued: unknown[] }>("convert", {
+    leadId,
+    actorEmail,
+    // F-06: converting past a not_relevant verdict must be said out loud.
+    ...(overrideAssessment ? { overrideAssessment: "true" } : {}),
+  });
 
 /**
  * Step one of the assessment. The prompt is built server-side from settings so the

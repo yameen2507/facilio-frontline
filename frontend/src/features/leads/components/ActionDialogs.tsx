@@ -26,7 +26,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { DateField } from "../../../ui/DateField";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -39,8 +38,17 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { humanise } from "@/lib/format";
+import { autoFocusField } from "@/lib/utils";
+import { useUserDirectory } from "../../../app/users";
+import { UserPicker } from "../../../ui/UserPicker";
 
-export type PendingLeadAction = "log-call" | "nurture" | "assign" | "close" | null;
+export type PendingLeadAction =
+  | "log-call"
+  | "nurture"
+  | "assign"
+  | "close"
+  | "convert-override"
+  | null;
 
 /** The dispositions the backend's state machine accepts for a close. */
 const CLOSE_REASONS = [
@@ -154,7 +162,7 @@ function LogCallDialog({
           value={body}
           onChange={(e) => setBody(e.target.value)}
           rows={4}
-          autoFocus
+          autoFocus={autoFocusField()}
         />
       </div>
     </ActionDialog>
@@ -196,7 +204,12 @@ function NurtureDialog({
     >
       <div className="grid gap-2">
         <Label htmlFor="nurture-until">Bring it back on</Label>
-        <DateField id="nurture-until" value={until} onChange={setUntil} autoFocus />
+        <DateField
+          id="nurture-until"
+          value={until}
+          onChange={setUntil}
+          autoFocus={autoFocusField()}
+        />
       </div>
     </ActionDialog>
   );
@@ -216,6 +229,10 @@ function AssignDialog({
   const [who, setWho] = useState(defaultAssignee);
   const [role, setRole] = useState<AssignRole>("sales");
   const [busy, setBusy] = useState(false);
+  // D-19's rule applied here too: assignment picks a person from the
+  // directory, it never types an address. The default (usually the signed-in
+  // user) is preselected when it exists in the directory.
+  const { users, loading, error: usersError } = useUserDirectory();
 
   useEffect(() => {
     if (open) {
@@ -225,6 +242,8 @@ function AssignDialog({
     }
   }, [open, defaultAssignee]);
 
+  const active = users.filter((u) => u.status === "active");
+
   return (
     <ActionDialog
       open={open}
@@ -233,22 +252,37 @@ function AssignDialog({
       description="Hand it to sales, or change who is actioning it."
       submitLabel="Assign"
       busy={busy}
-      canSubmit={who.trim().includes("@")}
+      canSubmit={active.some((u) => u.email === who)}
       onSubmit={async () => {
         setBusy(true);
         if (!(await onSubmit(who.trim(), role))) setBusy(false);
       }}
     >
       <div className="grid gap-2">
-        <Label htmlFor="assign-email">Assign to</Label>
-        <Input
-          id="assign-email"
-          type="email"
-          value={who}
-          onChange={(e) => setWho(e.target.value)}
-          placeholder="name@company.com"
-          autoFocus
+        <Label htmlFor="assign-user">Assign to</Label>
+        <UserPicker
+          id="assign-user"
+          users={active.map((u) => ({
+            email: u.email,
+            name: u.name,
+            roleName: u.roleName,
+            team: u.team,
+            region: u.region,
+          }))}
+          value={who || null}
+          onChange={setWho}
+          loading={loading}
         />
+        {usersError ? (
+          <span className="text-destructive text-xs">
+            {`The user list could not be read: ${usersError}`}
+          </span>
+        ) : null}
+        {!loading && !active.length && !usersError ? (
+          <span className="text-muted-foreground text-xs">
+            No active users yet — add the team under Settings → Users first.
+          </span>
+        ) : null}
       </div>
       <RadioGroup value={role} onValueChange={(v) => setRole(v as AssignRole)} className="gap-3">
         <div className="flex items-start gap-2">
@@ -326,23 +360,76 @@ function CloseDialog({
 }
 
 /** All four, mounted once on lead detail; `pending` picks which one is open. */
+/**
+ * F-06: the assessment said not_relevant and someone wants to convert anyway.
+ * That is allowed — the AI advises, people decide — but it is a decision, so
+ * the dialog states what the assessment said and the submit is the override,
+ * which the server stamps onto the audit trail.
+ */
+function ConvertOverrideDialog({
+  open,
+  onOpenChange,
+  score,
+  onSubmit,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  score: number | null;
+  onSubmit: () => Promise<boolean>;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (open) setBusy(false);
+  }, [open]);
+
+  return (
+    <ActionDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Convert against the assessment?"
+      description={`The AI assessed this lead as not relevant${
+        score != null ? ` and scored it ${score}/100` : ""
+      }. Converting anyway is allowed — the assessment advises, you decide — and the override is recorded on the lead's trail.`}
+      submitLabel="Convert anyway"
+      destructive
+      busy={busy}
+      canSubmit
+      onSubmit={async () => {
+        setBusy(true);
+        if (!(await onSubmit())) setBusy(false);
+      }}
+    >
+      <p className="text-muted-foreground text-sm">
+        If the assessment looks wrong, re-assessing with a better description is usually the
+        stronger move — the score follows the lead everywhere.
+      </p>
+    </ActionDialog>
+  );
+}
+
 export function LeadActionDialogs({
   pending,
   onOpenChange,
   defaultAssignee,
+  score,
   onLogCall,
   onNurture,
   onAssign,
   onCloseLead,
+  onConvertOverride,
 }: {
   pending: PendingLeadAction;
   /** Called with false when the open dialog is dismissed. */
   onOpenChange: (open: boolean) => void;
   defaultAssignee: string;
+  /** The assessment score, for the override dialog's honesty line (F-06). */
+  score?: number | null;
   onLogCall: (body: string) => Promise<boolean>;
   onNurture: (until: string) => Promise<boolean>;
   onAssign: (who: string, role: AssignRole) => Promise<boolean>;
   onCloseLead: (reason: string) => Promise<boolean>;
+  onConvertOverride: () => Promise<boolean>;
 }) {
   return (
     <>
@@ -355,6 +442,12 @@ export function LeadActionDialogs({
         onSubmit={onAssign}
       />
       <CloseDialog open={pending === "close"} onOpenChange={onOpenChange} onSubmit={onCloseLead} />
+      <ConvertOverrideDialog
+        open={pending === "convert-override"}
+        onOpenChange={onOpenChange}
+        score={score ?? null}
+        onSubmit={onConvertOverride}
+      />
     </>
   );
 }

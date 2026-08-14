@@ -31,6 +31,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { autoFocusField } from "@/lib/utils";
 import {
   Select,
   SelectContent,
@@ -138,17 +139,24 @@ function ActionDialog({
  * test): the RFP coordinator must be able to turn an attachment into a structured
  * list faster than she can read it, and a form that demands an area first cannot.
  */
+/**
+ * Who a new property belongs to. §4 — at least one of the three, filled
+ * progressively as the record matures. A lead-owned property is the normal case
+ * before a deal exists, which is why this is not just a deal id.
+ */
+export type OwnerScope = { leadId?: string; accountId?: string; dealId?: string };
+
 export function NewLocationDialog({
   open,
   onOpenChange,
-  dealId,
+  owner,
   parent,
   actor,
   onDone,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  dealId: string;
+  owner: OwnerScope;
   /** Null means a site at the top level. */
   parent: ProspectLocation | null;
   actor: string;
@@ -159,7 +167,7 @@ export function NewLocationDialog({
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [clientLevelLabel, setClientLevelLabel] = useState("");
-  const [addressLine, setAddressLine] = useState("");
+  const [street, setStreet] = useState("");
   const [city, setCity] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -170,7 +178,7 @@ export function NewLocationDialog({
     setName("");
     setCode("");
     setClientLevelLabel("");
-    setAddressLine("");
+    setStreet("");
     setCity("");
     setError(null);
     // `allowed` is derived from `parent`, which is in the dep list already.
@@ -182,12 +190,14 @@ export function NewLocationDialog({
     if (!name.trim() || busy) return;
     setBusy(true);
     setError(null);
-    const { error: err } = await createLocation(dealId, type, name.trim(), actor, {
+    const { error: err } = await createLocation(owner.dealId ?? "", type, name.trim(), actor, {
+      ...(owner.leadId ? { leadId: owner.leadId } : {}),
+      ...(owner.accountId ? { accountId: owner.accountId } : {}),
       ...(parent ? { parentId: parent.id } : {}),
       provenance: "manual",
       ...(code.trim() ? { code: code.trim() } : {}),
       ...(clientLevelLabel.trim() ? { clientLevelLabel: clientLevelLabel.trim() } : {}),
-      ...(addressLine.trim() ? { addressLine: addressLine.trim() } : {}),
+      ...(street.trim() ? { street: street.trim() } : {}),
       ...(city.trim() ? { city: city.trim() } : {}),
     });
     setBusy(false);
@@ -248,7 +258,7 @@ export function NewLocationDialog({
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder={type === "site" ? "e.g. Al Bayt Grill — Downtown" : "e.g. Ground floor lobby"}
-          autoFocus
+          autoFocus={autoFocusField()}
         />
       </div>
 
@@ -279,14 +289,18 @@ export function NewLocationDialog({
         </div>
       </div>
 
-      {type === "site" ? (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      {/* X-21 — offered at EVERY level, not just a site. This was gated on
+          `type === "site"`, and "Add inside" can never create a site, so a
+          building or a floor could not be given an address at all. Facilio hangs
+          a Location record off every level, and a surveyor dispatched to a
+          building needs its address as much as one sent to a site. */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="nl-address">Address</Label>
             <Input
               id="nl-address"
-              value={addressLine}
-              onChange={(e) => setAddressLine(e.target.value)}
+              value={street}
+              onChange={(e) => setStreet(e.target.value)}
             />
           </div>
           <div className="flex flex-col gap-1.5">
@@ -297,8 +311,7 @@ export function NewLocationDialog({
             The first thing an RFP contains and the last thing the surveyor needs. It also decides
             whether the site is inside a service area at all.
           </span>
-        </div>
-      ) : null}
+      </div>
     </ActionDialog>
   );
 }
@@ -666,7 +679,7 @@ export function LinkFacilioDialog({
             value={facilioId}
             onChange={(e) => setFacilioId(e.target.value)}
             className="font-mono text-xs"
-            autoFocus
+            autoFocus={autoFocusField()}
           />
         </div>
         <div className="flex flex-col gap-1.5">
@@ -764,18 +777,29 @@ export function RemoveDialog({
       error={error}
       busy={busy}
       submitLabel="Remove"
-      canSubmit
+      // X-22 — the reason is REQUIRED, and the server enforces it too. Removal
+      // cascades to everything inside, and nothing is ever hard-deleted, so this
+      // sentence is the only way anyone later learns why the building left.
+      // Gating here means the user finds that out from a disabled button rather
+      // than from a rejected save.
+      canSubmit={Boolean(reason.trim())}
       onSubmit={submit}
     >
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="rm-reason">Reason</Label>
+        <Label htmlFor="rm-reason">
+          Reason <span className="text-destructive">*</span>
+        </Label>
         <Input
           id="rm-reason"
           value={reason}
           onChange={(e) => setReason(e.target.value)}
           placeholder="e.g. Duplicate of Tower B"
-          autoFocus
+          autoFocus={autoFocusField()}
         />
+        <span className="text-muted-foreground text-xs">
+          Nothing is deleted — it leaves the pursuit and keeps its history. This is what anyone
+          reading that history later will see.
+        </span>
       </div>
     </ActionDialog>
   );
@@ -831,7 +855,7 @@ export function CopyForwardDialog({
     setLoading(true);
     setPick("");
     let live = true;
-    listLocations(sourceDeal, true).then(({ data, error: err }) => {
+    listLocations({ dealId: sourceDeal }, true).then(({ data, error: err }) => {
       if (!live) return;
       setLoading(false);
       if (err) return setError(err);

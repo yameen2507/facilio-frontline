@@ -9,15 +9,23 @@
  * app database has no boolean column. `if (l.isActive)` is true for `"false"`.
  */
 
-/** The same three words Facilio uses, so convert translates nothing. */
-export type LocationType = "site" | "building" | "space";
+/**
+ * The same five words Facilio uses, so convert translates nothing (v1.3 §2.3).
+ *
+ * `floor` is a REAL level, not a count on the building — it is its own module in
+ * Facilio with 10,139 live rows. Every level is optional except `site`: a space
+ * may hang off a floor, a building, a site, or another space (five deep).
+ */
+export type LocationType = "site" | "building" | "floor" | "space" | "zone";
 
-export const LOCATION_TYPES: LocationType[] = ["site", "building", "space"];
+export const LOCATION_TYPES: LocationType[] = ["site", "building", "floor", "space", "zone"];
 
 export const TYPE_LABEL: Record<LocationType, string> = {
   site: "Site",
   building: "Building",
+  floor: "Floor",
   space: "Space",
+  zone: "Zone",
 };
 
 /** §4.1 — is this real? */
@@ -88,10 +96,16 @@ export const DECISION_LABEL: Record<PursuitDecision, string> = {
 /** Which feed said it — the RFP and the surveyor WILL disagree (C25). */
 export type Provenance = "rfp" | "survey" | "crm" | "facilio_link" | "manual";
 
+/**
+ * ONE VOCABULARY (§6.2). These exact words go in the chips, the settle picker
+ * and every message — the build used one set of words for the chips and a
+ * different set for the picker, and leaked the raw `rfp` into a third place.
+ * Mirrors `src/domain/observation-state.ts`, which produces the server's copy.
+ */
 export const PROVENANCE_LABEL: Record<Provenance, string> = {
   rfp: "From documents",
   survey: "From the walk",
-  crm: "Earlier pursuit",
+  crm: "From an earlier pursuit",
   facilio_link: "Linked from Facilio",
   manual: "Entered by hand",
 };
@@ -106,31 +120,60 @@ export const CEILING_LABEL: Record<CeilingBand, string> = {
 
 export type ProspectLocation = {
   id: string;
-  dealId: string;
+  /** §4 — three owners, at least one always set. All three may be read. */
+  leadId?: string | null;
+  accountId?: string | null;
+  dealId?: string | null;
   surveyId?: string | null;
+  /** Shared by every row that is the same physical building, across pursuits. */
+  buildingKey?: string | null;
+  previousPursuitId?: string | null;
   type: LocationType;
   parentId?: string | null;
   /** The materialised lineage. Sorting by it IS depth-first tree order. */
   ancestryPath: string;
+  /** §2.3 rule 4 — the ancestry Facilio itself stores, as ids. */
+  siteId?: string | null;
+  buildingId?: string | null;
+  floorId?: string | null;
   name: string;
+  description?: string | null;
   code?: string | null;
+  /** Facilio's own human-readable number, back-filled at convert. */
+  localId?: number | null;
   /** What the CLIENT calls this level — "facility", "tower", "block". */
   clientLevelLabel?: string | null;
-  tagsJson?: string | null;
-  addressLine?: string | null;
+  /** A JSON array as TEXT — parse before use. The column is not `_json`. */
+  tags?: string | null;
+  // §3.2 — the address is a Location record in Facilio, so it takes those names.
+  locationName?: string | null;
+  street?: string | null;
   city?: string | null;
-  region?: string | null;
+  state?: string | null;
+  zip?: string | null;
   country?: string | null;
-  postcode?: string | null;
-  latitude?: number | null;
-  longitude?: number | null;
-  areaSqft?: number | null;
-  floorCount?: number | null;
+  lat?: number | null;
+  lng?: number | null;
+  locationPhone?: string | null;
+  facilioLocationId?: string | null;
+  // §3.3 — size and shape.
+  area?: number | null;
+  grossFloorArea?: number | null;
+  noOfBuildings?: number | null;
+  noOfFloors?: number | null;
+  noOfIndependentSpaces?: number | null;
+  noOfSubSpaces?: number | null;
+  /** An integer: -1 basement, 0 ground, 1 first. The name lives in `name`. */
+  floorLevel?: number | null;
+  maxOccupancy?: number | null;
+  operationHoursStart?: number | null;
+  operationHoursEnd?: number | null;
+  spaceCategoryId?: string | null;
+  siteType?: string | null;
+  classification?: string | null;
   roomCount?: number | null;
   restroomCount?: number | null;
-  floorLabel?: string | null;
   ceilingHeightBand?: CeilingBand | null;
-  spaceCategory?: string | null;
   pursuitDecision: PursuitDecision;
   pursuitDecisionNote?: string | null;
   provenance: Provenance;
@@ -142,7 +185,6 @@ export type ProspectLocation = {
   verdictVisitId?: string | null;
   facilioId?: string | null;
   facilioModule?: string | null;
-  previousPursuitId?: string | null;
   convertState: ConvertState;
   createdAt?: string | null;
 };
@@ -154,7 +196,8 @@ export type SiteOption = {
   code?: string | null;
   facilioId?: string | null;
   city?: string | null;
-  addressLine?: string | null;
+  /** Facilio's own name for it (§3.2) — was `addressLine` before v1.3. */
+  street?: string | null;
   /** Buildings and spaces beneath it. A platform `count(*)` arrives as a STRING. */
   childCount?: number | string | null;
 };
@@ -197,11 +240,42 @@ export function toTree(locations: ProspectLocation[]): TreeRow[] {
 }
 
 /** Which levels may sit under this one — mirrors `parentBlocker` in domain/. */
+/**
+ * What may be created INSIDE a given level, mirroring Facilio's own modules
+ * (verified against `get-<module>-metadata`, 15 Aug) and `PARENT_TYPES` in
+ * `src/domain/prospect-state.ts`, which is the copy the server enforces.
+ *
+ * Every level below site is optional, which is why a site offers `space`
+ * directly as well as `building` — 25,110 live Facilio spaces have no building,
+ * and a car park under a site is the ordinary case, not an edge one.
+ *
+ * A space accepts a space: that is the sub-space nesting, and Facilio's
+ * `create-space` takes a `space` parent for exactly this.
+ */
 export function childTypesOf(type: LocationType): LocationType[] {
-  if (type === "site") return ["building", "space"];
-  if (type === "building") return ["space"];
+  if (type === "site") return ["building", "floor", "space", "zone"];
+  if (type === "building") return ["floor", "space"];
+  if (type === "floor") return ["space"];
+  if (type === "space") return ["space"];
   return [];
 }
+
+/**
+ * The ancestors Facilio's create action REQUIRES for a level — not the
+ * immediate parent, the whole chain. `create-floor` wants `site` AND
+ * `building`; `create-space` wants `site` even when a floor is also given.
+ * Mirrors FACILIO_REQUIRED_ANCESTORS on the server.
+ */
+export const FACILIO_REQUIRED_ANCESTORS: Record<LocationType, LocationType[]> = {
+  site: [],
+  building: ["site"],
+  floor: ["site", "building"],
+  space: ["site"],
+  zone: ["site"],
+};
+
+/** Facilio has no `create-zone` action, so a zone can never be converted. */
+export const CONVERTIBLE_TYPES: LocationType[] = ["site", "building", "floor", "space"];
 
 /** A no_bid row drops out of every total (§5.1). */
 export const countsTowardScope = (d: PursuitDecision) => d !== "no_bid";
@@ -263,40 +337,112 @@ export const RECONCILIATION_DECISION_LABEL: Record<ReconciliationDecision, strin
 };
 
 /**
- * The fields an observation may set — mirrors `src/domain/observation-state.ts`,
- * which is the copy that decides. Kept in step by hand, like the template
- * builder's field-type list.
+ * The editable fields, grouped exactly as §3 groups them — because the one edit
+ * form renders them in these groups and §6.2 says "grouped as §3 groups them".
+ *
+ * Mirrors `src/domain/observation-state.ts`, which is the copy that decides.
+ * Kept in step by hand, like the template builder's field-type list.
+ *
+ * `tier` is §6.3: a PRICED field that two feeds disagree on stops and waits for
+ * a person, a DESCRIPTIVE one just takes the newer value and keeps the history.
+ * Nobody's proposal is mispriced because the RFP said "Dubai" and the surveyor
+ * said "Dubai, UAE".
  */
-export const OBSERVABLE_FIELD_LABEL: Record<string, string> = {
-  name: "Name",
-  code: "Client reference",
-  area_sqft: "Area (sq ft)",
-  floor_count: "Floors",
-  room_count: "Rooms",
-  restroom_count: "Restrooms",
-  floor_label: "Floor",
-  ceiling_height_band: "Ceiling height",
-  space_category: "Category",
-  address_line: "Address",
-  city: "City",
-  region: "Region",
-  country: "Country",
-  postcode: "Postcode",
-  latitude: "Latitude",
-  longitude: "Longitude",
+export type FieldTier = "priced" | "descriptive";
+
+export type EditableField = {
+  key: string;
+  label: string;
+  tier: FieldTier;
+  kind: "text" | "number" | "select";
+  /** The on-screen help line. C35 — every field says why it exists. */
+  help?: string;
+  options?: Array<{ value: string; label: string }>;
 };
 
-/** Which fields are numeric, so the detail form asks for the right keyboard. */
-export const NUMERIC_FIELDS = [
-  "area_sqft",
-  "floor_count",
-  "room_count",
-  "restroom_count",
-  "latitude",
-  "longitude",
+export type FieldGroup = { title: string; note?: string; fields: EditableField[] };
+
+export const EDIT_GROUPS: FieldGroup[] = [
+  {
+    title: "Identity",
+    fields: [
+      { key: "name", label: "Name", tier: "descriptive", kind: "text", help: "The only thing a phone call always gives you." },
+      { key: "code", label: "Client's reference", tier: "descriptive", kind: "text", help: "Their numbering, not ours — a tender response is scored against it." },
+      { key: "client_level_label", label: "What they call this level", tier: "descriptive", kind: "text", help: "Absorb their vocabulary rather than imposing ours — a facility, a tower, a block." },
+      { key: "description", label: "Description", tier: "descriptive", kind: "text", help: "Travels to Facilio when this converts." },
+      { key: "floor_level", label: "Floor level", tier: "descriptive", kind: "number", help: "A number, not a name: -1 basement, 0 ground, 1 first. Call it \"Mezzanine\" in the name." },
+    ],
+  },
+  {
+    title: "Address",
+    note: "The first thing an RFP contains and the last thing the surveyor needs. It also decides whether the site is inside a service area at all.",
+    fields: [
+      { key: "location_name", label: "Location name", tier: "descriptive", kind: "text" },
+      { key: "street", label: "Address", tier: "descriptive", kind: "text" },
+      { key: "city", label: "City", tier: "descriptive", kind: "text" },
+      { key: "state", label: "State / province", tier: "descriptive", kind: "text" },
+      { key: "zip", label: "Postcode", tier: "descriptive", kind: "text" },
+      { key: "country", label: "Country", tier: "descriptive", kind: "text", help: "Drives service-area matching — can we even serve here?" },
+      { key: "location_phone", label: "Site phone", tier: "descriptive", kind: "text", help: "The site's own number, not the account's." },
+      { key: "lat", label: "Latitude", tier: "descriptive", kind: "number" },
+      { key: "lng", label: "Longitude", tier: "descriptive", kind: "number" },
+    ],
+  },
+  {
+    title: "Size and shape",
+    note: "These price the job. If two feeds disagree on any of them, nothing is overwritten — the disagreement waits for a person.",
+    fields: [
+      { key: "area", label: "Area (sq ft)", tier: "priced", kind: "number", help: "The single most load-bearing number in the quote. Area drives hours, hours drive crew, crew drives price." },
+      { key: "gross_floor_area", label: "Gross floor area (sq ft)", tier: "priced", kind: "number", help: "Kept apart from net on purpose: the RFP's number and the surveyor's number are frequently these two different things." },
+      { key: "no_of_buildings", label: "Buildings", tier: "priced", kind: "number" },
+      { key: "no_of_floors", label: "Floors", tier: "priced", kind: "number", help: "A count on the building, which can sit alongside real floor records under it." },
+      { key: "no_of_independent_spaces", label: "Independent spaces", tier: "descriptive", kind: "number" },
+      { key: "no_of_sub_spaces", label: "Sub-spaces", tier: "descriptive", kind: "number" },
+      { key: "room_count", label: "Rooms", tier: "priced", kind: "number" },
+      { key: "restroom_count", label: "Restrooms", tier: "priced", kind: "number", help: "Priced and scored separately in every cleaning contract." },
+      { key: "max_occupancy", label: "Maximum occupancy", tier: "priced", kind: "number", help: "A real cleaning-frequency driver." },
+      {
+        key: "ceiling_height_band",
+        label: "Ceiling height",
+        tier: "priced",
+        kind: "select",
+        help: "A band, not a measurement — it changes the crew and the equipment, so it changes the price.",
+        options: [
+          { value: "standard_8_10ft", label: "8–10 ft" },
+          { value: "high_10_20ft", label: "10–20 ft (may need a lift)" },
+          { value: "very_high_20ft_plus", label: "20 ft+ (lift or scaffolding)" },
+        ],
+      },
+      { key: "operation_hours_start", label: "Opens at", tier: "priced", kind: "number", help: "When the building is open decides when the crew can work, which decides the rate." },
+      { key: "operation_hours_end", label: "Closes at", tier: "priced", kind: "number" },
+    ],
+  },
+  {
+    title: "Classification",
+    fields: [
+      { key: "space_category_id", label: "Category", tier: "descriptive", kind: "text" },
+      { key: "site_type", label: "Site type", tier: "descriptive", kind: "text" },
+      { key: "classification", label: "Classification", tier: "descriptive", kind: "text" },
+      { key: "local_id", label: "Facilio number", tier: "descriptive", kind: "number", help: "Facilio's own number, filled in when this converts. Distinct from the client's reference." },
+    ],
+  },
 ];
 
-export const OBSERVABLE_FIELDS = Object.keys(OBSERVABLE_FIELD_LABEL);
+export const EDITABLE_FIELDS: EditableField[] = EDIT_GROUPS.flatMap((g) => g.fields);
+
+export const OBSERVABLE_FIELD_LABEL: Record<string, string> = Object.fromEntries(
+  EDITABLE_FIELDS.map((f) => [f.key, f.label])
+);
+
+/** Which fields are numeric, so the form asks for the right keyboard. */
+export const NUMERIC_FIELDS = EDITABLE_FIELDS.filter((f) => f.kind === "number").map((f) => f.key);
+
+export const PRICED_FIELDS = EDITABLE_FIELDS.filter((f) => f.tier === "priced").map((f) => f.key);
+
+export const OBSERVABLE_FIELDS = EDITABLE_FIELDS.map((f) => f.key);
+
+export const fieldTier = (key: string): FieldTier =>
+  EDITABLE_FIELDS.find((f) => f.key === key)?.tier ?? "priced";
 
 /** How a value reads, whichever typed column holds it. Zero is a real answer. */
 export function observationValue(o: {

@@ -6,11 +6,11 @@
  * HashRouter.
  */
 
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import { SettingsLayout } from "./components/SettingsLayout";
 import { RateCards } from "./pages/RateCards";
 import { ServiceCoverage } from "./pages/ServiceCoverage";
-import { ServiceLinks } from "./pages/ServiceLinks";
+import { Services } from "./pages/Services";
 import { Permissions } from "./pages/Permissions";
 import { Roles } from "./pages/Roles";
 import { Users } from "./pages/Users";
@@ -20,7 +20,11 @@ export function SettingsRouter() {
     <Routes>
       <Route element={<SettingsLayout />}>
         <Route index element={<ServiceCoverage />} />
-        <Route path="service-links" element={<ServiceLinks />} />
+        <Route path="services" element={<Services />} />
+        {/* `service-links` was this route until 2026-08-15, when the app took
+            ownership of its services. Kept as a redirect because it is in
+            browser histories and in at least one bookmark. */}
+        <Route path="service-links" element={<Navigate to="/settings/services" replace />} />
         {/* One route, not `rate-cards/:cardId`: which card is being edited is
             component state, so the nav's exact match keeps this entry lit and
             the layout does not re-fade the pane on every card click. */}

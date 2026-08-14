@@ -221,8 +221,7 @@ server.addHandler({
     deltaValue: N("Magnitude — the mode owns the sign"),
     deltaReason: S("Mandatory for discount, markup and custom. The approver reads this"),
     isOptional: S("'true' shows the line but keeps it out of the totals (C10)"),
-    facilioServiceId: S("Facilio Services record id (C23) — nullable until L10"),
-    serviceCode: S("Our own catalogue code (fl_service_line.code)"),
+    serviceCode: S("A code from the service catalogue (Settings › Services). Blank prices a one-off"),
     notes: S("Internal notes"),
     actorEmail: ACTOR,
   },
@@ -243,8 +242,11 @@ server.addHandler({
         deltaValue: optNum(p, "deltaValue"),
         deltaReason: optStr(p, "deltaReason"),
         isOptional: optBool(p, "isOptional"),
-        facilioServiceId: optStr(p, "facilioServiceId"),
-        serviceCode: optStr(p, "serviceCode"),
+        // `supplied`, not `optStr`: `saveLine` only validates a service the
+        // caller NAMES, so "not mentioned" and "cleared" have to stay
+        // distinguishable — otherwise every edit re-validates a service the
+        // line already carries and a retired one freezes the line.
+        serviceCode: supplied(p, "serviceCode", optStr),
         notes: optStr(p, "notes"),
         actor: str(p, "actorEmail"),
       });
@@ -551,8 +553,7 @@ server.addHandler({
     ...ENV,
     rateCardId: S("Card this row belongs to"),
     rowId: S("Omit to add a new row"),
-    facilioServiceId: S("Facilio Services record id (C23)"),
-    serviceCode: S("Our own catalogue code"),
+    serviceCode: S("A code from the service catalogue (Settings › Services). Blank prices a one-off"),
     description: S("What this row prices"),
     estimationKey: S("Joins the survey's estimation_values to this price"),
     pricingBasis: S("unit | hour | visit"),
@@ -572,7 +573,6 @@ server.addHandler({
       return saveCardRow({
         rateCardId: str(p, "rateCardId"),
         rowId: optStr(p, "rowId"),
-        facilioServiceId: supplied(p, "facilioServiceId", optStr),
         serviceCode: supplied(p, "serviceCode", optStr),
         description: supplied(p, "description", optStr),
         estimationKey: supplied(p, "estimationKey", optStr),

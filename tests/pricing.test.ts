@@ -134,7 +134,6 @@ const RATE_ENTRIES: RateEntry[] = [
     estimationKey: "total_sqft",
     description: "General cleaning",
     serviceCode: "GC",
-    facilioServiceId: null,
     uom: "sqft",
     price: 10,
     conditionMultipliers: { "1": 1.5, "2": 1.25, "3": 1, "4": 0.9, "5": 0.85 },

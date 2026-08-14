@@ -77,6 +77,13 @@ export type Lead = {
 
   estimatedValue?: number | string | null;
   currency?: string | null;
+  /** D-05: one_off | recurring | both. Null on rows that predate the field. */
+  valueType?: string | null;
+  /** monthly | quarterly | annual — present exactly when the value recurs. */
+  valueFrequency?: string | null;
+  /** D-10: where it came from (referral, existing client, …) — `source` is
+      how it arrived. */
+  origin?: string | null;
 
   ownerEmail?: string | null;
   accountId?: string | null;
@@ -114,6 +121,11 @@ export type Analysis = {
   reasons?: string[];
   recommendation?: { nextAction?: string };
   understanding?: { missingInfo?: string[] };
+  /** X-07: which model and prompt produced this verdict — a score with no
+      provenance cannot be argued with. */
+  version?: number | null;
+  modelName?: string | null;
+  promptVersion?: string | null;
 };
 
 export type TimelineEvent = {

@@ -27,6 +27,7 @@ import { HashRouter, Navigate, Outlet, Route, Routes, useLocation } from "react-
 import Layout from "../layout";
 import { AccountsRouter } from "../features/accounts";
 import { ChatRouter } from "../features/chat";
+import { DealsRouter } from "../features/deals";
 import { LeadsRouter } from "../features/leads";
 import { ProposalsRouter } from "../features/proposals";
 import { ProspectsRouter } from "../features/prospects";
@@ -113,6 +114,7 @@ export function App() {
                     <Route path="accounts/*" element={<AccountsRouter />} />
                     <Route path="surveys/*" element={<SurveysRouter />} />
                     <Route path="templates/*" element={<TemplatesRouter />} />
+                    <Route path="deals/*" element={<DealsRouter />} />
                     <Route path="portfolio/*" element={<ProspectsRouter />} />
                     <Route path="proposals/*" element={<ProposalsRouter />} />
                     <Route path="settings/*" element={<SettingsRouter />} />

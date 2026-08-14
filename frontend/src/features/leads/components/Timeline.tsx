@@ -40,6 +40,7 @@ import {
 import { isToday, isYesterday } from "date-fns";
 import { cn } from "@/lib/utils";
 import { humanise, onDay } from "../../../lib/format";
+import { useUserDirectory } from "../../../app/users";
 import type { Assignment, TimelineEvent } from "../types/lead";
 
 // ── Event vocabulary ─────────────────────────────────────────────────────
@@ -207,6 +208,9 @@ const ROLE: Record<string, { Icon: LucideIcon; label: string }> = {
 };
 
 export const Ownership = ({ assignments }: { assignments: Assignment[] }) => {
+  // The person the lead went TO, by name (X-05) — the email stays in the row
+  // data and the audit trail, this is only how it reads.
+  const { nameOf } = useUserDirectory();
   if (!assignments.length) {
     return <div className="text-muted-foreground py-1 text-sm">Not assigned to anyone yet.</div>;
   }
@@ -230,7 +234,7 @@ export const Ownership = ({ assignments }: { assignments: Assignment[] }) => {
                   {onDay(a.createdAt)}
                 </span>
               </div>
-              <div className="text-foreground/90 text-sm break-words">{a.toUser}</div>
+              <div className="text-foreground/90 text-sm break-words">{nameOf(a.toUser)}</div>
               {a.reason ? <div className="text-muted-foreground text-xs">{a.reason}</div> : null}
             </div>
           </li>

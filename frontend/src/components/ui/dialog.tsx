@@ -2,7 +2,7 @@ import * as React from "react"
 import { XIcon } from "lucide-react"
 import { Dialog as DialogPrimitive } from "radix-ui"
 
-import { cn } from "@/lib/utils"
+import { autoFocusField, cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 
 function Dialog({
@@ -49,10 +49,24 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  onOpenAutoFocus,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
 }) {
+  // Fields spell their own `autoFocus={autoFocusField()}`, but Radix has a
+  // second route to the same keyboard: when nothing inside the panel took
+  // focus, it focuses the first tabbable child, which is usually a field. On a
+  // phone we park focus on the panel itself instead — it carries tabIndex -1,
+  // so Esc and a screen reader still start inside the dialog rather than back
+  // on the page behind it.
+  const parkFocusOnPanel = (event: Event) => {
+    onOpenAutoFocus?.(event)
+    if (event.defaultPrevented || autoFocusField()) return
+    event.preventDefault()
+    ;(event.currentTarget as HTMLElement | null)?.focus({ preventScroll: true })
+  }
+
   return (
     <DialogPortal data-slot="dialog-portal">
       <DialogOverlay />
@@ -74,6 +88,7 @@ function DialogContent({
           "fixed top-[50%] left-[50%] z-50 grid max-h-[calc(100dvh-2rem)] w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto rounded-lg border bg-background p-6 shadow-lg duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg [&>*]:min-w-0",
           className
         )}
+        onOpenAutoFocus={parkFocusOnPanel}
         {...props}
       >
         {children}

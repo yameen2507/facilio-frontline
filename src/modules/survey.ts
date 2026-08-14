@@ -39,6 +39,7 @@ import {
   stampColumnFor as visitStampColumnFor,
   type VisitStatus,
 } from "../domain/visit-state";
+import { advanceDealTo } from "./deal";
 import {
   reconcile,
   type ReconcileItem,
@@ -47,7 +48,7 @@ import {
   type ReconcileRequiredAnswer,
 } from "../domain/reconcile";
 import { checksum, type RevisionTrigger } from "../domain/survey-revision";
-// The prospect portfolio owns fl_prospect_location. The survey lane consumes it
+// The prospect portfolio owns fl_portfolio_location. The survey lane consumes it
 // through these two rather than writing the table itself, so the level rules and
 // the ancestry stamp have exactly one implementation (portfolio v1.1 §5).
 import { ANCESTRY_SEPARATOR } from "../domain/ancestry";
@@ -73,6 +74,8 @@ export interface SurveyRecord {
   templateName?: string | null;
   templateVersionNo?: number | null;
   leadUserEmail: string | null;
+  /** Joined on the list read (X-05) — the lead as a person, not an address. */
+  leadUserName?: string | null;
   contractIntent: string | null;
   targetCompletionDate: string | null;
   revisionNo: number | null;
@@ -82,6 +85,8 @@ export interface SurveyRecord {
   notes?: string | null;
   statusChangedAt: string | null;
   createdAt: string;
+  /** D-33: the earliest still-planned visit, joined on the list read. */
+  nextVisitAt?: string | null;
   visitCount?: number;
   assigneeCount?: number;
 }
@@ -177,6 +182,13 @@ export function listSurveys(filters: SurveyListFilters): {
             s.status_changed_at, s.created_at,
             (select a.name from fl_account a where a.id = s.account_id) as account_name,
             (select t.name from fl_form_template t where t.id = s.template_id) as template_name,
+            (select u.name from fl_user u
+              where u.email_norm = s.lead_user_email limit 1) as lead_user_name,
+            -- D-33: the next planned visit — the one date a coordinator
+            -- actually scans this list for.
+            (select min(v.scheduled_start) from fl_survey_visit v
+              where v.survey_id = s.id and v.is_active = 'true'
+                and v.status = 'planned') as next_visit_at,
             (select count(*) from fl_survey_visit v
               where v.survey_id = s.id and v.is_active = 'true') as visit_count,
             (select count(*) from fl_survey_assignee sa
@@ -263,15 +275,26 @@ export function surveyDetail(id: string): SurveyDetail {
         ) x) as visits_arr,
 
        (select coalesce(json_agg(x order by x.assigned_at), '[]'::json) from (
-          select id, user_email, participation, discipline_ids_json, assigned_at
-            from fl_survey_assignee
-           where survey_id = $1 and is_active = 'true'
+          select a.id, a.user_email, a.user_id, a.participation, a.discipline_ids_json,
+                 a.assigned_at,
+                 (select u.name from fl_user u where u.id = a.user_id limit 1) as user_name
+            from fl_survey_assignee a
+           where a.survey_id = $1 and a.is_active = 'true'
         ) x) as assignees_arr,
 
        (select coalesce(json_agg(x order by x.ancestry_path), '[]'::json) from (
+          -- Aliased back to v1.1's name on purpose. row-map.ts camelCases the
+          -- COLUMN name, so a bare "area" would reach the record page as
+          -- node.area and miss NUMERIC_COLUMNS' coercion — the tree renders
+          -- node.areaSqft and wants a number, not a string. The alias keeps the
+          -- wire contract while the read moves to the v1.3 table. floor_label
+          -- is gone from v1.3 with no replacement of that meaning, so the tree
+          -- simply stops carrying it.
+          -- (No backticks in here: this comment lives inside a JS template
+          -- literal, and one would close the string.)
           select id, name, type, parent_id, ancestry_path, verdict, verdict_note,
-                 area_sqft, room_count, restroom_count, floor_label, provenance, facilio_id
-            from fl_prospect_location
+                 area as area_sqft, room_count, restroom_count, provenance, facilio_id
+            from fl_portfolio_location
            where deal_id = (select deal_id from fl_survey where id = $1)
              and is_active = 'true'
            limit 500
@@ -311,7 +334,7 @@ export function surveyDetail(id: string): SurveyDetail {
               or entity_id in (select id from fl_survey_section_entry where survey_id = $1)
               or entity_id in (select id from fl_survey_answer where survey_id = $1)
               or entity_id in (select id from fl_survey_observation where survey_id = $1)
-              or entity_id in (select id from fl_prospect_location where survey_id = $1)
+              or entity_id in (select id from fl_portfolio_location where survey_id = $1)
            limit 500
         ) x) as photos_arr,
 
@@ -424,7 +447,7 @@ function resolveSurveySite(
 
   if (input.prospectSiteId) {
     const site = one<{ id: string }>(
-      `select id from fl_prospect_location
+      `select id from fl_portfolio_location
         where id = $1 and deal_id = $2 and type = 'site' and is_active = 'true' limit 1`,
       [input.prospectSiteId, input.dealId]
     );
@@ -525,6 +548,10 @@ export function createSurvey(input: CreateSurveyInput): { survey: SurveyRecord }
     body: refNo,
     meta: { dealId: deal.id, templateId: template?.id ?? null, prospectSiteId },
   });
+
+  // Raising a survey IS the deal entering Survey Required (deal.md stage 3).
+  // Forward-only and never throwing: a deal already estimating stays put.
+  advanceDealTo(deal.id, "survey_required", input.actor, `Survey ${refNo} raised`);
 
   if (input.scheduledStart) {
     scheduleVisit(
@@ -909,7 +936,7 @@ function generateQualifications(surveyId: string, actor: string | null): number 
   const rows = many<{ source: string; refId: string | null; text: string }>(
     `select 'not_visited_node' as source, n.id as ref_id,
             'The ' || n.name || ' was not accessible during the walk and is excluded from this proposal.' as text
-       from fl_prospect_location n
+       from fl_portfolio_location n
       where n.deal_id = (select deal_id from fl_survey where id = $1)
         and n.is_active = 'true' and n.provenance in ('rfp', 'crm')
         and n.verdict in ('not_visited', 'not_found')
@@ -1121,8 +1148,13 @@ function handoffPayload(surveyId: string): Record<string, unknown> {
        (select coalesce(json_agg(x order by x.ancestry_path), '[]'::json) from (
           select n.id as node_id, n.type, n.name, n.parent_id,
                  n.ancestry_path, n.provenance, n.verdict,
+                 -- The KEYS stay at v1.1's names even though the columns moved
+                 -- to v1.3's: proposal.ts prints these attributes off the
+                 -- literals 'area_sqft' and 'floor_count' (AREA_KEYS), and the
+                 -- handoff payload is a contract between the two lanes, not a
+                 -- view of the table. Only the source column changes here.
                  json_build_object(
-                   'area_sqft', n.area_sqft, 'floor_count', n.floor_count,
+                   'area_sqft', n.area, 'floor_count', n.no_of_floors,
                    'room_count', n.room_count, 'restroom_count', n.restroom_count
                  ) as attributes,
                  (select row_to_json(o) from (
@@ -1132,7 +1164,7 @@ function handoffPayload(surveyId: string): Record<string, unknown> {
                      where prospect_node_id = n.id and is_active = 'true'
                      order by observed_at desc limit 1
                   ) o) as observation
-            from fl_prospect_location n
+            from fl_portfolio_location n
            where n.deal_id = (select deal_id from fl_survey where id = $1)
              and n.is_active = 'true'
            limit 500
@@ -1331,6 +1363,14 @@ export interface NodeImportInput {
   floorCount?: number | null;
   roomCount?: number | null;
   restroomCount?: number | null;
+  /**
+   * ACCEPTED AND DISCARDED. v1.3 dropped `floor_label` and put an INTEGER
+   * `floor_level` in its place, and a tender document's "Ground" is a label,
+   * not a level — deriving 0 from the word would be inventing data in a column
+   * that feeds convert. The field stays on the input so the schema in
+   * functions/survey/index.ts keeps parsing, and the value is simply not
+   * written until someone specifies the mapping.
+   */
   floorLabel?: string | null;
   facilioId?: string | null;
 }
@@ -1343,6 +1383,13 @@ const CLAIMED_FIELDS: readonly (keyof NodeImportInput)[] = [
   "restroomCount",
 ];
 
+/**
+ * These are `field_key` VALUES in `fl_prospect_observation`, not column names in
+ * the portfolio table — which is why they keep v1.1's spelling while the node
+ * columns move to v1.3's. The observation table was not renamed, and its stored
+ * keys are what `reconcile.ts` matches a survey observation against; respelling
+ * them here would orphan every claimed row already written.
+ */
 const FIELD_COLUMN: Record<string, string> = {
   areaSqft: "area_sqft",
   floorCount: "floor_count",
@@ -1420,22 +1467,24 @@ export function importNodes(input: {
       node.floorCount ?? null, // $8
       node.roomCount ?? null, // $9
       node.restroomCount ?? null, // $10
-      node.floorLabel ?? null, // $11
-      node.facilioId ?? null, // $12
-      input.actor, // $13
-      now, // $14
+      // `floorLabel` is deliberately absent: v1.3 has no column of that meaning
+      // (see NodeImportInput). Dropped from the LIST as well as from the
+      // statements, because a parameter nothing references is a bind error.
+      node.facilioId ?? null, // $11
+      input.actor, // $12
+      now, // $13
     ];
 
     // Update first, and note what is NOT in the SET list: `verdict`,
     // `verdict_note` and their stamps. A re-read of the documents may correct
     // what was claimed; it may not erase what somebody found on site.
     const updated = mutate(
-      `update fl_prospect_location
+      `update fl_portfolio_location
           set type = $4,
               parent_id = case when $5 is null then null else md5($5)::uuid::text end,
-              name = $6, area_sqft = $7, floor_count = $8,
-              room_count = $9, restroom_count = $10, floor_label = $11, facilio_id = $12,
-              updated_by = $13, updated_at = $14, is_active = 'true',
+              name = $6, area = $7, no_of_floors = $8,
+              room_count = $9, restroom_count = $10, facilio_id = $11,
+              updated_by = $12, updated_at = $13, is_active = 'true',
               survey_id = coalesce(survey_id, $3), deal_id = $2
         where id = md5($1)::uuid::text and provenance in ('rfp', 'crm')`,
       p
@@ -1443,17 +1492,17 @@ export function importNodes(input: {
 
     if (!updated) {
       nodes += mutate(
-        `insert into fl_prospect_location
+        `insert into fl_portfolio_location
            (id, deal_id, survey_id, type, parent_id, ancestry_path, name,
-            area_sqft, floor_count, room_count, restroom_count, floor_label, facilio_id,
+            area, no_of_floors, room_count, restroom_count, facilio_id,
             provenance, verdict, created_by, updated_by, is_active, data_json,
             created_at, updated_at)
          select md5($1)::uuid::text, $2, $3, $4,
                 case when $5 is null then null else md5($5)::uuid::text end,
-                md5($1)::uuid::text, $6, $7, $8, $9, $10, $11, $12,
-                'rfp', 'unverified', $13, $13, 'true', '{}', $14, $14
+                md5($1)::uuid::text, $6, $7, $8, $9, $10, $11,
+                'rfp', 'unverified', $12, $12, 'true', '{}', $13, $13
           where not exists (
-            select 1 from fl_prospect_location where id = md5($1)::uuid::text)`,
+            select 1 from fl_portfolio_location where id = md5($1)::uuid::text)`,
         p
       );
     } else {
@@ -1513,9 +1562,9 @@ export function importNodes(input: {
   // `<>` clause makes each pass a no-op once the paths have settled.
   for (let depth = 0; depth < 5; depth += 1) {
     const moved = mutate(
-      `update fl_prospect_location c
+      `update fl_portfolio_location c
           set ancestry_path = p.ancestry_path || '${ANCESTRY_SEPARATOR}' || c.id
-         from fl_prospect_location p
+         from fl_portfolio_location p
         where c.parent_id = p.id
           and c.deal_id = $1 and c.provenance in ('rfp', 'crm')
           and c.is_active = 'true'
@@ -1586,7 +1635,7 @@ export function setNodeVerdict(input: {
     dealId: string | null;
   }>(
     `select id, name, provenance, survey_id, deal_id
-       from fl_prospect_location where id = $1 and is_active = 'true' limit 1`,
+       from fl_portfolio_location where id = $1 and is_active = 'true' limit 1`,
     [input.nodeId]
   );
   if (!node) throw new Error(`node ${input.nodeId} not found`);
@@ -1604,7 +1653,7 @@ export function setNodeVerdict(input: {
 
   const now = nowIso();
   const updated = mutate(
-    `update fl_prospect_location
+    `update fl_portfolio_location
         set verdict = $2, verdict_note = $3, verdict_by = $4, verdict_at = $5,
             verdict_visit_id = $6, updated_by = $4, updated_at = $5
       where id = $1 and is_active = 'true'`,
@@ -1642,10 +1691,12 @@ export function setNodeVerdict(input: {
   }
 
   const fresh = one(
+    // Same aliasing as `surveyDetail`: this row goes back to the same tree the
+    // record page draws, so it has to arrive shaped the same way.
     `select id, name, type, parent_id, ancestry_path, verdict, verdict_note,
-            verdict_at, verdict_by, area_sqft, room_count, restroom_count, floor_label,
+            verdict_at, verdict_by, area as area_sqft, room_count, restroom_count,
             provenance, facilio_id
-       from fl_prospect_location where id = $1 limit 1`,
+       from fl_portfolio_location where id = $1 limit 1`,
     [input.nodeId]
   );
 
@@ -1693,7 +1744,7 @@ export function reconcileSurvey(input: { surveyId: string; actor: string | null 
     `select
        (select coalesce(json_agg(x order by x.node_id), '[]'::json) from (
           select id as node_id, name, provenance, verdict
-            from fl_prospect_location
+            from fl_portfolio_location
            where deal_id = (select deal_id from fl_survey where id = $1)
              and is_active = 'true'
            limit 500
@@ -1923,19 +1974,19 @@ export function surveyCounts(surveyId: string): SurveyCounts {
   // silently attaching itself to the wrong scope.
   const row = one<Record<string, unknown>>(
     `select
-       (select count(*) from fl_prospect_location
+       (select count(*) from fl_portfolio_location
          where deal_id = (select deal_id from fl_survey where id = $1)
            and is_active = 'true'
            and provenance in ('rfp', 'crm')) as seeded_nodes,
 
-       (select count(*) from fl_prospect_location
+       (select count(*) from fl_portfolio_location
          where deal_id = (select deal_id from fl_survey where id = $1)
            and is_active = 'true'
            and provenance in ('rfp', 'crm')
            and verdict is not null
            and verdict <> 'unverified') as verdicted_nodes,
 
-       (select count(*) from fl_prospect_location
+       (select count(*) from fl_portfolio_location
          where deal_id = (select deal_id from fl_survey where id = $1)
            and is_active = 'true'
            and provenance in ('rfp', 'crm')
@@ -1962,6 +2013,22 @@ export function surveyCounts(surveyId: string): SurveyCounts {
                 or coalesce(a.value_json, '') not in ('', '[]', '{}', 'null'))
        ) as answered_required,
 
+       -- D-22's floor: ANY question with an answer, required or not. Same
+       -- emptiness predicate as answered_required above — the two must agree
+       -- on what "answered" means or the gate and the progress bar drift.
+       (select count(distinct a.question_instance_id)
+          from fl_survey_answer a
+          join fl_survey_question_instance q on q.id = a.question_instance_id
+         where a.survey_id = $1 and a.is_active = 'true'
+           and q.is_active = 'true'
+           and (a.is_na = 'true'
+                or coalesce(a.value_text, '') <> ''
+                or a.value_number is not null
+                or a.value_date is not null
+                or coalesce(a.value_bool, '') <> ''
+                or coalesce(a.value_json, '') not in ('', '[]', '{}', 'null'))
+       ) as answered_questions,
+
        (select count(*) from fl_survey_reconciliation
          where survey_id = $1 and is_active = 'true'
            and status = 'open') as open_reconciliation_items,
@@ -1980,6 +2047,7 @@ export function surveyCounts(surveyId: string): SurveyCounts {
     notVisitedNodes: n("notVisitedNodes"),
     requiredQuestions: n("requiredQuestions"),
     answeredRequired: n("answeredRequired"),
+    answeredQuestions: n("answeredQuestions"),
     openReconciliationItems: n("openReconciliationItems"),
     openVisits: n("openVisits"),
   };
@@ -2055,8 +2123,9 @@ export function transitionSurvey(input: {
     status: SurveyStatus;
     leadUserEmail: string | null;
     reworkCount: number | null;
+    dealId: string | null;
   }>(
-    `select id, ref_no, status, lead_user_email, rework_count
+    `select id, ref_no, status, lead_user_email, rework_count, deal_id
        from fl_survey where id = $1 and is_active = 'true' limit 1`,
     [input.surveyId]
   );
@@ -2169,6 +2238,12 @@ export function transitionSurvey(input: {
     },
   });
 
+  // A completed survey IS the deal reaching Survey Completed (deal.md stage 4).
+  // After the status update lands, so a guard rejection can never nudge the deal.
+  if (move.to === "completed" && survey.dealId) {
+    advanceDealTo(survey.dealId, "survey_completed", input.actor, `Survey ${survey.refNo} completed`);
+  }
+
   const fresh = one<SurveyRecord>(
     `select ${SURVEY_COLUMNS},
             (select a.name from fl_account a where a.id = s.account_id) as account_name,
@@ -2182,6 +2257,74 @@ export function transitionSurvey(input: {
   return { survey: fresh as SurveyRecord, warnings };
 }
 
+/**
+ * P-06's one button. The surveyor taps Submit and the routing does the rest:
+ * a different lead → `pending_review` (T5); the actor IS the lead → straight
+ * through to `completed` (T5 then T7 in sequence, so the ledger keeps both
+ * gates even though one tap crossed them, and the T7 leg still runs the full
+ * submit guard and the revision freeze).
+ *
+ * WHO may tap it: an active assignee or the recorded lead — this is the
+ * surveyor's control, not the coordinator's. That check lives here rather than
+ * in the state table because it needs rows.
+ */
+export function submitSurvey(input: {
+  surveyId: string;
+  actor: string | null;
+}): { survey: SurveyRecord; warnings: string[] } {
+  const survey = one<{ id: string; status: SurveyStatus; leadUserEmail: string | null }>(
+    `select id, status, lead_user_email from fl_survey
+      where id = $1 and is_active = 'true' limit 1`,
+    [input.surveyId]
+  );
+  if (!survey) throw new Error(`survey ${input.surveyId} not found`);
+
+  const actor = (input.actor ?? "").trim().toLowerCase();
+  if (!actor) throw new Error("submit needs the actor's email");
+
+  const isAssignee = Boolean(
+    one(
+      `select 1 as x from fl_survey_assignee
+        where survey_id = $1 and user_email = $2 and is_active = 'true' limit 1`,
+      [input.surveyId, actor]
+    )
+  );
+  const isLead = actor === (survey.leadUserEmail ?? "").toLowerCase();
+  if (!isAssignee && !isLead) {
+    throw new Error("only an assigned surveyor can submit this survey");
+  }
+
+  if (survey.status !== "in_progress" && survey.status !== "pending_review") {
+    throw new Error(`a ${survey.status} survey cannot be submitted`);
+  }
+  if (survey.status === "pending_review" && !isLead) {
+    throw new Error("already submitted — waiting on the lead's review");
+  }
+
+  // Leg one: T5, unless the survey already sits in review.
+  let result =
+    survey.status === "in_progress"
+      ? transitionSurvey({ surveyId: input.surveyId, toStatus: "pending_review", actor: input.actor })
+      : null;
+
+  // Leg two, lead only: T7 — the freeze and the full guard set run inside.
+  if (isLead) {
+    const completed = transitionSurvey({
+      surveyId: input.surveyId,
+      toStatus: "completed",
+      actor: input.actor,
+    });
+    result = {
+      survey: completed.survey,
+      warnings: [...(result?.warnings ?? []), ...completed.warnings],
+    };
+  }
+
+  // Non-lead path always ran leg one (the pending_review-and-not-lead case
+  // threw above), so result is set on every surviving branch.
+  return result as { survey: SurveyRecord; warnings: string[] };
+}
+
 // ── Assignment ────────────────────────────────────────────────────────────────
 
 export interface AssigneeInput {
@@ -2193,6 +2336,10 @@ export interface AssigneeInput {
 export interface AssigneeRecord {
   id: string;
   userEmail: string;
+  /** Resolved from fl_user at assign time (F-22) — null only on legacy rows. */
+  userId: string | null;
+  /** Joined at read so the UI never prints a raw email (X-05). */
+  userName: string | null;
   participation: string | null;
   disciplineIds: string[] | null;
   assignedAt: string | null;
@@ -2200,10 +2347,11 @@ export interface AssigneeRecord {
 
 const readAssignees = (surveyId: string): AssigneeRecord[] =>
   many<AssigneeRecord>(
-    `select id, user_email, participation, discipline_ids_json, assigned_at
-       from fl_survey_assignee
-      where survey_id = $1 and is_active = 'true'
-      order by assigned_at
+    `select a.id, a.user_email, a.user_id, a.participation, a.discipline_ids_json, a.assigned_at,
+            (select u.name from fl_user u where u.id = a.user_id limit 1) as user_name
+       from fl_survey_assignee a
+      where a.survey_id = $1 and a.is_active = 'true'
+      order by a.assigned_at
       limit 100`,
     [surveyId]
   );
@@ -2236,6 +2384,33 @@ export function assignSurveyors(
     .filter((a) => a.userEmail.includes("@"));
   if (!cleaned.length) throw new Error("assignees[] needs at least one userEmail");
 
+  /**
+   * F-22 / D-19: an assignee IS a user record, not a string that looks like
+   * one. Every email must resolve against fl_user before anything is written —
+   * a typo'd address used to become a phantom surveyor who never saw the visit.
+   * Inactive users are refused too: deactivation is an explicit admin decision,
+   * and assignment is exactly the door it exists to close.
+   */
+  const emailParams = cleaned.map((_, i) => `$${i + 1}`).join(", ");
+  const found = many<{ id: string; emailNorm: string; name: string; status: string }>(
+    `select id, email_norm, name, status from fl_user
+      where email_norm in (${emailParams})
+      limit ${cleaned.length}`,
+    cleaned.map((a) => a.userEmail)
+  );
+  const byEmail = new Map(found.map((u) => [u.emailNorm, u]));
+  for (const a of cleaned) {
+    const user = byEmail.get(a.userEmail);
+    if (!user) {
+      throw new Error(
+        `${a.userEmail} has no user record — add them under Settings → Users first`
+      );
+    }
+    if (user.status !== "active") {
+      throw new Error(`${user.name} (${a.userEmail}) is inactive and cannot be assigned`);
+    }
+  }
+
   const now = nowIso();
   const params: unknown[] = [surveyId, actor, now];
   const tuples = cleaned.map((a, i) => {
@@ -2245,11 +2420,16 @@ export function assignSurveyors(
     return `($${base}${cast}, $${base + 1}${cast}, $${base + 2}${cast})`;
   });
 
+  // `user_id` is re-resolved inside the INSERT rather than passed as a
+  // parameter: the id sits one subquery away, and this keeps the tuple list
+  // (and its $-numbering) untouched.
   mutate(
     `insert into fl_survey_assignee
-       (id, survey_id, user_email, participation, discipline_ids_json, is_lead,
+       (id, survey_id, user_email, user_id, participation, discipline_ids_json, is_lead,
         assigned_by, assigned_at, is_active, data_json, created_at, updated_at)
-     select gen_random_uuid()::text, $1, v.user_email, v.participation, v.discipline_ids, 'false',
+     select gen_random_uuid()::text, $1, v.user_email,
+            (select u.id from fl_user u where u.email_norm = v.user_email limit 1),
+            v.participation, v.discipline_ids, 'false',
             $2, $3, 'true', '{}', $3, $3
        from (values ${tuples.join(", ")}) as v(user_email, participation, discipline_ids)
       where not exists (select 1 from fl_survey_assignee a
@@ -2263,7 +2443,8 @@ export function assignSurveyors(
     entityId: surveyId,
     kind: "assigned",
     actor,
-    body: cleaned.map((a) => a.userEmail).join(", "),
+    // Names, since they are in hand — the timeline is read by people (X-05).
+    body: cleaned.map((a) => byEmail.get(a.userEmail)?.name ?? a.userEmail).join(", "),
   });
 
   return { assignees: readAssignees(surveyId) };
@@ -2337,6 +2518,53 @@ export function setLead(
     [surveyId]
   );
   return { survey: fresh as SurveyRecord };
+}
+
+// ── The person picker ─────────────────────────────────────────────────────────
+
+export interface UserOption {
+  id: string;
+  name: string;
+  email: string;
+  roleName: string | null;
+  team: string | null;
+  region: string | null;
+  /** Planned visits in the next 7 days on surveys this user is assigned to. */
+  weekVisits: number;
+}
+
+/**
+ * D-19: a coordinator thinks in people and availability, so the picker shows
+ * both — who exists (fl_user, active only) and how loaded they are (planned
+ * visits over the coming week). The load is a correlated count rather than a
+ * join because fl_survey_visit_assignee is never written yet: today a person's
+ * visits are the planned visits of the surveys they are assigned to.
+ *
+ * Reading fl_user here does not widen the access function — functions share
+ * one schema, and this is the survey module's own input boundary, the same
+ * standing as listDeals reading fl_deal.
+ */
+export function listUserOptions(now = nowIso()): { users: UserOption[] } {
+  const horizon = new Date(new Date(now).getTime() + 7 * 24 * 3600 * 1000).toISOString();
+  const rows = many<UserOption & { weekVisits: unknown }>(
+    `select u.id, u.name, u.email, u.team, u.region,
+            (select r.name from fl_role r where r.id = u.role_id limit 1) as role_name,
+            (select count(*)
+               from fl_survey_visit v
+              where v.is_active = 'true' and v.status = 'planned'
+                and v.scheduled_start >= $1 and v.scheduled_start < $2
+                and exists (select 1 from fl_survey_assignee sa
+                             where sa.survey_id = v.survey_id
+                               and sa.user_email = u.email_norm
+                               and sa.is_active = 'true')) as week_visits
+       from fl_user u
+      where u.status = 'active'
+      order by u.name
+      limit 500`,
+    [now, horizon]
+  );
+  // count(*) arrives as a string on this platform — coerce once, here.
+  return { users: rows.map((u) => ({ ...u, weekVisits: Number(u.weekVisits ?? 0) })) };
 }
 
 // ── The deal picker ───────────────────────────────────────────────────────────

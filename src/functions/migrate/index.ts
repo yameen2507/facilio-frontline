@@ -51,6 +51,9 @@ const TABLES = [
   "fl_survey_observation",
   "fl_prospect_node",
   "fl_prospect_location",
+  // The v1.3 shape. fl_prospect_location above is frozen at v1.1's column
+  // names and is abandoned in place, never deleted — see db-import.mjs.
+  "fl_portfolio_location",
   "fl_prospect_convert_log",
   "fl_prospect_observation",
   "fl_survey_recommendation",
@@ -239,9 +242,12 @@ server.addHandler({
  * was written to accept exactly it. When `survey.submit` ships it must produce
  * this same shape; if the two ever disagree, §5 is right and this is wrong.
  *
- * `suggested_service_id` is deliberately null: C23 wants a Facilio Services id
- * and L10 is unresolved. Substituting an app-local id to make it non-null is
- * the exact mistake C23 exists to prevent.
+ * `suggested_service_id` is deliberately null. It now holds a code from this
+ * app's own catalogue (2026-08-15), so a real one COULD be put here — but a
+ * recommendation the surveyor did not tie to a service is the ordinary case,
+ * and the fixture is more useful exercising that path than the happy one.
+ * `draftLinesFromHandoff` drops an unrecognised code with a warning rather
+ * than pricing it, which is the behaviour worth keeping exercised.
  */
 const HANDOFF_FIXTURE = {
   payload_version: "1.0",
@@ -455,8 +461,8 @@ server.addHandler({
 
     const created = { rateCard: 0, rateCardRows: 0, revision: 0, serviceLines: 0 };
 
-    // C23: a rate card row names a service by CODE, and that code must be a
-    // real `fl_service_line` row — `saveCardRow` now refuses otherwise. The
+    // A rate card row names a service by CODE, and that code must be a real
+    // catalogue row — `saveCardRow` refuses otherwise (modules/service.ts). The
     // demo priced four services that existed nowhere, so the card it seeds
     // could not have been re-saved through the UI it ships with. KEC is
     // deliberately absent from this list: the catalogue already carries it,
@@ -712,7 +718,7 @@ server.addHandler({
           verdict_by, verdict_at, verdict_visit_id, facilio_id, facilio_module,
           convert_state, tags_json, created_by, updated_by, is_active,
           data_json, created_at, updated_at)
-       select n.id, n.deal_id, n.survey_id, n.node_type, n.parent_id,
+       select n.id, n.deal_id, n.survey_id, n.node_type, n.parent_node_id,
               n.ancestry_path, n.name, n.code,
               n.area_sqft, n.floor_count, n.room_count, n.restroom_count, n.floor_label,
               n.space_category,
@@ -757,6 +763,261 @@ server.addHandler({
           orphans.length > 0
             ? "These rows have a parent_id pointing at nothing — a pre-existing C3 violation. Reported, not repaired."
             : "Every copied row's lineage resolves.",
+      },
+    };
+  },
+});
+
+/**
+ * Walks `fl_prospect_location` (v1.1 names) forward into `fl_portfolio_location`
+ * (the v1.3 shape).
+ *
+ * The v1.1 table is FROZEN — no ALTER, and re-import 500s — so v1.3's renames
+ * and its twenty-seven new columns could only land as a new table. This carries
+ * the rows across. Idempotent the same way its predecessor is: the destination
+ * keeps the source id, so a re-run inserts nothing and finishes a half-done copy.
+ *
+ * TWO THINGS ARE DELIBERATELY NOT INVENTED HERE:
+ *
+ *  - `floor_label` is dropped, not parsed. v1.3 §3.3 replaces it with an INTEGER
+ *    `floor_level` (-1 basement, 0 ground, 1 first) and the old column held free
+ *    text like "Ground". Guessing -1 from the word "Basement" would be fabricated
+ *    data in a column that feeds convert. The label survives in the source table.
+ *
+ *  - `building_key` is left null. §4.3 stamps it at copy-forward or at a paste a
+ *    human confirms — a schema migration is neither, and we have no evidence any
+ *    two of these rows are the same physical building. The list groups on
+ *    `coalesce(building_key, id)`, so a null row is simply its own group.
+ *
+ * The ancestry FKs ARE stamped, because they are derived and not guessed: a site
+ * is its own site_id, and a child inherits its parent's. That is §2.2's check —
+ * the one 145 live production buildings would fail — made true here before the
+ * first write rather than asserted after it.
+ */
+server.addHandler({
+  name: "copy-portfolio-locations",
+  description:
+    "Copy fl_prospect_location rows into fl_portfolio_location (the v1.3 rename and reshape). Maps area_sqft→area, address_line→street, region→state, postcode→zip, latitude/longitude→lat/lng, floor_count→no_of_floors, space_category→space_category_id. Drops floor_label (v1.3 replaces it with an integer floor_level). Then stamps the site_id/building_id ancestry columns from parentage. Idempotent — the destination keeps the source id.",
+  parameters: {},
+  execute: async () => {
+    const copied = mutate(
+      `insert into fl_portfolio_location
+         (id, deal_id, survey_id, type, parent_id, ancestry_path, name, code,
+          client_level_label, tags, street, city, state, country, zip,
+          lat, lng, area, no_of_floors, room_count, restroom_count,
+          ceiling_height_band, space_category_id, pursuit_decision,
+          pursuit_decision_note, provenance, source_attachment_id, verdict,
+          verdict_note, verdict_by, verdict_at, verdict_visit_id, facilio_id,
+          facilio_module, previous_pursuit_id, convert_state,
+          created_by, updated_by, is_active, data_json, created_at, updated_at)
+       select l.id, l.deal_id, l.survey_id, l.type, l.parent_id, l.ancestry_path,
+              l.name, l.code, l.client_level_label, coalesce(l.tags_json, '[]'),
+              l.address_line, l.city, l.region, l.country, l.postcode,
+              l.latitude, l.longitude, l.area_sqft, l.floor_count,
+              l.room_count, l.restroom_count, l.ceiling_height_band,
+              l.space_category, l.pursuit_decision, l.pursuit_decision_note,
+              l.provenance, l.source_attachment_id, l.verdict, l.verdict_note,
+              l.verdict_by, l.verdict_at, l.verdict_visit_id, l.facilio_id,
+              l.facilio_module, l.previous_pursuit_id, l.convert_state,
+              l.created_by, l.updated_by, l.is_active,
+              coalesce(l.data_json, '{}'), l.created_at, l.updated_at
+         from fl_prospect_location l
+        where not exists (
+                select 1 from fl_portfolio_location p where p.id = l.id)`
+    );
+
+    // §2.3 rule 4 — materialise the ancestry the way BaseSpace carries it.
+    // Three statements because there are no transactions and the old tree is
+    // only three levels deep; each is idempotent on its own.
+    const sites = mutate(
+      `update fl_portfolio_location set site_id = id
+        where type = 'site' and site_id is null`
+    );
+    const buildings = mutate(
+      `update fl_portfolio_location c
+          set site_id = p.site_id, building_id = c.id
+         from fl_portfolio_location p
+        where p.id = c.parent_id and c.type = 'building' and c.building_id is null`
+    );
+    const spaces = mutate(
+      `update fl_portfolio_location c
+          set site_id = p.site_id, building_id = p.building_id
+         from fl_portfolio_location p
+        where p.id = c.parent_id and c.type = 'space' and c.site_id is null`
+    );
+
+    const source = count(`select count(*) as c from fl_prospect_location`);
+    const dest = count(`select count(*) as c from fl_portfolio_location`);
+
+    // §7 rule 3's pre-flight, run here as a test rather than promised later:
+    // every building must carry a site. This is the check production fails
+    // 145 times over.
+    const rootless = many<{ id: string; name: string; type: string }>(
+      `select id, name, type from fl_portfolio_location
+        where is_active = 'true' and site_id is null and type <> 'site'
+        limit 50`
+    );
+
+    return {
+      ok: true,
+      data: {
+        copied,
+        stamped: { sites, buildings, spaces },
+        sourceRows: source,
+        destinationRows: dest,
+        missingSite: rootless.length,
+        rootless,
+        note:
+          rootless.length > 0
+            ? "These rows carry no site_id — the §2.2 orphan condition. Reported, not repaired."
+            : "Every row resolves to a site.",
+      },
+    };
+  },
+});
+
+/**
+ * Two repairs the v1.3 cutover needs, in the order they have to happen.
+ *
+ * ONE — RENAME THE LEGACY FIELD KEYS. `fl_prospect_observation.field_key` holds
+ * the key by VALUE, and the v1.3 renames changed those keys. An observation
+ * written as `area_sqft` is now unreadable: `columnFor` throws on it and
+ * `labelFor` falls through to printing the raw key at a user, which is the very
+ * leak §6.2 set out to close. The observation table itself is not renamed (§8
+ * keeps it), so only the values move.
+ *
+ * `floor_label` has no v1.3 equivalent — the replacement is an integer
+ * `floor_level` and "Ground" is not an integer — so those rows are counted and
+ * LEFT ALONE rather than guessed at. They stay legible as history.
+ *
+ * TWO — RESYNC THE ATTRIBUTE CACHE (X-2). The location's columns are a cache of
+ * the accepted observation, and X-1 could leave the two disagreeing: settle
+ * wrote the cache and then threw on the bind bug before marking the ledger, and
+ * there are no transactions to roll that back. The result was a list showing the
+ * REJECTED value while the detail page showed the accepted one. The ledger is
+ * the source of truth, so the cache is rewritten from it, never the reverse.
+ *
+ * Read-only where it can be: it reports every divergence it finds, including
+ * the ones it fixes, so the repair is auditable rather than silent.
+ */
+server.addHandler({
+  name: "repair-observation-cache",
+  description:
+    "v1.3 cutover repair. Renames legacy observation field keys to their v1.3 names (area_sqft→area, floor_count→no_of_floors, address_line→street, region→state, postcode→zip, latitude→lat, longitude→lng, space_category→space_category_id) and then rewrites each location's cached column from its ACCEPTED observation, fixing rows where X-1's partial write left the cache holding a rejected value. Idempotent. Reports every divergence it corrects.",
+  parameters: {},
+  execute: async () => {
+    const RENAMES: Array<[string, string]> = [
+      ["area_sqft", "area"],
+      ["floor_count", "no_of_floors"],
+      ["address_line", "street"],
+      ["region", "state"],
+      ["postcode", "zip"],
+      ["latitude", "lat"],
+      ["longitude", "lng"],
+      ["space_category", "space_category_id"],
+    ];
+
+    const renamed: Record<string, number> = {};
+    for (const [from, to] of RENAMES) {
+      const n = mutate(`update fl_prospect_observation set field_key = $2 where field_key = $1`, [
+        from,
+        to,
+      ]);
+      if (n) renamed[`${from} → ${to}`] = n;
+    }
+
+    const strandedFloorLabels = count(
+      `select count(*) as c from fl_prospect_observation where field_key = 'floor_label'`
+    );
+
+    // The accepted observation per (location, field). One row each by
+    // definition — two accepted rows for one field is itself the corruption.
+    const accepted = many<{
+      locationId: string;
+      fieldKey: string;
+      valueText: string | null;
+      valueNumber: number | null;
+    }>(
+      `select prospect_node_id as location_id, field_key, value_text, value_number
+         from fl_prospect_observation
+        where is_accepted = 'true'
+        limit 5000`
+    );
+
+    const COLUMN: Record<string, string> = {
+      area: "area",
+      gross_floor_area: "gross_floor_area",
+      no_of_floors: "no_of_floors",
+      no_of_buildings: "no_of_buildings",
+      room_count: "room_count",
+      restroom_count: "restroom_count",
+      ceiling_height_band: "ceiling_height_band",
+      max_occupancy: "max_occupancy",
+      operation_hours_start: "operation_hours_start",
+      operation_hours_end: "operation_hours_end",
+      name: "name",
+      description: "description",
+      code: "code",
+      client_level_label: "client_level_label",
+      floor_level: "floor_level",
+      space_category_id: "space_category_id",
+      site_type: "site_type",
+      classification: "classification",
+      no_of_independent_spaces: "no_of_independent_spaces",
+      no_of_sub_spaces: "no_of_sub_spaces",
+      location_name: "location_name",
+      street: "street",
+      city: "city",
+      state: "state",
+      country: "country",
+      zip: "zip",
+      location_phone: "location_phone",
+      lat: "lat",
+      lng: "lng",
+      local_id: "local_id",
+    };
+
+    const corrected: Array<{ locationId: string; field: string; was: unknown; now: unknown }> = [];
+    const unknownKeys = new Set<string>();
+
+    for (const a of accepted) {
+      const column = COLUMN[a.fieldKey];
+      if (!column) {
+        unknownKeys.add(a.fieldKey);
+        continue;
+      }
+      const value = a.valueNumber !== null ? a.valueNumber : a.valueText;
+
+      // Only write where they actually differ, so the report counts real
+      // divergences rather than every row in the table.
+      const row = one<{ id: string; current: string | null }>(
+        `select id, ${column}::text as current from fl_portfolio_location
+          where id = $1 limit 1`,
+        [a.locationId]
+      );
+      if (!row) continue;
+      if ((row.current ?? "") === (value === null ? "" : String(value))) continue;
+
+      mutate(`update fl_portfolio_location set ${column} = $2 where id = $1`, [
+        a.locationId,
+        value,
+      ]);
+      corrected.push({ locationId: a.locationId, field: a.fieldKey, was: row.current, now: value });
+    }
+
+    return {
+      ok: true,
+      data: {
+        renamed,
+        strandedFloorLabels,
+        acceptedChecked: accepted.length,
+        corrected: corrected.length,
+        divergences: corrected,
+        unknownFieldKeys: [...unknownKeys],
+        note:
+          corrected.length > 0
+            ? "These locations were showing a value the ledger had not accepted. Rewritten from the ledger."
+            : "Every cached attribute already matches its accepted observation.",
       },
     };
   },
@@ -809,6 +1070,21 @@ server.addHandler({
       data: { revisions: report.length, broken: broken.length, report },
       error: broken.length ? `${broken.length} frozen revision(s) cannot be priced` : undefined,
     };
+  },
+});
+
+server.addHandler({
+  name: "deal-stages",
+  description:
+    "Rewrite the legacy deal stage 'open' (convert.ts's pre-deal-module placeholder) to 'opportunity', " +
+    "the lifecycle's real first stage. Idempotent — reruns match nothing.",
+  parameters: {},
+  execute: async () => {
+    const updated = mutate(
+      `update fl_deal set stage = 'opportunity', updated_at = $1 where stage = 'open'`,
+      [nowIso()]
+    );
+    return { ok: true, data: { updated } };
   },
 });
 

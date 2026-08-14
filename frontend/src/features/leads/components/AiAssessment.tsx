@@ -192,6 +192,11 @@ export function AiAssessment({
           </div>
           <div className="text-muted-foreground mt-1.5 text-xs">
             out of 100 · assessed {ago(lead.analysedAt)}
+            {/* X-07: the verdict's provenance — which model, which prompt,
+                which run — so a score can be argued with, not just believed. */}
+            {analysis.modelName ? ` · ${analysis.modelName}` : ""}
+            {analysis.promptVersion ? ` · prompt ${analysis.promptVersion}` : ""}
+            {analysis.version != null ? ` · run ${analysis.version}` : ""}
           </div>
         </div>
         <span className="flex-1" aria-hidden="true" />

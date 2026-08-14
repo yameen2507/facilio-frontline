@@ -15,7 +15,7 @@
  * building. With no walk there are no survey entries, so something other than the
  * survey has to build the tree.
  *
- * THIS MODULE IS THE ONLY WRITER of `fl_prospect_location`. The survey lane
+ * THIS MODULE IS THE ONLY WRITER of `fl_portfolio_location`. The survey lane
  * reaches it through `createLocation` / `createSpaceOnWalk` rather than its own
  * SQL, so the ancestry rule and the level rules have exactly one implementation.
  *
@@ -25,7 +25,7 @@
  * (L9/L20/L21/L22 are all unanswered), and writing it against an unverified API
  * shape would be, in §3a's words, a wish rather than a requirement.
  *
- * ATTRIBUTES ARE A CACHE (§4.3). `area_sqft`, `room_count`, `name` and friends
+ * ATTRIBUTES ARE A CACHE (§4.3). `area`, `room_count`, `name` and friends
  * are *the latest accepted observation*, and acceptance is the only thing that
  * writes them. `update` here therefore records an observation and lets the
  * acceptance flow land the value — it does not poke the column. That rule is why
@@ -35,6 +35,7 @@
 import { childAncestry, isDescendantOf, rootAncestry } from "../domain/ancestry";
 import {
   acceptanceFor,
+  type AcceptanceOutcome,
   columnFor,
   decisionPicks,
   decisionWritesCache,
@@ -44,6 +45,7 @@ import {
   FIELD_KEYS,
   labelFor,
   reconciliationBlocker,
+  tierFor,
   typeValue,
   RECONCILIATION_DECISIONS,
   type FieldKey,
@@ -69,33 +71,91 @@ import {
 } from "../domain/prospect-state";
 import { many, mutate, nowIso, one } from "../shared/db";
 import { appendEvent } from "../shared/events";
+import { executeAction } from "../shared/facilio";
 
-/** Read shape. Booleans are strings — the app database has no boolean column. */
+/**
+ * The table. v1.3 §3.
+ *
+ * Its predecessor `fl_prospect_location` is FROZEN at v1.1's column names — the
+ * app role has no ALTER and re-import 500s — so the v1.3 shape could only land
+ * as a new table. The old one is abandoned in place, never deleted, and
+ * `migrate.copy-portfolio-locations` carried every row across keeping its id.
+ */
+const TABLE = "fl_portfolio_location";
+
+/**
+ * Read shape. Booleans are strings — the app database has no boolean column.
+ *
+ * FIELD NAMES ARE FACILIO'S OWN (§3's naming rule): `area` not `areaSqft`,
+ * `street` not `addressLine`, `state` not `region`, `zip` not `postcode`. v1.1
+ * claimed that principle for three type words and then abandoned it for thirty
+ * columns; applying it properly is what makes convert a copy rather than a
+ * translation.
+ */
 export interface ProspectLocation {
   id: string;
-  dealId: string;
+  // §4 — three nullable owners, at least one always set, filled progressively
+  // as the record matures. Enforced here because no CHECK constraint exists.
+  leadId: string | null;
+  accountId: string | null;
+  dealId: string | null;
   surveyId: string | null;
+  /** §4.3 — shared by every row that is the same physical building. */
+  buildingKey: string | null;
+  previousPursuitId: string | null;
   type: LocationType;
   parentId: string | null;
+  // §2.3 rule 4 — materialised ancestry, the shape BaseSpace actually uses.
+  siteId: string | null;
+  buildingId: string | null;
+  floorId: string | null;
   ancestryPath: string;
   name: string;
+  description: string | null;
   code: string | null;
+  localId: number | null;
   clientLevelLabel: string | null;
-  tagsJson: string | null;
-  addressLine: string | null;
+  /**
+   * A JSON array, AS TEXT — callers parse it themselves.
+   *
+   * §3.1 names this field `tags`, and L15 is answered: CSV inference has no
+   * jsonb, so it is a text column either way. The consequence is easy to trip
+   * over — `row-map` only auto-parses columns whose name ENDS in `_json`, so
+   * `tags_json` would have arrived parsed and `tags` arrives as a string. Taking
+   * the spec's name is the right trade (it is the name convert maps from), but
+   * it has to be stated. The old `tagsJson` field, incidentally, was never
+   * populated at all: the mapper stripped the suffix and emitted `tags`.
+   */
+  tags: string | null;
+  // §3.2 — the address is a Location record in Facilio, so these take its names.
+  locationName: string | null;
+  street: string | null;
   city: string | null;
-  region: string | null;
+  state: string | null;
+  zip: string | null;
   country: string | null;
-  postcode: string | null;
-  latitude: number | null;
-  longitude: number | null;
-  areaSqft: number | null;
-  floorCount: number | null;
+  lat: number | null;
+  lng: number | null;
+  locationPhone: string | null;
+  facilioLocationId: string | null;
+  // §3.3 — size and shape.
+  area: number | null;
+  grossFloorArea: number | null;
+  noOfBuildings: number | null;
+  noOfFloors: number | null;
+  noOfIndependentSpaces: number | null;
+  noOfSubSpaces: number | null;
+  /** An integer: -1 basement, 0 ground, 1 first. The name lives in `name`. */
+  floorLevel: number | null;
+  maxOccupancy: number | null;
+  operationHoursStart: number | null;
+  operationHoursEnd: number | null;
+  spaceCategoryId: string | null;
+  siteType: string | null;
+  classification: string | null;
   roomCount: number | null;
   restroomCount: number | null;
-  floorLabel: string | null;
   ceilingHeightBand: string | null;
-  spaceCategory: string | null;
   pursuitDecision: PursuitDecision;
   pursuitDecisionNote: string | null;
   provenance: Provenance;
@@ -107,18 +167,21 @@ export interface ProspectLocation {
   verdictVisitId: string | null;
   facilioId: string | null;
   facilioModule: string | null;
-  previousPursuitId: string | null;
   convertState: ConvertState;
   createdAt: string;
 }
 
-const COLUMNS = `id, deal_id, survey_id, type, parent_id, ancestry_path, name, code,
-  client_level_label, tags_json, address_line, city, region, country, postcode,
-  latitude, longitude, area_sqft, floor_count, room_count, restroom_count,
-  floor_label, ceiling_height_band, space_category, pursuit_decision,
-  pursuit_decision_note, provenance, source_attachment_id, verdict, verdict_note,
-  verdict_by, verdict_at, verdict_visit_id, facilio_id, facilio_module,
-  previous_pursuit_id, convert_state, created_at`;
+const COLUMNS = `id, lead_id, account_id, deal_id, survey_id, building_key,
+  previous_pursuit_id, type, parent_id, site_id, building_id, floor_id,
+  ancestry_path, name, description, code, local_id, client_level_label, tags,
+  location_name, street, city, state, zip, country, lat, lng, location_phone,
+  facilio_location_id, area, gross_floor_area, no_of_buildings, no_of_floors,
+  no_of_independent_spaces, no_of_sub_spaces, floor_level, max_occupancy,
+  operation_hours_start, operation_hours_end, space_category_id, site_type,
+  classification, room_count, restroom_count, ceiling_height_band,
+  pursuit_decision, pursuit_decision_note, provenance, source_attachment_id,
+  verdict, verdict_note, verdict_by, verdict_at, verdict_visit_id, facilio_id,
+  facilio_module, convert_state, created_at`;
 
 /** Guards an enum without trusting the caller. Mirrors the other modules. */
 function inSet<T extends string>(value: unknown, allowed: readonly T[], field: string): T {
@@ -136,35 +199,122 @@ const trimOrNull = (v: unknown): string | null => {
 // ── Reads ────────────────────────────────────────────────────────────────────
 
 /**
- * The whole tree for a pursuit, in depth-first order.
+ * THE LIST (§5). Every property, with deal as one filter among several.
  *
- * `order by ancestry_path` IS depth-first order, because a child's path is its
- * parent's plus a separator — so no client-side sort is needed and none should
- * be added. Full scan, per §12 F-5: accepted, and named as a week-one limit.
+ * v1.1 made this deal-gated and the module was a Deal tab wearing a module's
+ * clothes — you could not answer *"which of this client's buildings have we
+ * already been inside?"* without picking a pursuit first. Passing no scope now
+ * returns everything, which is what makes Portfolio a top-level surface; passing
+ * one scopes it to a lead, an account or a deal, and the same component serves
+ * all four surfaces.
+ *
+ * ORDER IS STABLE AND EXPLICIT (§5.3, fixing X-11): `ancestry_path` IS
+ * depth-first order, because a child's path is its parent's plus a separator,
+ * and `name` breaks ties so two identical rows always land adjacent instead of
+ * scattered. With no indexes this is an in-memory sort on a full scan — say so
+ * rather than pretend it scales (§12 F-5).
  */
-export function listLocations(input: {
-  dealId: string;
+export interface ListLocationsInput {
+  /** All three optional. None set = the global list. */
+  leadId?: string | null;
+  accountId?: string | null;
+  dealId?: string | null;
   type?: LocationType | null;
   includeNoBid?: boolean;
-}): { locations: ProspectLocation[] } {
-  const params: unknown[] = [input.dealId];
-  let sql = `select ${COLUMNS} from fl_prospect_location
-              where deal_id = $1 and is_active = 'true'`;
+  pursuitDecision?: PursuitDecision | null;
+  verdict?: Verdict | null;
+  /** `true` = already in Facilio, `false` = not yet, null = either. */
+  inFacilio?: boolean | null;
+  country?: string | null;
+  state?: string | null;
+  city?: string | null;
+  /** Matches a single tag inside the JSON array, which is text here (L15). */
+  tag?: string | null;
+  /**
+   * §5.2's last filter, and the one that makes this a screen people live in
+   * rather than look at: the RFP coordinator's actual work queue.
+   */
+  needsAttention?: "unsettled" | "missing_area" | "not_visited" | null;
+  /** Matches name, code, local_id or street. */
+  search?: string | null;
+}
 
-  if (input.type) {
-    params.push(input.type);
-    sql += ` and type = $${params.length}`;
-  }
+export function listLocations(input: ListLocationsInput): { locations: ProspectLocation[] } {
+  const params: unknown[] = [];
+  const where: string[] = ["is_active = 'true'"];
+
+  const scope = (column: string, value: string | null | undefined) => {
+    const v = trimOrNull(value);
+    if (!v) return;
+    params.push(v);
+    where.push(`${column} = $${params.length}`);
+  };
+  scope("lead_id", input.leadId);
+  scope("account_id", input.accountId);
+  scope("deal_id", input.dealId);
+  scope("type", input.type);
+  scope("pursuit_decision", input.pursuitDecision);
+  scope("verdict", input.verdict);
+  scope("country", input.country);
+  scope("state", input.state);
+  scope("city", input.city);
+
   // `no_bid` drops out of every total (§5.1), so it is excluded unless asked for.
-  if (!input.includeNoBid) sql += ` and pursuit_decision <> 'no_bid'`;
+  if (!input.includeNoBid) where.push(`pursuit_decision <> 'no_bid'`);
 
-  sql += ` order by ancestry_path limit 2000`;
+  if (input.inFacilio === true) where.push(`coalesce(facilio_id, '') not in ('', 'none')`);
+  if (input.inFacilio === false) where.push(`coalesce(facilio_id, '') in ('', 'none')`);
+
+  const tag = trimOrNull(input.tag);
+  if (tag) {
+    // `tags` is text holding a JSON array (L15 — CSV inference has no jsonb), so
+    // this is a substring match on the quoted value rather than a containment
+    // operator. Quoting both sides stops "car" matching "carpark".
+    params.push(`%"${tag}"%`);
+    where.push(`tags like $${params.length}`);
+  }
+
+  const search = trimOrNull(input.search);
+  if (search) {
+    params.push(`%${search.toLowerCase()}%`);
+    const p = `$${params.length}`;
+    where.push(
+      `(lower(name) like ${p} or lower(coalesce(code, '')) like ${p}
+        or lower(coalesce(street, '')) like ${p}
+        or coalesce(local_id, 0)::text like ${p})`
+    );
+  }
+
+  switch (input.needsAttention) {
+    case "unsettled":
+      where.push(
+        `exists (select 1 from fl_prospect_observation o
+                  where o.prospect_node_id = ${TABLE}.id
+                    and coalesce(o.is_accepted, 'false') = 'false'
+                    and o.superseded_by_observation_id is null)`
+      );
+      break;
+    case "missing_area":
+      // Area is the number that prices the job; a row without one cannot be bid.
+      where.push(`(area is null or area = 0)`);
+      break;
+    case "not_visited":
+      where.push(`verdict in ('unverified', 'not_visited')`);
+      break;
+    default:
+      break;
+  }
+
+  const sql = `select ${COLUMNS} from ${TABLE}
+                where ${where.join(" and ")}
+                order by ancestry_path, name
+                limit 2000`;
   return { locations: many<ProspectLocation>(sql, params) };
 }
 
 export function getLocation(locationId: string): { location: ProspectLocation } {
   const location = one<ProspectLocation>(
-    `select ${COLUMNS} from fl_prospect_location where id = $1 and is_active = 'true' limit 1`,
+    `select ${COLUMNS} from ${TABLE} where id = $1 and is_active = 'true' limit 1`,
     [locationId]
   );
   if (!location) throw new Error(`location ${locationId} not found`);
@@ -187,7 +337,7 @@ export function listSites(dealId: string): {
     code: string | null;
     facilioId: string | null;
     city: string | null;
-    addressLine: string | null;
+    street: string | null;
     childCount: number;
   }>;
 } {
@@ -197,14 +347,14 @@ export function listSites(dealId: string): {
     code: string | null;
     facilioId: string | null;
     city: string | null;
-    addressLine: string | null;
+    street: string | null;
     childCount: number;
   }>(
-    `select l.id, l.name, l.code, l.facilio_id, l.city, l.address_line,
-            (select count(*) from fl_prospect_location c
+    `select l.id, l.name, l.code, l.facilio_id, l.city, l.street,
+            (select count(*) from ${TABLE} c
               where c.ancestry_path like l.ancestry_path || '/%'
                 and c.is_active = 'true') as child_count
-       from fl_prospect_location l
+       from ${TABLE} l
       where l.deal_id = $1 and l.type = 'site' and l.is_active = 'true'
       order by l.name
       limit 500`,
@@ -216,22 +366,46 @@ export function listSites(dealId: string): {
 // ── Create ───────────────────────────────────────────────────────────────────
 
 export interface CreateLocationInput {
-  dealId: string;
+  /**
+   * §4 — the three owners are all optional here and at least one must be set.
+   * A location can be born from an enquiry before any deal exists ("the full
+   * addresses" arrive with the RFP), so demanding `dealId` would make the Lead
+   * portfolio impossible. The guard is in `createLocation`, not the type,
+   * because "at least one of three" is not expressible here.
+   */
+  leadId?: string | null;
+  accountId?: string | null;
+  dealId?: string | null;
   type: LocationType;
   name: string;
   parentId?: string | null;
   provenance?: Provenance | null;
   surveyId?: string | null;
+  description?: string | null;
   code?: string | null;
   clientLevelLabel?: string | null;
-  addressLine?: string | null;
+  /** Shared by every row that is the same physical building (§4.3). */
+  buildingKey?: string | null;
+  locationName?: string | null;
+  street?: string | null;
   city?: string | null;
-  region?: string | null;
+  state?: string | null;
   country?: string | null;
-  postcode?: string | null;
+  zip?: string | null;
+  locationPhone?: string | null;
   sourceAttachmentId?: string | null;
   verdict?: Verdict | null;
   actor: string | null;
+}
+
+/** Just enough of the parent to apply the level and ancestry rules. */
+interface ParentRow {
+  id: string;
+  type: LocationType;
+  ancestryPath: string;
+  siteId: string | null;
+  buildingId: string | null;
+  floorId: string | null;
 }
 
 /**
@@ -251,50 +425,86 @@ export function createLocation(input: CreateLocationInput): { location: Prospect
   const name = trimOrNull(input.name);
   if (!name) throw new Error("a location needs a name — it is the one mandatory field");
 
+  // §4's ownership rule, enforced here because no CHECK constraint is creatable.
+  // A row owned by nobody is unreachable from every surface in the product.
+  const leadId = trimOrNull(input.leadId);
+  const accountId = trimOrNull(input.accountId);
+  const dealId = trimOrNull(input.dealId);
+  if (!leadId && !accountId && !dealId) {
+    throw new Error("a location needs an owner — a lead, an account or a deal");
+  }
+
   const provenance = input.provenance
     ? inSet(input.provenance, PROVENANCES, "provenance")
     : "manual";
 
-  let parent: { id: string; type: LocationType; ancestryPath: string } | null = null;
+  let parent: ParentRow | null = null;
   if (input.parentId) {
-    parent = one<{ id: string; type: LocationType; ancestryPath: string }>(
-      `select id, type, ancestry_path from fl_prospect_location
-        where id = $1 and deal_id = $2 and is_active = 'true' limit 1`,
-      [input.parentId, input.dealId]
+    // Scoped to the same OWNER, not to the deal alone: a lead-owned location
+    // has no deal yet, and matching on deal_id would have refused its children.
+    parent = one<ParentRow>(
+      `select id, type, ancestry_path, site_id, building_id, floor_id from ${TABLE}
+        where id = $1 and is_active = 'true'
+          and ((deal_id is not null and deal_id = $2)
+            or (account_id is not null and account_id = $3)
+            or (lead_id is not null and lead_id = $4))
+        limit 1`,
+      [input.parentId, dealId, accountId, leadId]
     );
-    // Scoped to the deal: a parent from another pursuit would graft this whole
-    // subtree under someone else's property.
-    if (!parent) throw new Error(`parent ${input.parentId} is not a location on this deal`);
+    // A parent from another pursuit would graft this whole subtree under
+    // someone else's property.
+    if (!parent) throw new Error(`parent ${input.parentId} is not a location on this pursuit`);
   }
 
   const levelBlock = parentBlocker(type, parent?.type ?? null);
   if (levelBlock) throw new Error(levelBlock);
 
+  // §2.3 rule 4 — the materialised ancestry Facilio actually stores. Derived
+  // from the parent, never asked for: a building inherits its parent's site, a
+  // floor its building, a space whichever of the three sit above it. This is
+  // the check 145 live production buildings would fail, applied before the
+  // write instead of lamented after it.
+  const siteId = type === "site" ? null : (parent?.siteId ?? (parent?.type === "site" ? parent.id : null));
+  const buildingId =
+    type === "building" ? null : (parent?.buildingId ?? (parent?.type === "building" ? parent.id : null));
+  const floorId = type === "floor" ? null : (parent?.floorId ?? (parent?.type === "floor" ? parent.id : null));
+
   const now = nowIso();
   const row = one<{ id: string }>(
-    `insert into fl_prospect_location
-       (id, deal_id, survey_id, type, parent_id, ancestry_path, name, code,
-        client_level_label, tags_json, address_line, city, region, country, postcode,
-        pursuit_decision, provenance, source_attachment_id, verdict, convert_state,
-        created_by, updated_by, is_active, data_json, created_at, updated_at)
-     values (gen_random_uuid()::text, $1, $2, $3, $4, '', $5, $6,
-             $7, '[]', $8, $9, $10, $11, $12,
-             'undecided', $13, $14, $15, 'not_converted',
-             $16, $16, 'true', '{}', $17, $17)
+    `insert into ${TABLE}
+       (id, lead_id, account_id, deal_id, survey_id, building_key, type, parent_id,
+        site_id, building_id, floor_id, ancestry_path, name, description, code,
+        client_level_label, tags, location_name, street, city, state, country, zip,
+        location_phone, pursuit_decision, provenance, source_attachment_id, verdict,
+        convert_state, created_by, updated_by, is_active, data_json, created_at, updated_at)
+     values (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7,
+             $8, $9, $10, '', $11, $12, $13,
+             $14, '[]', $15, $16, $17, $18, $19, $20,
+             $21, 'undecided', $22, $23, $24,
+             'not_converted', $25, $25, 'true', '{}', $26, $26)
      returning id`,
     [
-      input.dealId,
+      leadId,
+      accountId,
+      dealId,
       trimOrNull(input.surveyId),
+      trimOrNull(input.buildingKey),
       type,
       parent?.id ?? null,
+      siteId,
+      buildingId,
+      floorId,
       name,
+      trimOrNull(input.description),
       trimOrNull(input.code),
       trimOrNull(input.clientLevelLabel),
-      trimOrNull(input.addressLine),
+      trimOrNull(input.locationName),
+      trimOrNull(input.street),
       trimOrNull(input.city),
-      trimOrNull(input.region),
+      trimOrNull(input.state),
       trimOrNull(input.country),
-      trimOrNull(input.postcode),
+      trimOrNull(input.zip),
+      trimOrNull(input.locationPhone),
       provenance,
       trimOrNull(input.sourceAttachmentId),
       input.verdict ? inSet(input.verdict, VERDICTS, "verdict") : "unverified",
@@ -305,9 +515,19 @@ export function createLocation(input: CreateLocationInput): { location: Prospect
   if (!row) throw new Error("location insert returned no row");
 
   // Ancestry needs the id, which only exists after the insert. A root's chain is
-  // itself — the base case of the rule, not an exception to it.
+  // itself — the base case of the rule, not an exception to it. A site is also
+  // its own site_id, which is what makes "every row resolves to a site" a
+  // single uniform check rather than one with an exception in it.
   const ancestryPath = parent ? childAncestry(parent.ancestryPath, row.id) : rootAncestry(row.id);
-  mutate(`update fl_prospect_location set ancestry_path = $2 where id = $1`, [row.id, ancestryPath]);
+  mutate(
+    `update ${TABLE}
+        set ancestry_path = $2,
+            site_id = coalesce(site_id, case when type = 'site' then $1 end),
+            building_id = coalesce(building_id, case when type = 'building' then $1 end),
+            floor_id = coalesce(floor_id, case when type = 'floor' then $1 end)
+      where id = $1`,
+    [row.id, ancestryPath]
+  );
 
   appendEvent({
     entityType: "prospect_location",
@@ -341,7 +561,7 @@ export function reparentLocation(input: {
   let parent: { id: string; type: LocationType; ancestryPath: string } | null = null;
   if (input.newParentId) {
     parent = one<{ id: string; type: LocationType; ancestryPath: string }>(
-      `select id, type, ancestry_path from fl_prospect_location
+      `select id, type, ancestry_path from ${TABLE}
         where id = $1 and deal_id = $2 and is_active = 'true' limit 1`,
       [input.newParentId, location.dealId]
     );
@@ -363,7 +583,7 @@ export function reparentLocation(input: {
   const now = nowIso();
 
   mutate(
-    `update fl_prospect_location
+    `update ${TABLE}
         set parent_id = $2, ancestry_path = $3, updated_by = $4, updated_at = $5
       where id = $1`,
     [location.id, parent?.id ?? null, newPath, input.actor, now]
@@ -371,7 +591,7 @@ export function reparentLocation(input: {
 
   // Every descendant, in one statement: swap the old prefix for the new one.
   const descendantsRestamped = mutate(
-    `update fl_prospect_location
+    `update ${TABLE}
         set ancestry_path = $2 || substring(ancestry_path from ${oldPath.length + 1}),
             updated_by = $3, updated_at = $4
       where deal_id = $5 and is_active = 'true'
@@ -408,7 +628,7 @@ export function setDecision(input: {
 
   const now = nowIso();
   mutate(
-    `update fl_prospect_location
+    `update ${TABLE}
         set pursuit_decision = $2, pursuit_decision_note = $3, updated_by = $4, updated_at = $5
       where id = $1`,
     [location.id, decision, trimOrNull(input.note), input.actor, now]
@@ -447,7 +667,7 @@ export function setVerdict(input: {
 
   const now = nowIso();
   mutate(
-    `update fl_prospect_location
+    `update ${TABLE}
         set verdict = $2, verdict_note = $3, verdict_by = $4, verdict_at = $5,
             verdict_visit_id = $6, updated_by = $4, updated_at = $5
       where id = $1`,
@@ -493,7 +713,7 @@ export function copyForward(input: {
   actor: string | null;
 }): { location: ProspectLocation; copied: number } {
   const source = one<ProspectLocation>(
-    `select ${COLUMNS} from fl_prospect_location where id = $1 and is_active = 'true' limit 1`,
+    `select ${COLUMNS} from ${TABLE} where id = $1 and is_active = 'true' limit 1`,
     [input.sourceLocationId]
   );
   if (!source) throw new Error(`source location ${input.sourceLocationId} not found`);
@@ -501,49 +721,90 @@ export function copyForward(input: {
     throw new Error("that location is already on this deal — copy forward is for an earlier pursuit");
   }
 
+  // §4.3 — copy-forward is the moment `building_key` is stamped, because it is
+  // the one moment the system KNOWS two rows are the same physical building.
+  // The source may not carry one yet (nothing did before v1.3), so it adopts
+  // its own id as the key and the copy joins it. Both rows then group together
+  // on the global list without walking the previous_pursuit_id chain.
+  const buildingKey = source.buildingKey ?? source.id;
+
   // The copy is a normal create, so it goes through the same level and ancestry
   // rules as anything else rather than round-tripping raw columns.
   const { location } = createLocation({
     dealId: input.dealId,
+    // Carried so the copy stays reachable from the client's own portfolio tab
+    // even before this new pursuit has a deal behind it.
+    accountId: source.accountId,
     type: source.type,
     name: source.name,
     parentId: input.parentId ?? null,
     provenance: "crm",
+    buildingKey,
+    description: source.description,
     code: source.code,
     clientLevelLabel: source.clientLevelLabel,
-    addressLine: source.addressLine,
+    locationName: source.locationName,
+    street: source.street,
     city: source.city,
-    region: source.region,
+    state: source.state,
     country: source.country,
-    postcode: source.postcode,
+    zip: source.zip,
+    locationPhone: source.locationPhone,
     actor: input.actor,
   });
 
   const now = nowIso();
+  // Stamp the key onto the SOURCE too when it had none, or the pair only groups
+  // from one side.
+  if (!source.buildingKey) {
+    mutate(`update ${TABLE} set building_key = $2, updated_at = $3 where id = $1`, [
+      source.id,
+      buildingKey,
+      now,
+    ]);
+  }
+
   // What makes it a copy-forward rather than a new building: the lineage link,
   // the measurements worth starting warm from, and the Facilio id.
+  //
+  // `floor_level` and `local_id` are NOT copied. A floor's level is a fact about
+  // this building's own stack and survives, but `local_id` is Facilio's number
+  // for the SOURCE record — carrying it would make the copy claim an identity in
+  // Facilio it does not have, and §7.3's create-only rule reads that column.
   mutate(
-    `update fl_prospect_location
+    `update ${TABLE}
         set previous_pursuit_id = $2,
-            area_sqft = $3, floor_count = $4, room_count = $5, restroom_count = $6,
-            floor_label = $7, ceiling_height_band = $8, space_category = $9,
-            latitude = $10, longitude = $11,
-            facilio_id = $12, facilio_module = $13,
-            convert_state = case when coalesce($12, '') <> '' then 'already_linked' else 'not_converted' end,
-            updated_by = $14, updated_at = $15
+            area = $3, gross_floor_area = $4, no_of_floors = $5, no_of_buildings = $6,
+            room_count = $7, restroom_count = $8, no_of_independent_spaces = $9,
+            no_of_sub_spaces = $10, floor_level = $11, max_occupancy = $12,
+            operation_hours_start = $13, operation_hours_end = $14,
+            ceiling_height_band = $15, space_category_id = $16, site_type = $17,
+            classification = $18, lat = $19, lng = $20,
+            facilio_id = $21, facilio_module = $22,
+            convert_state = case when coalesce($21, '') <> '' then 'already_linked' else 'not_converted' end,
+            updated_by = $23, updated_at = $24
       where id = $1`,
     [
       location.id,
       source.id,
-      source.areaSqft,
-      source.floorCount,
+      source.area,
+      source.grossFloorArea,
+      source.noOfFloors,
+      source.noOfBuildings,
       source.roomCount,
       source.restroomCount,
-      source.floorLabel,
+      source.noOfIndependentSpaces,
+      source.noOfSubSpaces,
+      source.floorLevel,
+      source.maxOccupancy,
+      source.operationHoursStart,
+      source.operationHoursEnd,
       source.ceilingHeightBand,
-      source.spaceCategory,
-      source.latitude,
-      source.longitude,
+      source.spaceCategoryId,
+      source.siteType,
+      source.classification,
+      source.lat,
+      source.lng,
       source.facilioId,
       source.facilioModule,
       input.actor,
@@ -554,7 +815,7 @@ export function copyForward(input: {
   let copied = 1;
   if (input.withDescendants) {
     const children = many<{ id: string }>(
-      `select id from fl_prospect_location
+      `select id from ${TABLE}
         where parent_id = $1 and is_active = 'true' order by name`,
       [source.id]
     );
@@ -604,7 +865,7 @@ export function linkFacilio(input: {
 
   const now = nowIso();
   mutate(
-    `update fl_prospect_location
+    `update ${TABLE}
         set facilio_id = $2, facilio_module = $3, convert_state = 'already_linked',
             updated_by = $4, updated_at = $5
       where id = $1`,
@@ -632,6 +893,16 @@ export function deactivateLocation(input: {
 }): { deactivated: number } {
   const { location } = getLocation(input.locationId);
 
+  // X-22 — the reason is REQUIRED, not optional. Removal cascades to the whole
+  // subtree and nothing is ever hard-deleted, so the only way anyone later
+  // learns why a building left the pursuit is the sentence typed here. Every
+  // other destructive-ish action in this module already demands one; this was
+  // the gap.
+  const reason = trimOrNull(input.reason);
+  if (!reason) {
+    throw new Error("removing a location needs a reason — it is how anyone later knows why");
+  }
+
   if (location.convertState === "converted") {
     // §9's override: `converted` beats every role, Admin included.
     throw new Error("this location is in Facilio — it cannot be removed from the pursuit");
@@ -641,7 +912,7 @@ export function deactivateLocation(input: {
   // The subtree goes with it. A live space under a removed building is the
   // orphan case again, just arrived at from the other direction.
   const deactivated = mutate(
-    `update fl_prospect_location
+    `update ${TABLE}
         set is_active = 'false', updated_by = $2, updated_at = $3
       where is_active = 'true'
         and (id = $1 or ancestry_path like $4 || '/%')`,
@@ -653,8 +924,8 @@ export function deactivateLocation(input: {
     entityId: location.id,
     kind: "deactivated",
     actor: input.actor,
-    body: location.name,
-    meta: { reason: trimOrNull(input.reason), deactivated },
+    body: `${location.name} — ${reason}`,
+    meta: { reason, deactivated },
   });
 
   return { deactivated };
@@ -712,6 +983,18 @@ export function convertPreflight(input: { dealId: string; dealIsWon: boolean }):
     }
     if (action === "create" && !(l.name ?? "").trim()) blockers.push("no name");
 
+    // §7 rule 3 — THE ANCESTRY CHECK, against the materialised columns and not
+    // a path string. This is the test 145 live production buildings, 860 floors
+    // and 480 spaces would fail today. We are the last gate before the write, so
+    // it runs here as a blocker rather than as a promise made in a slide.
+    if (action === "create") {
+      if (l.type === "building" && !l.siteId) blockers.push("no site above it");
+      if (l.type === "floor" && !l.buildingId) blockers.push("no building above it");
+      if (l.type === "space" && !l.siteId && !l.buildingId && !l.floorId) {
+        blockers.push("no site, building or floor above it");
+      }
+    }
+
     return { locationId: l.id, name: l.name, type: l.type, action, reason, blockers };
   });
 
@@ -724,6 +1007,288 @@ export function convertPreflight(input: { dealId: string; dealIsWon: boolean }):
   };
 }
 
+// ── Convert run (§7) — the ONE writer of Facilio's portfolio ─────────────────
+
+/**
+ * G1 answered the letters the run was blocked on: L20 yes (a space is accepted
+ * with only a site above it), L22 yes (client contact create works), and L9's
+ * enums are captured in docs/enums.md — of which only `siteType` is sent here,
+ * and only when the local value is one Facilio accepts, because an unknown enum
+ * value 400s the whole create while an omitted one just leaves the field blank.
+ */
+const FACILIO_SITE_TYPES = new Set([
+  "Common", "Hospital", "Residential", "Office", "Commercial", "Compound",
+  "University", "Retail", "Residential & Commercial", "Municipality", "Mall",
+  "Accommodation", "Land",
+]);
+
+/**
+ * `spaceCategory` is MANDATORY on a space create (found live: the API answers
+ * 200 with `success: false, "Space Category is mandatory"`). The org's picklist,
+ * captured in docs/enums.md. A local category that matches passes through;
+ * anything else — including the usual null — lands as "Room", the least wrong
+ * default for a walked space, and the mapping stays visible here for the day a
+ * category master exists.
+ */
+const FACILIO_SPACE_CATEGORIES = new Set([
+  "Common Area", "Utility", "Office", "Hallway", "Elevator",
+  "Tenant Unit", "Desk", "Lockers", "Parking Stall", "Room",
+]);
+
+const spaceCategoryFor = (local: string | null): string => {
+  const trimmed = (local ?? "").trim();
+  for (const known of FACILIO_SPACE_CATEGORIES) {
+    if (known.toLowerCase() === trimmed.toLowerCase()) return known;
+  }
+  return "Room";
+};
+
+/** Facilio has no zone module — a zone promotes as a space, like the UI treats it. */
+const FACILIO_MODULE: Record<LocationType, "site" | "building" | "floor" | "space"> = {
+  site: "site",
+  building: "building",
+  floor: "floor",
+  space: "space",
+  zone: "space",
+};
+
+const CONVERT_ORDER: Record<LocationType, number> = { site: 0, building: 1, floor: 2, space: 3, zone: 3 };
+
+interface ConvertRunRow {
+  locationId: string;
+  name: string;
+  type: LocationType;
+  outcome: "created" | "failed" | "recovered";
+  facilioId?: string | null;
+  error?: string;
+}
+
+/**
+ * THE run — prospect portfolio → Facilio portfolio, at Won only.
+ *
+ * Shape rules, each one paid for:
+ *  - Parent-first inside a single pass (sites, then buildings, floors, spaces),
+ *    carrying ids created THIS run in memory, so a fresh tree lands in one call.
+ *  - Batched (`batchSize`), because Facilio fetches are serialised at ~10s each
+ *    and a 50-node tree in one invocation would hit the function timeout. The
+ *    caller repeats until `remaining` is 0 — same contract as the sync drain.
+ *  - There is no delete API for portfolio records, so the crash window between
+ *    "Facilio wrote it" and "we stamped the id" is closed by the log: before
+ *    creating, a success row in fl_prospect_convert_log with an id is RECOVERED
+ *    (re-stamped), never re-created.
+ *  - A failed node marks `convert_failed` and does not stop the run; its
+ *    children simply stay blocked and surface in the next preflight.
+ */
+export async function convertRun(input: {
+  dealId: string;
+  actor: string | null;
+  batchSize?: number;
+}): Promise<{
+  runId: string;
+  attempted: number;
+  created: number;
+  recovered: number;
+  failed: number;
+  remaining: number;
+  results: ConvertRunRow[];
+}> {
+  const deal = one<{ stage: string; refNo: string }>(
+    "select stage, ref_no from fl_deal where id = $1 limit 1",
+    [input.dealId]
+  );
+  if (!deal) throw new Error(`deal ${input.dealId} not found`);
+  // §4.2's whole point, re-checked server-side no matter what the UI asserted.
+  if (deal.stage !== "won") {
+    throw new Error(`the deal is ${deal.stage} — Facilio's portfolio is written at Won only`);
+  }
+
+  const batch = Math.max(1, Math.min(input.batchSize ?? 4, 8));
+  const { locations } = listLocations({ dealId: input.dealId, includeNoBid: true });
+  const byId = new Map(locations.map((l) => [l.id, l]));
+  const freshIds = new Map<string, string>();
+
+  const facilioIdOf = (locationId: string | null): string | null => {
+    if (!locationId) return null;
+    const fresh = freshIds.get(locationId);
+    if (fresh) return fresh;
+    const row = byId.get(locationId);
+    const id = (row?.facilioId ?? "").trim();
+    return id && id !== "none" ? id : null;
+  };
+
+  const creatable = locations
+    .filter((l) => convertAction(l).action === "create" && (l.name ?? "").trim())
+    .sort(
+      (a, b) =>
+        CONVERT_ORDER[a.type] - CONVERT_ORDER[b.type] ||
+        a.ancestryPath.localeCompare(b.ancestryPath)
+    );
+
+  const runId = fallbackConvertRunId();
+  const results: ConvertRunRow[] = [];
+  let created = 0;
+  let recovered = 0;
+  let failed = 0;
+
+  for (const l of creatable) {
+    if (results.length >= batch) break;
+
+    const module = FACILIO_MODULE[l.type];
+    const now = nowIso();
+
+    // Crash recovery before anything else: an earlier run may have written
+    // Facilio and died before stamping. Trust the log over re-creating.
+    const past = one<{ facilioIdCreated: string | null }>(
+      `select facilio_id_created from fl_prospect_convert_log
+        where location_id = $1 and status = 'success'
+          and coalesce(facilio_id_created, '') not in ('', 'none')
+        order by attempted_at desc limit 1`,
+      [l.id]
+    );
+    if (past?.facilioIdCreated) {
+      stampConverted(l.id, past.facilioIdCreated, module, input.actor, now);
+      freshIds.set(l.id, past.facilioIdCreated);
+      recovered++;
+      results.push({ locationId: l.id, name: l.name, type: l.type, outcome: "recovered", facilioId: past.facilioIdCreated });
+      continue;
+    }
+
+    // The ordering gate, against live state: parents converted in THIS pass
+    // count, which is what lets one run land a whole fresh tree.
+    const siteFid = facilioIdOf(l.siteId ?? (l.type === "site" ? null : l.parentId));
+    const buildingFid = facilioIdOf(l.buildingId);
+    const floorFid = facilioIdOf(l.floorId);
+    if (module !== "site" && !siteFid) continue; // parent not there yet — next run
+    if (module === "floor" && !buildingFid) continue;
+
+    let payload: Record<string, unknown>;
+    if (module === "site") {
+      const site: Record<string, unknown> = { name: l.name };
+      if (l.siteType && FACILIO_SITE_TYPES.has(l.siteType)) site.siteType = l.siteType;
+      const location: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries({
+        name: l.locationName, street: l.street, city: l.city, state: l.state,
+        zip: l.zip, country: l.country, lat: l.lat, lng: l.lng, phone: l.locationPhone,
+      })) {
+        if (value !== null && value !== undefined && value !== "") location[key] = value;
+      }
+      if (Object.keys(location).length) site.location = location;
+      payload = { site };
+    } else if (module === "building") {
+      payload = { building: { name: l.name, site: Number(siteFid) } };
+    } else if (module === "floor") {
+      payload = { floor: { name: l.name, site: Number(siteFid), building: Number(buildingFid) } };
+    } else {
+      const space: Record<string, unknown> = {
+        name: l.name,
+        site: Number(siteFid),
+        spaceCategory: spaceCategoryFor(l.spaceCategoryId),
+      };
+      if (buildingFid) space.building = Number(buildingFid);
+      if (floorFid) space.floor = Number(floorFid);
+      payload = { space };
+    }
+
+    const logId = insertConvertLog({
+      locationId: l.id, dealId: input.dealId, module,
+      parentFacilioId: module === "site" ? null : siteFid,
+      runId, actor: input.actor, now,
+    });
+
+    try {
+      const result = await executeAction("facilio-cmms", `create-${module}`, payload);
+      if (!result.recordId) throw new Error("create succeeded but no record id came back");
+
+      stampConverted(l.id, result.recordId, module, input.actor, nowIso());
+      mutate(
+        `update fl_prospect_convert_log
+            set status = 'success', facilio_id_created = $2, updated_at = $3 where id = $1`,
+        [logId, result.recordId, nowIso()]
+      );
+      freshIds.set(l.id, result.recordId);
+      created++;
+      results.push({ locationId: l.id, name: l.name, type: l.type, outcome: "created", facilioId: result.recordId });
+
+      appendEvent({
+        entityType: "prospect_location",
+        entityId: l.id,
+        kind: "converted",
+        actor: input.actor,
+        body: `${l.name} → Facilio ${module} ${result.recordId}`,
+        meta: { facilioId: result.recordId, module, runId },
+      });
+    } catch (e) {
+      const message = String((e as Error)?.message ?? e).slice(0, 400);
+      mutate(
+        `update ${TABLE} set convert_state = 'convert_failed', updated_by = $2, updated_at = $3 where id = $1`,
+        [l.id, input.actor, nowIso()]
+      );
+      mutate(
+        `update fl_prospect_convert_log set status = 'failed', error_text = $2, updated_at = $3 where id = $1`,
+        [logId, message, nowIso()]
+      );
+      failed++;
+      results.push({ locationId: l.id, name: l.name, type: l.type, outcome: "failed", error: message });
+    }
+  }
+
+  const done = new Set(results.filter((r) => r.outcome !== "failed").map((r) => r.locationId));
+  const remaining = creatable.filter((l) => !done.has(l.id)).length;
+
+  return { runId, attempted: results.length, created, recovered, failed, remaining, results };
+}
+
+function stampConverted(
+  locationId: string,
+  facilioId: string,
+  module: string,
+  actor: string | null,
+  now: string
+): void {
+  mutate(
+    `update ${TABLE}
+        set facilio_id = $2, facilio_module = $3, convert_state = 'converted',
+            updated_by = $4, updated_at = $5
+      where id = $1`,
+    [locationId, facilioId, module, actor, now]
+  );
+}
+
+function insertConvertLog(input: {
+  locationId: string;
+  dealId: string;
+  module: string;
+  parentFacilioId: string | null;
+  runId: string;
+  actor: string | null;
+  now: string;
+}): string {
+  const row = one<{ id: string }>(
+    `insert into fl_prospect_convert_log
+       (id, data_json, created_at, updated_at, location_id, deal_id, target_module,
+        target_parent_facilio_id, dedup_key, status, facilio_id_created, error_text,
+        run_id, attempted_by, attempted_at, is_active)
+     values (gen_random_uuid()::text, '{}', $6, $6, $1, $2, $3, $4, $5, 'attempted', null, null, $7, $8, $6, 'true')
+     returning id`,
+    [
+      input.locationId, input.dealId, input.module,
+      input.parentFacilioId ?? "none",
+      `location:${input.locationId}:${input.module}`,
+      input.now, input.runId, input.actor,
+    ]
+  );
+  if (!row) throw new Error("could not write the convert log row");
+  return row.id;
+}
+
+/** QuickJS has no crypto; run ids only need uniqueness within the log. */
+function fallbackConvertRunId(): string {
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
+
 // ── Observations (§4.3) ──────────────────────────────────────────────────────
 
 /**
@@ -731,7 +1296,7 @@ export function convertPreflight(input: { dealId: string; dealIsWon: boolean }):
  * table has `prospect_node_id`, from before §0a purged "node". There is no ALTER
  * (§3a P1), so the physical name stays and every query here uses it. Renaming it
  * would mean a third table and a second migration for a column nobody reads by
- * name — `fl_prospect_location` was worth that cost, this is not.
+ * name — `${TABLE}` was worth that cost, this is not.
  */
 export interface ProspectObservation {
   id: string;
@@ -785,7 +1350,7 @@ function cacheAttribute(
   const column = columnFor(fieldKey);
   const raw = kindFor(fieldKey as FieldKey) === "number" ? value.valueNumber : value.valueText;
   mutate(
-    `update fl_prospect_location
+    `update ${TABLE}
         set ${column} = $2, updated_by = $3, updated_at = $4
       where id = $1 and is_active = 'true'`,
     [locationId, raw, actor, now]
@@ -812,7 +1377,7 @@ export function observe(input: {
   actor: string | null;
 }): {
   observation: ProspectObservation;
-  outcome: "auto_accept" | "agrees" | "conflict";
+  outcome: AcceptanceOutcome;
   reason: string;
   conflictsWith: ProspectObservation | null;
 } {
@@ -832,6 +1397,9 @@ export function observe(input: {
       ? { valueText: current.valueText, valueNumber: current.valueNumber, provenance: current.provenance }
       : null,
     incomingProvenance: provenance,
+    // §6.3 — priced fields raise a conflict, descriptive ones replace. The tier
+    // rides on the field definition, so this is the only place that reads it.
+    tier: tierFor(input.fieldKey),
   });
 
   const now = nowIso();
@@ -903,6 +1471,97 @@ export function observe(input: {
   };
 }
 
+/**
+ * ★ THE ONE EDIT FORM'S BACKEND (§6.2). Many fields, one save.
+ *
+ * v1.1 §4.3 said *"nothing edits an attribute directly"* and the build applied
+ * it uniformly, so all sixteen fields were entered one at a time through a modal
+ * called "Record a measurement" — including Country and Name. Filling one
+ * building's address took eight round-trips. **The storage model had been
+ * shipped as the user interface.**
+ *
+ * The ledger underneath was never the problem and is unchanged: this still
+ * writes an observation per changed field and still lets the acceptance flow
+ * land the value. What changes is that the caller may send thirty fields at
+ * once, and that the word "observation" never has to appear on a screen.
+ *
+ * UNCHANGED FIELDS ARE SKIPPED, not re-observed. Re-recording an identical value
+ * on every save would bury the history that makes the ledger worth having under
+ * "agrees" rows nobody wrote deliberately.
+ *
+ * Provenance is inferred from context by the CALLER, not chosen by the user —
+ * the walk stamps `survey`, the ingest stamps `rfp`, a person typing stamps
+ * `manual` — which is why it is one argument here and not one per field.
+ */
+export function updateLocation(input: {
+  locationId: string;
+  /** Field key → new value. A key absent from the map is left alone. */
+  fields: Record<string, unknown>;
+  provenance?: Provenance | null;
+  surveyId?: string | null;
+  visitId?: string | null;
+  actor: string | null;
+}): {
+  location: ProspectLocation;
+  changed: Array<{ fieldKey: string; outcome: AcceptanceOutcome; reason: string }>;
+  skipped: string[];
+  conflicts: number;
+} {
+  const { location } = getLocation(input.locationId);
+
+  const entries = Object.entries(input.fields ?? {});
+  const unknown = entries.filter(([k]) => !isFieldKey(k)).map(([k]) => k);
+  if (unknown.length) {
+    throw new Error(`not editable: ${unknown.join(", ")}`);
+  }
+
+  const changed: Array<{ fieldKey: string; outcome: AcceptanceOutcome; reason: string }> = [];
+  const skipped: string[] = [];
+
+  for (const [fieldKey, raw] of entries) {
+    // An empty value is "leave it alone", not "clear it". Clearing a field that
+    // an RFP filled in is a destructive act and needs its own deliberate action,
+    // not a blank box in a form somebody tabbed through.
+    if (raw === null || raw === undefined || String(raw).trim() === "") {
+      skipped.push(fieldKey);
+      continue;
+    }
+
+    const key = fieldKey as FieldKey;
+    const incoming = typeValue(key, raw);
+    const current = acceptedFor(location.id, key);
+
+    if (current && valuesMatch(incoming, current)) {
+      skipped.push(fieldKey);
+      continue;
+    }
+
+    const result = observe({
+      locationId: location.id,
+      fieldKey,
+      value: raw,
+      provenance: input.provenance ?? "manual",
+      surveyId: input.surveyId,
+      visitId: input.visitId,
+      actor: input.actor,
+    });
+    changed.push({ fieldKey, outcome: result.outcome, reason: result.reason });
+  }
+
+  return {
+    location: getLocation(location.id).location,
+    changed,
+    skipped,
+    conflicts: changed.filter((c) => c.outcome === "conflict").length,
+  };
+}
+
+/** Same-value test, so an unchanged field is not re-observed on every save. */
+function valuesMatch(a: TypedValue, b: TypedValue): boolean {
+  if (a.valueNumber !== null || b.valueNumber !== null) return a.valueNumber === b.valueNumber;
+  return (a.valueText ?? "") === (b.valueText ?? "");
+}
+
 /** Every observation on a location, newest first — the history view (§8 S3). */
 export function listObservations(locationId: string): {
   observations: ProspectObservation[];
@@ -939,7 +1598,7 @@ export interface Conflict {
 export function listConflicts(dealId: string): { conflicts: Conflict[] } {
   const rows = many<ProspectObservation & { locationName: string }>(
     `select ${OBSERVATION_COLUMNS},
-            (select l.name from fl_prospect_location l where l.id = o.prospect_node_id) as location_name
+            (select l.name from ${TABLE} l where l.id = o.prospect_node_id) as location_name
        from fl_prospect_observation o
       where o.deal_id = $1
         and coalesce(o.is_accepted, 'false') = 'false'
@@ -1045,7 +1704,6 @@ export function decideObservation(input: {
         now,
         decision,
         isWinner ? null : (winner?.id ?? null),
-        now,
       ]
     );
   }

@@ -77,6 +77,14 @@ import { many, mutate, nowIso, one, type Row } from "../shared/db";
 import { appendEvent, timeline } from "../shared/events";
 import { nextRef } from "../shared/ids";
 import { parseJson, upsertJsonKey } from "../shared/row-map";
+import { advanceDealTo } from "./deal";
+import {
+  listServices,
+  PRICING_BASES,
+  serviceByCode,
+  UNITS_BY_BASIS,
+  type Service,
+} from "./service";
 
 // --- money at the boundary -----------------------------------------------------
 
@@ -121,14 +129,11 @@ export const LINE_SOURCES: readonly LineSource[] = [
   "external_schedule",
 ];
 
-export const PRICING_BASES = ["unit", "hour", "visit"] as const;
-
-/** `uom` depends on `pricing_basis` (roles&response §4.3). */
-export const UNITS_BY_BASIS: Record<string, readonly string[]> = {
-  unit: ["sq_ft", "sq_m", "washroom", "room", "person", "site", "each"],
-  hour: ["hour"],
-  visit: ["per_visit"],
-};
+// The basis/unit master moved to modules/service.ts when the catalogue took
+// ownership of it — a service carries a default basis and unit, and a rate row
+// prefills from the service it prices, so there can only be one master.
+// Re-exported here because the `reference` handler has always served it.
+export { PRICING_BASES, UNITS_BY_BASIS };
 
 const PROPOSAL_COLUMNS = `
   id, ref_no, deal_id, account_id, survey_id, survey_revision_id,
@@ -144,8 +149,15 @@ const PROPOSAL_COLUMNS = `
   decision, decision_reason, decided_at, notes,
   created_by, updated_by, created_at, updated_at`;
 
+/**
+ * `fl_proposal_line.facilio_service_id` is deliberately absent, and stays
+ * absent: it is an orphaned column from the Facilio-link era, no longer read or
+ * written. It cannot be dropped — the DB role has no DDL (ARCHITECTURE.md §3a)
+ * — so the INSERTs below still name it and bind it to null rather than
+ * renumbering thirty positional parameters to be rid of it.
+ */
 const LINE_COLUMNS = `
-  id, proposal_id, sequence_no, description, facilio_service_id, service_code,
+  id, proposal_id, sequence_no, description, service_code,
   scope_node_id, estimation_key, source, source_ref_id, qty, pricing_basis, uom,
   frequency, rate_card_id, rate_card_row_id, card_price, pricing_mode,
   delta_type, delta_value, delta_reason, applied_price, line_total,
@@ -192,7 +204,6 @@ interface RateCardRow extends Row {
   estimationKey: string | null;
   description: string | null;
   serviceCode: string | null;
-  facilioServiceId: string | null;
   pricingBasis: string | null;
   uom: string | null;
   price: number | null;
@@ -201,66 +212,39 @@ interface RateCardRow extends Row {
   defaultFrequency: string | null;
 }
 
-export interface ResolvedService {
-  serviceCode: string | null;
-  facilioServiceId: string | null;
-}
-
 /**
- * Turn a service code into the pair that gets stored, and enforce C23.
+ * Turn a typed service code into the catalogue row it names.
  *
- * C23 is held as written: every service referenced anywhere — rate card,
- * proposal line, contract line — is a FACILIO SERVICES RECORD ID, never an
- * app-local definition. The trap it exists to prevent is an app-local
- * catalogue quietly hardening into the source of truth, which is exactly what
- * a free-text service box becomes once a hundred rows reference it.
+ * This is the ONE gate between a free-text box and a priced row. A rate card
+ * row or proposal line names its service by `code`, there are no foreign keys
+ * in this database to check that against, and a code nothing answers to prices
+ * a service the company does not sell. So the code is validated here, at the
+ * only place both writers pass through, and the stored value is the
+ * catalogue's own spelling rather than whatever was typed.
  *
- * So the local code is treated as a LOOKUP KEY and nothing more: it must name a
- * real `fl_service_line` row, and the Facilio id is read from that row's
- * mapping rather than typed again here. An admin links a service once on the
- * Service links page and every rate card row referencing it inherits the id —
- * which is what makes the mapping load-bearing instead of decorative. Before
- * today nothing read it at all.
+ * Returns null for no code, which is legitimate: a custom line prices
+ * something the catalogue does not carry, and that is the point of custom mode.
  *
- * The id stays NULLABLE on purpose. L10 (the Facilio Services read action and
- * its id shape) is unresolved and G1 has never been run, so there is nothing to
- * populate it from yet. Refusing to save an unlinked service would block the
- * whole lane on an unanswered question; recording the code and leaving the id
- * null is §14.6's stated position — nullable referencing columns, no invented
- * catalogue.
+ * (Until 2026-08-15 this also read a Facilio Services record id off the row and
+ * copied it onto every priced line. This app owns its services now — see
+ * modules/service.ts — so a line names the local service and nothing else.)
  */
-function resolveService(
-  serviceCode: string | null | undefined,
-  explicitFacilioId: string | null | undefined
-): ResolvedService {
-  const code = typeof serviceCode === "string" ? serviceCode.trim() : "";
-  if (!code) {
-    // No code is legitimate — a custom line prices something the catalogue
-    // does not carry, which is the whole point of the custom mode.
-    return { serviceCode: null, facilioServiceId: explicitFacilioId ?? null };
-  }
+function resolveService(serviceCode: string | null | undefined): Service | null {
+  const code = typeof serviceCode === "string" ? serviceCode.trim().toUpperCase() : "";
+  if (!code) return null;
 
-  const line = one<{ id: string; code: string; active: string | null; data: { facilio_service_id?: string } | null }>(
-    `select id, code, active, data_json from fl_service_line where code = $1 limit 1`,
-    [code]
-  );
+  const service = serviceByCode(code);
 
-  if (!line) {
+  if (!service) {
     throw new Error(
-      `"${code}" is not a service — add it on the Service links page first, so every row that prices it points at one record`
+      `"${code}" is not a service — add it in Settings › Services first, so every row that prices it means the same thing`
     );
   }
-  if (line.active === "false") {
+  if (service.active === "false") {
     throw new Error(`service "${code}" is retired — reactivate it before pricing against it`);
   }
 
-  // An explicitly supplied id wins, so a one-off correction is possible without
-  // editing the catalogue; otherwise inherit the mapping.
-  const mapped = line.data?.facilio_service_id ?? null;
-  return {
-    serviceCode: line.code,
-    facilioServiceId: explicitFacilioId ?? (mapped && mapped !== "none" ? mapped : null),
-  };
+  return service;
 }
 
 function loadCards(): ResolvableCard[] {
@@ -275,7 +259,7 @@ function loadCards(): ResolvableCard[] {
 
 function loadCardRows(rateCardId: string): RateCardRow[] {
   return many<RateCardRow>(
-    `select id, estimation_key, description, service_code, facilio_service_id,
+    `select id, estimation_key, description, service_code,
             pricing_basis, uom, price, min_charge, condition_multipliers_json,
             default_frequency
        from fl_rate_card_row
@@ -292,7 +276,6 @@ function toRateEntry(row: RateCardRow, direction: ScaleDirection): RateEntry {
     estimationKey: row.estimationKey,
     description: row.description,
     serviceCode: row.serviceCode,
-    facilioServiceId: row.facilioServiceId,
     uom: row.uom,
     price: toMinor(row.price) ?? 0,
     minCharge: toMinor(row.minCharge),
@@ -472,6 +455,31 @@ export function generateLines(proposalId: string, actor: string): {
     [proposalId, nowIso(), actor]
   );
 
+  // A generated line names a service by code, and one of the two sources is a
+  // surveyor's `suggested_service_id` that nothing between the survey and here
+  // has checked. This insert does not go through `resolveService` — it is one
+  // bulk write, not a save — so the catalogue is read ONCE and an unrecognised
+  // or retired code is dropped with a warning. A line with no service is
+  // recoverable by hand; a line naming a service nobody sells is a quote for
+  // work the company does not do.
+  // Keyed on the upper-cased code and answering with the CATALOGUE's spelling,
+  // so a rate row or a surveyor that spelled it differently still matches and
+  // the line stores one canonical value.
+  const sellable = new Map(
+    listServices()
+      .filter((s) => s.active !== "false")
+      .map((s) => [s.code.toUpperCase(), s.code])
+  );
+  const catalogued = (line: { description: string; serviceCode: string | null }): string | null => {
+    if (!line.serviceCode) return null;
+    const match = sellable.get(line.serviceCode.trim().toUpperCase());
+    if (match) return match;
+    draft.warnings.push(
+      `"${line.description}" suggested service "${line.serviceCode}", which is not an active service — the line was drafted without one`
+    );
+    return null;
+  };
+
   const now = nowIso();
   let sequenceNo = 0;
   for (const line of draft.lines) {
@@ -505,8 +513,9 @@ export function generateLines(proposalId: string, actor: string): {
         proposalId,
         sequenceNo,
         line.description,
-        line.facilioServiceId,
-        line.serviceCode,
+        // $4 is the orphaned facilio_service_id — see LINE_COLUMNS.
+        null,
+        catalogued(line),
         line.scopeNodeId,
         line.estimationKey,
         line.sourceRole === "recommendation" ? "recommendation" : "survey_entry",
@@ -820,7 +829,7 @@ export interface LineInput {
   deltaValue?: number | null;
   deltaReason?: string | null;
   isOptional?: boolean | null;
-  facilioServiceId?: string | null;
+  /** A catalogue code, or blank for a custom line the catalogue does not carry. */
   serviceCode?: string | null;
   notes?: string | null;
   actor: string;
@@ -976,13 +985,14 @@ export function saveLine(input: LineInput): { proposal: Row; problems: string[] 
     direction,
   });
 
-  // Same C23 resolution the rate card uses: a named service must be a real
-  // catalogue row and inherits its Facilio id, while a line with no service at
-  // all stays legal — that is the custom-price case.
-  const lineService = resolveService(
-    input.serviceCode ?? (existing?.serviceCode as string | null),
-    input.facilioServiceId ?? (existing?.facilioServiceId as string | null)
-  );
+  // Same gate, and the same rule about when it applies: only a service the
+  // caller NAMES is resolved, so editing the price on a line whose service was
+  // retired afterwards still saves. See `saveCardRow`.
+  const namesService = input.serviceCode !== undefined;
+  const lineService = namesService ? resolveService(input.serviceCode) : null;
+  const lineServiceCode = namesService
+    ? (lineService?.code ?? null)
+    : ((existing?.serviceCode as string | null) ?? null);
 
   const now = nowIso();
   const qty = Number(pick(input.qty, existing?.qty as number, 1));
@@ -1018,8 +1028,9 @@ export function saveLine(input: LineInput): { proposal: Row; problems: string[] 
         toMajor(priced.monthlyEquivalent),
         toMajor(priced.oneTime),
         flag(input.isOptional ?? bool(existing.isOptional)),
-        lineService.facilioServiceId,
-        lineService.serviceCode,
+        // $19 is the orphaned facilio_service_id — see LINE_COLUMNS.
+        null,
+        lineServiceCode,
         input.notes ?? existing.notes ?? null,
         now,
         input.actor,
@@ -1054,8 +1065,9 @@ export function saveLine(input: LineInput): { proposal: Row; problems: string[] 
         input.proposalId,
         next?.n ?? 1,
         input.description ?? "New line",
-        lineService.facilioServiceId,
-        lineService.serviceCode,
+        // $4 is the orphaned facilio_service_id — see LINE_COLUMNS.
+        null,
+        lineServiceCode,
         qty,
         basis,
         input.uom ?? "each",
@@ -1535,6 +1547,18 @@ export function sendProposal(proposalId: string, actor: string): {
     },
   });
 
+  // Sending the offer IS the deal reaching Proposal Submitted (deal.md stage 6).
+  // Forward-only: a revision re-sent from negotiation leaves the deal where the
+  // conversation actually is.
+  if (current.dealId) {
+    advanceDealTo(
+      String(current.dealId),
+      "proposal_submitted",
+      actor,
+      `Proposal ${current.refNo} v${current.revisionNo} sent`
+    );
+  }
+
   return { ...getProposal(proposalId), checksum: stamp, supersededProposalId };
 }
 
@@ -1707,10 +1731,12 @@ const REVISABLE_COLUMNS = `
   payment_terms, expected_programme, valid_until, template_id,
   revision_no, notes`;
 
+// No `facilio_service_id`: the column list and the value tuple are built from
+// this one array, so dropping it here drops it from both and a revised
+// proposal simply leaves the orphaned column null. See LINE_COLUMNS.
 const COPIED_LINE_COLUMNS = [
   "sequence_no",
   "description",
-  "facilio_service_id",
   "service_code",
   "scope_node_id",
   "estimation_key",
@@ -1845,7 +1871,6 @@ export function reviseProposal(proposalId: string, actor: string): {
       const values = [
         index + 1,
         line.description,
-        line.facilioServiceId,
         line.serviceCode,
         line.scopeNodeId,
         line.estimationKey,
@@ -2409,7 +2434,7 @@ export function listCards(includeRows: boolean, includeInactive = false): { card
   const rowsSubquery = includeRows
     ? `,
        (select coalesce(json_agg(x order by x.sequence_no), '[]'::json) from (
-          select id, rate_card_id, facilio_service_id, service_code, description,
+          select id, rate_card_id, service_code, description,
                  estimation_key, pricing_basis, uom, price, min_charge,
                  condition_multipliers_json, default_frequency, sequence_no, notes,
                  is_active
@@ -2598,7 +2623,7 @@ export function saveCard(input: SaveCardInput): { card: Row } {
 export interface SaveCardRowInput {
   rateCardId: string;
   rowId?: string | null;
-  facilioServiceId?: string | null;
+  /** A catalogue code (Settings › Services). Blank prices something one-off. */
   serviceCode?: string | null;
   description?: string | null;
   /** Joins the survey's `estimation_values` to a price (§5 rule 2). */
@@ -2628,7 +2653,7 @@ export function saveCardRow(input: SaveCardRowInput): { card: Row } {
   const existing = input.rowId
     ? one<Row>(
         `select id, pricing_basis, uom, price, min_charge, description, estimation_key,
-                service_code, facilio_service_id, default_frequency, sequence_no, notes,
+                service_code, default_frequency, sequence_no, notes,
                 condition_multipliers_json, is_active
            from fl_rate_card_row where id = $1 and rate_card_id = $2 limit 1`,
         [input.rowId, input.rateCardId]
@@ -2636,26 +2661,45 @@ export function saveCardRow(input: SaveCardRowInput): { card: Row } {
     : null;
   if (input.rowId && !existing) throw new Error(`row ${input.rowId} is not on this rate card`);
 
-  const basis = input.pricingBasis ?? (existing?.pricingBasis as string | null) ?? "unit";
+  // ONLY a service the caller actually NAMES is resolved, and this matters.
+  // `resolveService` refuses a retired service — that is what stops new work
+  // being priced against something we stopped selling. But a save that does
+  // not mention the service at all (a price change, a re-sequence, the retire
+  // of the ROW itself) must still go through on a row whose service was
+  // retired afterwards. Resolving the stored code unconditionally made every
+  // such row permanently uneditable, which is not what retiring a service
+  // means and not what this page says it does.
+  const namesService = input.serviceCode !== undefined;
+  const service = namesService ? resolveService(input.serviceCode) : null;
+  const serviceCode = namesService
+    ? (service?.code ?? null)
+    : ((existing?.serviceCode as string | null) ?? null);
+
+  // Resolved before the basis because the row inherits from it: a service
+  // carries the basis and unit it is normally sold in, and a row that names
+  // one and says nothing else should not have to repeat them.
+  const basis =
+    input.pricingBasis ??
+    (existing?.pricingBasis as string | null) ??
+    service?.defaultPricingBasis ??
+    "unit";
   if (!(PRICING_BASES as readonly string[]).includes(basis)) {
     throw new Error(`pricingBasis must be one of: ${PRICING_BASES.join(", ")}`);
   }
 
   // Price, basis and unit are ONE atomic fact (spec §3) — a price with no basis
-  // is unusable, and a unit that does not belong to its basis is worse.
+  // is unusable, and a unit that does not belong to its basis is worse. The
+  // service's default unit only applies under the service's own basis; under
+  // any other it would be a unit that basis cannot express.
   const units = UNITS_BY_BASIS[basis] ?? [];
-  const uom = input.uom ?? (existing?.uom as string | null) ?? units[0];
+  const inherited = basis === service?.defaultPricingBasis ? service.defaultUom : null;
+  const uom = input.uom ?? (existing?.uom as string | null) ?? inherited ?? units[0];
   if (!units.includes(uom)) {
     throw new Error(`uom for a "${basis}" row must be one of: ${units.join(", ")}`);
   }
 
   const frequency = input.defaultFrequency ?? (existing?.defaultFrequency as string | null) ?? "one_time";
   if (!isFrequency(frequency)) throw new Error(`"${frequency}" is not a frequency`);
-
-  const service = resolveService(
-    input.serviceCode ?? (existing?.serviceCode as string | null),
-    input.facilioServiceId ?? (existing?.facilioServiceId as string | null)
-  );
 
   const price = input.price ?? toMinor(existing?.price) ?? 0;
   const minCharge = input.minCharge ?? toMinor(existing?.minCharge) ?? 0;
@@ -2670,17 +2714,19 @@ export function saveCardRow(input: SaveCardRowInput): { card: Row } {
 
   if (existing) {
     mutate(
+      // `facilio_service_id` is not in the SET list and is not going back in:
+      // the column is orphaned (see LINE_COLUMNS) and an edit to a price has no
+      // business blanking whatever a row already carries.
       `update fl_rate_card_row
-          set facilio_service_id = $2, service_code = $3, description = $4,
-              estimation_key = $5, pricing_basis = $6, uom = $7, price = $8,
-              min_charge = $9, condition_multipliers_json = $10,
-              default_frequency = $11, sequence_no = $12, notes = $13,
-              is_active = $14, updated_by = $15, updated_at = $16
+          set service_code = $2, description = $3,
+              estimation_key = $4, pricing_basis = $5, uom = $6, price = $7,
+              min_charge = $8, condition_multipliers_json = $9,
+              default_frequency = $10, sequence_no = $11, notes = $12,
+              is_active = $13, updated_by = $14, updated_at = $15
         where id = $1`,
       [
         existing.id,
-        service.facilioServiceId,
-        service.serviceCode,
+        serviceCode,
         input.description ?? existing.description ?? null,
         input.estimationKey ?? existing.estimationKey ?? null,
         basis,
@@ -2715,8 +2761,9 @@ export function saveCardRow(input: SaveCardRowInput): { card: Row } {
                '{}', $16, $16)`,
       [
         input.rateCardId,
-        service.facilioServiceId,
-        service.serviceCode,
+        // $2 is the orphaned facilio_service_id — see LINE_COLUMNS.
+        null,
+        serviceCode,
         input.description ?? null,
         input.estimationKey ?? null,
         basis,
@@ -2785,7 +2832,7 @@ function listCardRowsFor(rateCardId: string): Row {
         ) x) as card_obj,
 
        (select coalesce(json_agg(x order by x.sequence_no), '[]'::json) from (
-          select id, rate_card_id, facilio_service_id, service_code, description,
+          select id, rate_card_id, service_code, description,
                  estimation_key, pricing_basis, uom, price, min_charge,
                  condition_multipliers_json, default_frequency, sequence_no, notes,
                  is_active

@@ -39,6 +39,7 @@
 
 import { requestFrom, type Result } from "../../../lib/request";
 import type {
+  AssignableUser,
   Assignee,
   ProspectNode,
   Qualification,
@@ -208,6 +209,15 @@ export const scheduleVisit = (surveyId: string, body: Record<string, unknown>) =
 /** `survey.visit-transition` — no_show/cancelled need a reason; a no-show NEVER advances the survey. */
 export const transitionVisit = (visitId: string, toStatus: string, reason: string, actorEmail: string) =>
   call<{ visit: Visit }>("visit-transition", { visitId, toStatus, reason, actorEmail });
+
+/** `survey.user-list` — active users with role, team, region and week load,
+    for the assign picker (D-19). Assignment never free-types an email. */
+export const listAssignableUsers = () => call<{ users: AssignableUser[] }>("user-list");
+
+/** `survey.submit` — P-06's one button. The server routes on lead-ness:
+    surveyor → pending_review; the lead's own submit completes and freezes. */
+export const submitSurvey = (surveyId: string, actorEmail: string) =>
+  call<{ survey: Survey; warnings: string[] }>("submit", { surveyId, actorEmail });
 
 /** `survey.assign` — multi-select, one idempotent multi-row insert. */
 export const assignSurveyors = (

@@ -23,6 +23,8 @@ export type Account = {
 };
 
 export type Contact = {
+  /** Present on rows from `account-get`; needed to edit one (D-37). */
+  id?: string;
   name?: string | null;
   email?: string | null;
   phone?: string | null;

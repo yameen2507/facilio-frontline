@@ -1,112 +1,41 @@
 /**
- * The lead analyst's briefing — moved here from Settings so this page owns the
- * WHOLE intake pipeline: the widget a visitor talks to, and the analyst that
- * assesses what comes in. Both agents' identities stay CLI-managed; what this
- * card owns is the part of the briefing that gets APPENDED per run.
+ * The lead analyst's briefing — the third card of the intake agent page.
  *
- * Fetches on mount, independently of the widget column beside it — the widget
- * config is localStorage and cannot fail, while this is a real read that owes
- * its own loading and error states.
+ * CONTROLLED, deliberately: the page owns the fetch and the draft so its one
+ * Publish button can save this alongside the widget config. This card only
+ * renders fields and reports edits; loading and error live with the owner.
+ *
+ * Neither agent's identity is editable here. The conversation runs on the
+ * `intake` agent and the assessment on the analyst; instructions, provider and
+ * model for both are fixed when each agent is created — change those with
+ * `facilio vibe agent update`. This card owns the part APPENDED per run.
  */
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "../../../ui/Button";
-import { Bar, Card } from "../../../ui/Card";
-import { TextLines } from "../../../ui/Skeleton";
-import { ErrorState } from "../../../ui/States";
-import { useToast } from "../../../ui/Toast";
-import {
-  getAnalystSettings,
-  putPrompt,
-  resetAnalystTask,
-  type AnalystSettings,
-} from "../api/analyst-util";
+import { Card } from "../../../ui/Card";
+import { Chip } from "../../../ui/Chip";
+import type { AnalystSettings } from "../api/analyst-util";
+import { FIELD_HINT, FIELD_LABEL } from "../fields";
 
-const FIELD_LABEL = "text-muted-foreground mb-1 block text-xs";
+export type AnalystDraft = { scopeNotes: string; analystTask: string };
 
-type Draft = { scopeNotes: string; analystTask: string };
-
-export function AnalystCard() {
-  const toast = useToast();
-
-  const [settings, setSettings] = useState<AnalystSettings | null>(null);
-  // Controlled from a draft seeded once the settings arrive, so an in-progress
-  // edit is never overwritten by a re-render.
-  const [draft, setDraft] = useState<Draft | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [reloadKey, setReloadKey] = useState(0);
-  const [saving, setSaving] = useState(false);
+export function AnalystCard({
+  settings,
+  draft,
+  onChange,
+}: {
+  settings: AnalystSettings;
+  draft: AnalystDraft;
+  onChange: (draft: AnalystDraft) => void;
+}) {
   // The prompt preview is a reference view, not an editing surface, so it stays
-  // folded away: open, it is taller than everything above it put together and
-  // it pushed the two editable fields off the bottom of the column.
+  // folded away: open, it is taller than everything above it put together.
   const [showPrompt, setShowPrompt] = useState(false);
 
-  useEffect(() => {
-    let live = true;
-    setSettings(null);
-    setError(null);
-
-    getAnalystSettings().then(({ data, error: err }) => {
-      if (!live) return;
-      if (err) {
-        setError(err);
-        return;
-      }
-      if (data) {
-        setSettings(data);
-        setDraft({
-          scopeNotes: data.prompt?.scopeNotes ?? "",
-          analystTask: data.prompt?.analystTask ?? "",
-        });
-      }
-    });
-
-    return () => {
-      live = false;
-    };
-  }, [reloadKey]);
-
-  const savePrompt = async () => {
-    if (!draft) return;
-    setSaving(true);
-    const { error: err } = await putPrompt(draft);
-    setSaving(false);
-    if (err) {
-      toast(err, true);
-      return;
-    }
-    toast("Briefing saved");
-    setReloadKey((k) => k + 1);
-  };
-
-  const restoreTask = async () => {
-    setSaving(true);
-    const { error: err } = await resetAnalystTask();
-    setSaving(false);
-    if (err) {
-      toast(err, true);
-      return;
-    }
-    toast("Default task restored");
-    setReloadKey((k) => k + 1);
-  };
-
-  if (error) {
-    return (
-      <Card title="Lead analyst agent">
-        <ErrorState message={error} onRetry={() => setReloadKey((k) => k + 1)} tight />
-      </Card>
-    );
-  }
-
-  if (!settings || !draft) {
-    return (
-      <Card title="Lead analyst agent">
-        <TextLines count={5} />
-      </Card>
-    );
-  }
+  const linked = Boolean(settings.agent?.linkConfigured);
+  const agentName = settings.agent?.name || "lead-analyst";
 
   // The lead block is shown as a placeholder: the brief and the closing task are
   // the same on every run; the fields between them are the lead being assessed.
@@ -120,59 +49,48 @@ export function AnalystCard() {
   ].join("\n");
 
   return (
-    <Card title="Lead analyst agent" meta="CLI-managed">
-      {/* Neither agent's identity is editable here. The conversation runs on
-          the `intake` agent and the assessment on the analyst; instructions,
-          provider and model for both are fixed when each agent is created —
-          change those with `facilio vibe agent update`. This card owns the
-          part that gets APPENDED to every analyst briefing. */}
+    <Card
+      title="Lead analysis"
+      meta={
+        <Chip tone={linked ? "green" : "orange"} dot small>
+          {linked ? `${agentName} connected` : "link not set"}
+        </Chip>
+      }
+    >
       <div className="text-muted-foreground text-xs">
-        Runs on <span className="font-mono">intake</span>, assessed by{" "}
-        <span className="font-mono">{settings.agent?.name || "lead-analyst"}</span>. Change either
-        one's instructions, provider or model with{" "}
-        <span className="font-mono">facilio vibe agent update</span>.
-        {settings.agent?.linkConfigured ? null : (
-          <div className="text-destructive mt-1">
-            The Flow-AI link is not set (
-            <span className="font-mono">facilio vibe agent get lead-analyst</span>), so server-side
-            assessment will fail. Assessing from this console still works.
-          </div>
+        Every captured lead is scored by the <span className="font-mono">{agentName}</span> agent.
+        {linked ? null : (
+          <span className="text-destructive">
+            {" "}
+            The Flow-AI link is not set — read it with{" "}
+            <span className="font-mono">facilio vibe agent get {agentName}</span> and save it via{" "}
+            <span className="font-mono">settings-put</span>. Until then only this console can assess.
+          </span>
         )}
       </div>
 
       <label className={`${FIELD_LABEL} mt-4`} htmlFor="an-scope">
-        Scope notes — appended to the generated service brief
+        Scope notes
       </label>
       <Textarea
         id="an-scope"
         rows={3}
         value={draft.scopeNotes}
         placeholder="e.g. No high-rise façade work. Minimum job value AED 2,000."
-        onChange={(e) => setDraft({ ...draft, scopeNotes: e.target.value })}
+        onChange={(e) => onChange({ ...draft, scopeNotes: e.target.value })}
       />
+      <span className={FIELD_HINT}>Added to the service brief the analyst judges against.</span>
 
       <label className={`${FIELD_LABEL} mt-4`} htmlFor="an-task">
-        Task instruction — the closing line the analyst gets for every lead
+        Task instruction
       </label>
       <Textarea
         id="an-task"
         rows={2}
         value={draft.analystTask}
-        onChange={(e) => setDraft({ ...draft, analystTask: e.target.value })}
+        onChange={(e) => onChange({ ...draft, analystTask: e.target.value })}
       />
-
-      <Bar className="mt-4">
-        <Button variant="primary" onClick={() => void savePrompt()} disabled={saving}>
-          Save briefing
-        </Button>
-        <Button onClick={() => void restoreTask()} disabled={saving}>
-          Restore default task
-        </Button>
-      </Bar>
-
-      <div className="text-muted-foreground mt-3 text-xs">
-        Applies to the next assessment; stored verdicts keep the prompt version that produced them.
-      </div>
+      <span className={FIELD_HINT}>The closing line of every assessment. Empty restores the default.</span>
 
       <div className="mt-4 flex items-center justify-between gap-3">
         <span className="text-muted-foreground text-xs">What the analyst receives</span>

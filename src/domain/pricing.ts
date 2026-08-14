@@ -15,9 +15,12 @@
  *  2. Anything this module cannot price is RETURNED as unpriced, never
  *     dropped. Incompleteness is published, not hidden (survey spec §5 rule 4).
  *
- * Vocabulary (CLAUDE.md §0a / C23): `facilioServiceId` is a Facilio Services
- * record id — nullable until the G1 pass answers L10 — and `serviceCode` is our
- * own catalogue code (`fl_service_line.code`). Neither is ever the other.
+ * Vocabulary: `serviceCode` is a code from this app's service catalogue
+ * (`fl_service_line.code`, written by modules/service.ts) and it is the ONLY
+ * way a priced line names a service. It is nullable throughout — a custom line
+ * prices something the catalogue does not carry. Nothing here validates the
+ * code; that is modules/proposal.ts's job, at the database boundary where the
+ * catalogue can actually be read.
  */
 
 // --- frequency (C12: one-time + recurring lines) ------------------------------
@@ -294,8 +297,6 @@ export interface RateEntry {
   estimationKey: string | null;
   description?: string | null;
   serviceCode?: string | null;
-  /** Facilio Services id (C23) — nullable until L10/G1. Never an app-local id. */
-  facilioServiceId?: string | null;
   uom?: string | null;
   /** `fl_rate_card_row.price` — ONE price per row, in integer minor units. */
   price: number;
@@ -308,7 +309,7 @@ export interface RateEntry {
 
 export interface DraftLine {
   description: string;
-  facilioServiceId: string | null;
+  /** A catalogue code, unvalidated here — see the header. */
   serviceCode: string | null;
   estimationKey: string | null;
   scopeNodeId: string | null;
@@ -442,7 +443,6 @@ export function draftLinesFromHandoff(
     const base = entry.description ?? ev.estimation_key;
     lines.push({
       description: node?.name ? `${base} — ${node.name}` : base,
-      facilioServiceId: entry.facilioServiceId ?? null,
       serviceCode: entry.serviceCode ?? null,
       estimationKey: ev.estimation_key,
       scopeNodeId,
@@ -484,8 +484,10 @@ export function draftLinesFromHandoff(
 
     lines.push({
       description: label,
-      facilioServiceId: rec.suggested_service_id ?? null,
-      serviceCode: null,
+      // The surveyor's suggested service, which is a catalogue CODE now that
+      // the app owns its services — upper-cased to match how the catalogue
+      // stores it, and checked against the catalogue by the caller.
+      serviceCode: rec.suggested_service_id?.trim().toUpperCase() || null,
       estimationKey: null,
       scopeNodeId: nodeId === null || nodeId === undefined ? null : String(nodeId),
       sourceRole: "recommendation",

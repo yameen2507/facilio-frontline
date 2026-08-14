@@ -7,10 +7,12 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { cn } from "@/lib/utils";
 import { Building2, Clock3, Gauge, Timer } from "lucide-react";
 import { useAccess } from "../../../app/access";
 import { useCounts } from "../../../app/counts";
+import { useUserDirectory } from "../../../app/users";
 import { PageShell } from "../../../app/shell/PageShell";
 import { ago, plural } from "../../../lib/format";
 import { Button } from "../../../ui/Button";
@@ -49,14 +51,19 @@ const COLS: Col[] = [
 
 /** The entity cell's second line, shared by the table cell and the phone card
     so the two can never describe a lead differently. */
-const LeadMeta = ({ lead: l }: { lead: Lead }) => (
-  <>
-    <code className="font-mono">{l.refNo}</code> · {l.source}
-    {l.serviceType ? ` · ${l.serviceType}` : ""}
-    {l.siteCity ? ` · ${l.siteCity}` : ""} ·{" "}
-    {l.ownerEmail ? l.ownerEmail.split("@")[0] : <em>unclaimed</em>}
-  </>
-);
+const LeadMeta = ({ lead: l }: { lead: Lead }) => {
+  // The owner as a person, not an address (X-05). The directory is cached at
+  // module level, so per-row use costs one map lookup.
+  const { nameOf } = useUserDirectory();
+  return (
+    <>
+      <code className="font-mono">{l.refNo}</code> · {l.source}
+      {l.serviceType ? ` · ${l.serviceType}` : ""}
+      {l.siteCity ? ` · ${l.siteCity}` : ""} ·{" "}
+      {l.ownerEmail ? nameOf(l.ownerEmail) : <em>unclaimed</em>}
+    </>
+  );
+};
 
 export function Inbox() {
   const navigate = useNavigate();
@@ -69,7 +76,25 @@ export function Inbox() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<TabId>("open");
+  /**
+   * D-25: three independent axes, and all three live in the URL (N-06) so a
+   * filtered view survives a reload and pastes into a chat message.
+   */
+  const [params, setParams] = useSearchParams();
+  const tab = (["open", "converted", "closed", "all"].includes(params.get("tab") ?? "")
+    ? params.get("tab")
+    : "open") as TabId;
+  const unclaimed = params.get("unclaimed") === "1";
+  const overdue = params.get("overdue") === "1";
+  const setFilter = (patch: { tab?: TabId; unclaimed?: boolean; overdue?: boolean }) => {
+    const next = new URLSearchParams(params);
+    const put = (key: string, value: string | null) =>
+      value === null ? next.delete(key) : next.set(key, value);
+    if (patch.tab !== undefined) put("tab", patch.tab === "open" ? null : patch.tab);
+    if (patch.unclaimed !== undefined) put("unclaimed", patch.unclaimed ? "1" : null);
+    if (patch.overdue !== undefined) put("overdue", patch.overdue ? "1" : null);
+    setParams(next, { replace: true });
+  };
   const [reloadKey, setReloadKey] = useState(0);
   const [creating, setCreating] = useState(false);
 
@@ -90,7 +115,10 @@ export function Inbox() {
   }, [reloadKey]);
 
   const counts = useMemo(() => countBuckets(leads), [leads]);
-  const rows = useMemo(() => filterLeads(leads, tab), [leads, tab]);
+  const rows = useMemo(
+    () => filterLeads(leads, { tab, unclaimed, overdue }),
+    [leads, tab, unclaimed, overdue]
+  );
 
   // Feeds the sidebar badge. The shell never imports this feature; the number
   // travels up through the app-level counts context.
@@ -114,17 +142,51 @@ export function Inbox() {
         ) : null
       }
       strip={
-        <Tabs
-          items={[
-            { id: "open", label: "Open", count: counts.open },
-            { id: "unclaimed", label: "Unclaimed", count: counts.unclaimed },
-            { id: "overdue", label: "Overdue", count: counts.overdue },
-            { id: "won", label: "Won", count: counts.won },
-            { id: "closed", label: "Closed", count: counts.closed },
-          ]}
-          active={tab}
-          onChange={setTab}
-        />
+        // D-25: lifecycle is the tab row; ownership and time are toggles that
+        // COMBINE with it — "open, nobody's picked up, running late" is one
+        // click of each, where the old strip made them rival tabs. X-04: the
+        // tab says Converted because that is the status its rows show.
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <Tabs
+            items={[
+              { id: "open", label: "Open", count: counts.open },
+              { id: "converted", label: "Converted", count: counts.converted },
+              { id: "closed", label: "Closed", count: counts.closed },
+              { id: "all", label: "All", count: counts.all },
+            ]}
+            active={tab}
+            onChange={(t) => setFilter({ tab: t })}
+          />
+          <div className="flex items-center gap-1.5 pb-2">
+            {/* D-26: named after the question a person asks, not the system word. */}
+            <button
+              type="button"
+              aria-pressed={unclaimed}
+              onClick={() => setFilter({ unclaimed: !unclaimed })}
+              className={cn(
+                "rounded-md border px-2.5 py-1 text-xs whitespace-nowrap transition-colors",
+                unclaimed
+                  ? "border-primary bg-muted font-medium"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {`Nobody's picked up · ${counts.unclaimed}`}
+            </button>
+            <button
+              type="button"
+              aria-pressed={overdue}
+              onClick={() => setFilter({ overdue: !overdue })}
+              className={cn(
+                "rounded-md border px-2.5 py-1 text-xs whitespace-nowrap transition-colors",
+                overdue
+                  ? "border-primary bg-muted font-medium"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {`Running late · ${counts.overdue}`}
+            </button>
+          </div>
+        </div>
       }
     >
       <Card pad={false} className={`${PHONE_BLEED} ${PHONE_BLEED_TOP}`}>

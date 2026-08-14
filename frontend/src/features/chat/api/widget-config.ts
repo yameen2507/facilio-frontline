@@ -1,59 +1,64 @@
 /**
- * The widget's presentation config — what the playground panel edits and the
- * preview renders.
+ * The widget's presentation config — published to the server, not saved per
+ * browser. Both wrappers are LIVE; the old localStorage seam is closed.
  *
- * SEAM — STORED IN localStorage, PER BROWSER. The real home is a
- * `settings-widget` get/put pair beside `settings-get`/`settings-put`, because
- * an embedded widget on the company site has to read the same values this
- * console saves; a per-browser copy can only ever style the preview. The shape
- * below is the contract that endpoint should serve. Until it exists, the
- * playground is honest about it in its footer copy.
+ * | handler      | args                          | returns          |
+ * | ------------ | ----------------------------- | ---------------- |
+ * | `widget-get` | —                             | `{ config }`     |
+ * | `widget-put` | payload: partial WidgetConfig | `{ config }` saved |
  *
- * The greeting is an OVERRIDE: empty means "use whatever `intake-start`
- * returns", which is also why it is applied when a conversation starts rather
- * than patched into an existing transcript — the agent must see the same first
- * message the visitor saw.
+ * The put goes through the `payload` envelope, and that is not a style choice:
+ * clearing a field means sending `""`, and a blank flat field is dropped
+ * upstream as an unresolved connection-action template — the clear would
+ * silently never happen.
+ *
+ * Everything in this shape ships to the visitor's browser (the intake agent
+ * runs client-side, so even `guidance` travels with the page). No secrets.
  */
 
+import { request, type Result } from "../../../lib/request";
+
 export type WidgetConfig = {
-  /** The chip in the widget header — the site the visitor is on. */
-  siteLabel: string;
-  /** The line beside the chip. */
-  introLine: string;
+  /** Shown in the widget header. */
+  companyName: string;
+  /** The line under the company name. */
+  tagline: string;
+  /** A small data-URL image; empty shows the company initial instead. */
+  logo: string;
+  /** One of the preset swatches; empty follows the console theme's primary. */
+  accent: string;
   /** First agent message; empty falls back to the server's greeting. */
   greeting: string;
-  /** Visitor-bubble colour; empty follows the console theme's primary. */
-  accent: string;
+  /** Operator instructions the intake agent is handed on every turn. */
+  guidance: string;
 };
 
+/** Mirrors the server's defaults so a skeleton and an error state can still
+    render a widget-shaped preview before/without a successful read. */
 export const WIDGET_DEFAULTS: WidgetConfig = {
-  siteLabel: "albaytgrill.ae",
-  introLine: "Chat with us — commercial kitchen extract cleaning",
-  greeting: "",
+  companyName: "Frontline",
+  tagline: "Kitchen extract & ductwork cleaning",
+  logo: "",
   accent: "",
+  greeting: "",
+  guidance: "",
 };
 
-const KEY = "frontline.widget";
+/** The swatch row. Eight, all deep enough to carry white text — the accent
+    fills the visitor bubble and the send button, which set text to white. */
+export const ACCENT_PRESETS = [
+  { name: "Blue", value: "#2563eb" },
+  { name: "Indigo", value: "#4f46e5" },
+  { name: "Purple", value: "#9333ea" },
+  { name: "Rose", value: "#db2777" },
+  { name: "Red", value: "#dc2626" },
+  { name: "Orange", value: "#ea580c" },
+  { name: "Green", value: "#16a34a" },
+  { name: "Teal", value: "#0d9488" },
+] as const;
 
-export function loadWidgetConfig(): WidgetConfig {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return WIDGET_DEFAULTS;
-    // Merged over the defaults so a field added later is never undefined for
-    // a browser that saved the older shape.
-    return { ...WIDGET_DEFAULTS, ...(JSON.parse(raw) as Partial<WidgetConfig>) };
-  } catch {
-    return WIDGET_DEFAULTS;
-  }
-}
+export const getWidgetConfig = (): Promise<Result<{ config: WidgetConfig }>> =>
+  request<{ config: WidgetConfig }>("widget-get");
 
-export function saveWidgetConfig(config: WidgetConfig): boolean {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(config));
-    return true;
-  } catch {
-    // Unwritable storage (private mode, quota) costs persistence, not the
-    // preview — the in-memory config keeps driving it.
-    return false;
-  }
-}
+export const putWidgetConfig = (config: WidgetConfig): Promise<Result<{ config: WidgetConfig }>> =>
+  request<{ config: WidgetConfig }>("widget-put", { payload: JSON.stringify(config) });

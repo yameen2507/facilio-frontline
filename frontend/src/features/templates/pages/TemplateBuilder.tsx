@@ -389,9 +389,13 @@ export function TemplateBuilder() {
                 ...(q.fieldType === "options" ? { options: optionsOf(q) } : {}),
                 allowMultiple: isOn(q.allowMultiple),
                 isRequired: isOn(q.isRequired),
-                ...(q.estimationKey?.trim()
-                  ? { estimationKey: q.estimationKey.trim(), feedsEstimation: true }
-                  : {}),
+                // F-02: the server derives the key (number always prices;
+                // options when opted in). Only an Advanced OVERRIDE travels.
+                feedsEstimation:
+                  q.fieldType === "number" ||
+                  isOn(q.feedsEstimation) ||
+                  Boolean(q.estimationKey?.trim()),
+                ...(q.estimationKey?.trim() ? { estimationKey: q.estimationKey.trim() } : {}),
                 ...(q.unit?.trim() ? { unit: q.unit.trim() } : {}),
               })),
           };
@@ -1150,6 +1154,27 @@ function OptionsEditor({
   );
 }
 
+/**
+ * F-02's derivation, mirrored from src/domain/form-template.ts
+ * `deriveEstimationKey` — that copy decides; this one only PREVIEWS what the
+ * server will store, so the Advanced line never shows a key the save would
+ * then silently change. Keep the two in step.
+ */
+function deriveKeyPreview(label: string, unit?: string | null): string {
+  const slug = label
+    .toLowerCase()
+    .replace(/\b(what|is|the|are|of|a|an|in|for|to|how|many|much|please|their|there)\b/g, " ")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "")
+    .split("_")
+    .slice(0, 5)
+    .join("_");
+  const u = (unit ?? "").trim().toLowerCase();
+  if (!slug) return u ? `question_${u}` : "question";
+  return u && !slug.includes(u) ? `${slug}_${u}` : slug;
+}
+
 function QuestionEditor({
   question,
   index,
@@ -1165,6 +1190,10 @@ function QuestionEditor({
   onRemove: () => void;
   onMove: (delta: number) => void;
 }) {
+  /** The F-02 Advanced toggle — the derived key is a fact to read, the
+      override behind it is the exception. Opens itself when an override
+      already exists, so an edited key is never hidden from its editor. */
+  const [advanced, setAdvanced] = useState(Boolean(question.estimationKey?.trim()));
   return (
     <div className="flex flex-col gap-3 rounded-lg border p-3.5">
       <div className="flex items-center gap-2">
@@ -1261,35 +1290,65 @@ function QuestionEditor({
 
         <span className="min-w-4 flex-1" />
 
-        <div className="flex items-center gap-2">
-          <Label className="text-muted-foreground text-xs">Estimation key</Label>
-          <Input
-            value={question.estimationKey ?? ""}
-            disabled={!isEstimable(question.fieldType)}
-            title={
-              isEstimable(question.fieldType)
-                ? undefined
-                : "Only Number and Options can be priced — free text reaches the estimator as prose"
-            }
-            onChange={(e) =>
-              onPatch({
-                estimationKey: e.target.value,
-                feedsEstimation: e.target.value ? "true" : "false",
-              })
-            }
-            placeholder="total_sqft"
-            className="h-8 w-40 font-mono text-xs"
-          />
-        </div>
+        {/* F-02: no key box. A Number question prices by construction; an
+            Options question opts in here. The key itself is derived and lives
+            under Advanced below. */}
+        {question.fieldType === "options" ? (
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id={`feeds-${question.id}`}
+              checked={isOn(question.feedsEstimation) || Boolean(question.estimationKey?.trim())}
+              onCheckedChange={(v) =>
+                onPatch(
+                  v === true
+                    ? { feedsEstimation: "true" }
+                    : { feedsEstimation: "false", estimationKey: "" }
+                )
+              }
+            />
+            <Label htmlFor={`feeds-${question.id}`}>Feeds pricing</Label>
+          </div>
+        ) : null}
       </div>
 
-      {/* The handoff contract in one line: pricing reads the key, never the wording. */}
-      {question.estimationKey && isEstimable(question.fieldType) ? (
-        <span className="text-muted-foreground text-xs">
-          The estimator reads this answer as{" "}
-          <code className="text-xs">{question.estimationKey}</code>, so rewording the question
-          later will not break pricing.
-        </span>
+      {/* The handoff contract in one line: pricing reads the KEY, never the
+          wording — derived from the question and unit (F-02, as ruled), so
+          naming drift is gone and rewording only re-keys if the author never
+          overrode it. Advanced is where the override lives. */}
+      {isEstimable(question.fieldType) &&
+      (question.fieldType === "number" ||
+        isOn(question.feedsEstimation) ||
+        Boolean(question.estimationKey?.trim())) ? (
+        <div className="flex flex-col gap-1.5">
+          <span className="text-muted-foreground flex flex-wrap items-center gap-1.5 text-xs">
+            The estimator reads this answer as{" "}
+            <code className="text-xs">
+              {question.estimationKey?.trim() ||
+                deriveKeyPreview(question.label, question.unit)}
+            </code>
+            <button
+              type="button"
+              className="hover:text-foreground underline underline-offset-2"
+              onClick={() => setAdvanced((a) => !a)}
+            >
+              {advanced ? "Hide advanced" : "Advanced"}
+            </button>
+          </span>
+          {advanced ? (
+            <div className="flex items-center gap-2">
+              <Label className="text-muted-foreground text-xs">Key override</Label>
+              <Input
+                value={question.estimationKey ?? ""}
+                onChange={(e) => onPatch({ estimationKey: e.target.value })}
+                placeholder={deriveKeyPreview(question.label, question.unit)}
+                className="h-8 w-48 font-mono text-xs"
+              />
+              <span className="text-muted-foreground text-xs">
+                Blank = derived. Rate cards match on this key.
+              </span>
+            </div>
+          ) : null}
+        </div>
       ) : null}
 
       {/*

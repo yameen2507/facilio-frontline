@@ -42,11 +42,13 @@ import {
   listSitesForDeal,
   listRevisions,
   listSurveys,
+  listUserOptions,
   removeQualification,
   reconcileSurvey,
   scheduleVisit,
   setLead,
   setNodeVerdict,
+  submitSurvey,
   surveyDetail,
   transitionSurvey,
   transitionVisit,
@@ -602,6 +604,30 @@ server.addHandler({
     "Deals for the create-survey picker, with account names and how many surveys each already carries.",
   parameters: {},
   execute: async () => handle(() => listDeals()),
+});
+
+server.addHandler({
+  name: "submit",
+  description:
+    "P-06's one button: an assigned surveyor submits the walk. A different lead → pending_review (T5); the actor IS the lead → straight to completed (T5 then T7 — full guard set and the revision freeze). Guards and reasons behave exactly as in transition.",
+  parameters: {
+    ...ENV,
+    surveyId: SURVEY_ID,
+    actorEmail: ACTOR,
+  },
+  execute: async (args) =>
+    handle(() => {
+      const p = parsePayload(args);
+      return submitSurvey({ surveyId: str(p, "surveyId"), actor: optStr(p, "actorEmail") });
+    }),
+});
+
+server.addHandler({
+  name: "user-list",
+  description:
+    "Active users for the assign picker (D-19): name, role, team, region, and how many planned visits each carries over the coming week. Assignment goes through people, never free-typed emails (F-22).",
+  parameters: {},
+  execute: async () => handle(() => listUserOptions()),
 });
 
 server.addHandler({

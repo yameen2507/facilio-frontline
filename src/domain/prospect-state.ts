@@ -22,25 +22,88 @@
 
 // ── Levels ───────────────────────────────────────────────────────────────────
 
-/** The same three words Facilio uses, so convert translates nothing (§5.1). */
-export type LocationType = "site" | "building" | "space";
+/**
+ * The same five words Facilio uses, so convert is a copy and not a translation
+ * (v1.3 §2.3, read from `bms.Modules` on 14 Aug).
+ *
+ * `floor` is here because it is a REAL module — `SPACE_TYPE = 3`, its own table,
+ * 10,139 rows in production — not a number on the building. v1.0 through v1.2
+ * modelled it as a count and defended that with a citation from a customer's
+ * walkthrough tool; the platform disagreed. Where a customer artifact and the
+ * platform disagree about the platform, the platform wins.
+ *
+ * `zone` is a grouping, not a level in the chain, and it is rare — 108 rows in
+ * all of production. It exists so a client who models zones can convert them;
+ * it is NOT the answer to volatile groupings like precinct or phase, which stay
+ * in `tags` because they move.
+ */
+export type LocationType = "site" | "building" | "floor" | "space" | "zone";
 
-export const LOCATION_TYPES: readonly LocationType[] = ["site", "building", "space"];
+export const LOCATION_TYPES: readonly LocationType[] = [
+  "site",
+  "building",
+  "floor",
+  "space",
+  "zone",
+];
 
 /**
  * Which parent a level may hang off.
  *
- * The interesting entry is `space`, which accepts a `building` OR a `site`
- * directly — a car park or a lawn has no building above it. Facilio calls that
- * an *independent space*, and **L20 is still open on whether its API accepts
- * one**; the prospect tree accepts it today either way, because refusing to
- * model a car park would be modelling the integration rather than the world.
+ * EVERY LEVEL IS OPTIONAL EXCEPT `site` (§2.3 rule 1), and production is why: a
+ * space may hang off a floor, a building or a site directly, because 25,110 live
+ * spaces carry no building and are not broken — a car park under a site, a lobby
+ * under a building. Facilio calls that an *independent space*, and L20 is now
+ * ANSWERED in the affirmative by those rows. The tree offers the next legal level
+ * down and permits skipping it.
+ *
+ * A sub-space hangs off a space, five deep (`SPACE_ID1..5`), which is why `space`
+ * accepts a `space`.
+ *
+ * `zone` hangs off a site because it is a grouping applied across a site, not a
+ * rung between two levels — nothing hangs off a zone.
  */
 const PARENT_TYPES: Record<LocationType, readonly LocationType[]> = {
   site: [],
   building: ["site"],
-  space: ["site", "building"],
+  floor: ["building"],
+  space: ["site", "building", "floor", "space"],
+  zone: ["site"],
 };
+
+/** How deep sub-spaces may nest below a floor — `SPACE_ID1..5` (§2.3). */
+export const MAX_SUB_SPACE_DEPTH = 5;
+
+/**
+ * What Facilio's own create actions REQUIRE, read from the live schemas on
+ * 15 Aug (`facilio connections schemas facilio-cmms.create-<level>`).
+ *
+ * The interesting part is that Facilio does not ask for the immediate parent —
+ * it asks for the whole CHAIN. A floor needs `site` AND `building`, not just the
+ * building. A space needs `site` even when it also carries a building and a
+ * floor. That is the same denormalised ancestry `BaseSpace` stores, surfacing in
+ * the API, and it is why `site_id`/`building_id`/`floor_id` are columns here
+ * rather than something derived at convert time: the payload wants them
+ * individually.
+ *
+ * The add form mirrors this, so a property created in Frontline already carries
+ * everything Facilio will ask for.
+ */
+export const FACILIO_REQUIRED_ANCESTORS: Record<LocationType, readonly LocationType[]> = {
+  site: [],
+  building: ["site"],
+  floor: ["site", "building"],
+  // `building` and `floor` are OPTIONAL on a space — 25,110 live spaces have no
+  // building. Only the site is mandatory.
+  space: ["site"],
+  // Not creatable in Facilio at all: there is no `create-zone` action. A zone
+  // can be recorded here and has nowhere to convert to, which is stated rather
+  // than hidden.
+  zone: ["site"],
+};
+
+/** Levels Facilio can actually create. `zone` is deliberately absent. */
+export const CONVERTIBLE_TYPES: readonly LocationType[] = ["site", "building", "floor", "space"];
 
 /** Why this parent cannot hold this child, or null. §10's create guard. */
 export function parentBlocker(

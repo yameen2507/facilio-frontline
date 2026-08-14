@@ -76,8 +76,33 @@ export const listDeals = () =>
  * excluded by default because they drop out of every total; the tree asks for
  * them explicitly so a dropped site is still visible to the person who dropped it.
  */
-export const listLocations = (dealId: string, includeNoBid = true) =>
-  call<{ locations: ProspectLocation[] }>("list", { dealId, includeNoBid: String(includeNoBid) });
+export type PortfolioFilters = {
+  /** All three optional — none set means the whole portfolio (§5.1). */
+  leadId?: string;
+  accountId?: string;
+  dealId?: string;
+  type?: string;
+  pursuitDecision?: string;
+  verdict?: string;
+  /** "true" already in Facilio, "false" not yet, undefined either. */
+  inFacilio?: string;
+  country?: string;
+  state?: string;
+  city?: string;
+  tag?: string;
+  needsAttention?: string;
+  search?: string;
+};
+
+export const listLocations = (filters: PortfolioFilters = {}, includeNoBid = true) => {
+  // Empty strings are how a cleared <Select> reads; sending them would filter on
+  // "" and return nothing, which looks like "no results" rather than "no filter".
+  const params: Record<string, string> = { includeNoBid: String(includeNoBid) };
+  for (const [k, v] of Object.entries(filters)) {
+    if (typeof v === "string" && v.trim() !== "") params[k] = v.trim();
+  }
+  return call<{ locations: ProspectLocation[] }>("list", params);
+};
 
 export const getLocation = (locationId: string) =>
   call<{ location: ProspectLocation }>("get", { locationId });
@@ -104,13 +129,47 @@ export const createLocation = (
     provenance?: string;
     code?: string;
     clientLevelLabel?: string;
-    addressLine?: string;
+    description?: string;
+    locationName?: string;
+    street?: string;
     city?: string;
-    region?: string;
+    state?: string;
     country?: string;
-    postcode?: string;
+    zip?: string;
+    locationPhone?: string;
+    leadId?: string;
+    accountId?: string;
+    buildingKey?: string;
   } = {}
 ) => call<{ location: ProspectLocation }>("create", { dealId, type, name, actorEmail, ...opts });
+
+/**
+ * `prospect.update` — ★ THE ONE EDIT FORM'S SAVE (§6.2).
+ *
+ * Every changed field in a single call. This replaces the sixteen-modals-in-a-
+ * row flow the build shipped, where recording a building's address and size took
+ * eight round-trips through a dialog called "Record a measurement".
+ *
+ * A field left out, or sent empty, is LEFT ALONE — a blank box means "I did not
+ * fill this in", never "delete what is there".
+ *
+ * Underneath, each changed field still goes through the acceptance ledger, so a
+ * priced field that contradicts what is already recorded comes back as a
+ * conflict for someone to settle rather than quietly overwriting it. `conflicts`
+ * is how many did.
+ */
+export const updateLocation = (
+  locationId: string,
+  fields: Record<string, string>,
+  actorEmail: string,
+  provenance = "manual"
+) =>
+  call<{
+    location: ProspectLocation;
+    changed: Array<{ fieldKey: string; outcome: string; reason: string }>;
+    skipped: string[];
+    conflicts: number;
+  }>("update", { locationId, fields: JSON.stringify(fields), actorEmail, provenance });
 
 /**
  * `prospect.reparent` — moves a location AND re-stamps its whole subtree.
@@ -252,25 +311,51 @@ export const decideObservation = (
 export const convertPreflight = (dealId: string, dealIsWon: boolean) =>
   call<Preflight>("convert-preflight", { dealId, dealIsWon: String(dealIsWon) });
 
+export interface ConvertRunResult {
+  runId: string;
+  attempted: number;
+  created: number;
+  recovered: number;
+  failed: number;
+  remaining: number;
+  results: Array<{
+    locationId: string;
+    name: string;
+    type: LocationType;
+    outcome: "created" | "failed" | "recovered";
+    facilioId?: string | null;
+    error?: string;
+  }>;
+}
+
 /**
- * The convert RUN does not exist, and this flag is the entry point that stays
- * disabled until it does.
- *
- * **What to flip:** set this to `true` only once `prospect.convert-to-facilio` is
- * registered. **What else must change with it:** the Convert screen's primary
- * button currently renders disabled with `CONVERT_BLOCKED_REASON` beside it; that
- * reason line comes out at the same time, and the button needs a progress view,
- * because §7.5 requires the write to be synchronous with polling rather than
- * async (an async function run dies on restart).
- *
- * **Why it is blocked rather than seamed:** the module's whole safety claim is
- * that nothing writes to Facilio except that one handler. A wrapper that posts to
- * a route which does not exist is a promise the module is specifically built not
- * to make. G1 is open — L9 (mandatory Facilio enums), L20 (does the API accept a
- * space directly under a site?), L21 (can our role deactivate, for the reverse
- * walk?) and L22 (client contact create) are all unanswered.
+ * `prospect.convert-to-facilio` — THE write. Won-gated server-side, batched
+ * (§7.5: synchronous with polling, never an async run that dies on restart):
+ * the page calls this repeatedly until `remaining` is 0.
  */
-export const canRunConvert = false;
+export const convertRun = (dealId: string, actorEmail: string, batch = 4) =>
+  call<ConvertRunResult>("convert-to-facilio", { dealId, actorEmail, batch });
+
+/**
+ * `lead.sync-drain` — a cross-FUNCTION call like `listDeals` above. The convert
+ * page kicks it after a successful run because the contract tasks queued at Won
+ * deliberately DEFER until a site exists in Facilio; the moment this run creates
+ * one, a drain is what turns the accepted proposal into the client contract.
+ */
+export const drainFacilioQueue = () =>
+  requestFrom<{
+    claimed: number;
+    succeeded: number;
+    deferred: number;
+    failed: number;
+    results: Array<{ action: string; outcome: string; detail?: string }>;
+  }>("lead", "sync-drain", { batch: 10 });
+
+/**
+ * Flipped 2026-08-15: G1 closed every letter this waited on (L9's enums are in
+ * docs/enums.md, L20 yes, L22 yes) and `prospect.convert-to-facilio` is live.
+ */
+export const canRunConvert = true;
 
 export const CONVERT_BLOCKED_REASON =
   "Writing to Facilio is not switched on yet — the connection questions in G1 are still open, so the pre-flight below reports what would happen without touching anything.";

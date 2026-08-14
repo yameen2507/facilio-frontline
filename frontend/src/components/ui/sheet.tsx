@@ -2,7 +2,7 @@ import * as React from "react"
 import { XIcon } from "lucide-react"
 import { Dialog as SheetPrimitive } from "radix-ui"
 
-import { cn } from "@/lib/utils"
+import { autoFocusField, cn } from "@/lib/utils"
 
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
   return <SheetPrimitive.Root data-slot="sheet" {...props} />
@@ -47,11 +47,21 @@ function SheetContent({
   children,
   side = "right",
   showCloseButton = true,
+  onOpenAutoFocus,
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
   side?: "top" | "right" | "bottom" | "left"
   showCloseButton?: boolean
 }) {
+  // Same soft-keyboard guard as DialogContent — a sheet is the same Radix
+  // dialog underneath, and on a phone it is the one people actually see.
+  const parkFocusOnPanel = (event: Event) => {
+    onOpenAutoFocus?.(event)
+    if (event.defaultPrevented || autoFocusField()) return
+    event.preventDefault()
+    ;(event.currentTarget as HTMLElement | null)?.focus({ preventScroll: true })
+  }
+
   return (
     <SheetPortal>
       <SheetOverlay />
@@ -69,6 +79,7 @@ function SheetContent({
             "inset-x-0 bottom-0 h-auto border-t data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom",
           className
         )}
+        onOpenAutoFocus={parkFocusOnPanel}
         {...props}
       >
         {children}

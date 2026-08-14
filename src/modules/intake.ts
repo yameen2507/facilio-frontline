@@ -16,12 +16,111 @@
 import { many, mutate, nowIso, one } from "../shared/db";
 import { appendEvent } from "../shared/events";
 import { createLead, type CreateLeadResult } from "./lead";
+import { getSetting, setSetting } from "./settings";
 
 /** A public chat is a spend-attack surface — every turn is a model call. */
 const MAX_TURNS = 30;
 
 const GREETING =
   "Hello — I can help with kitchen extract and ductwork cleaning. What do you need looking at?";
+
+// --- widget presentation ------------------------------------------------------
+
+/**
+ * The widget's presentation and per-turn agent guidance, stored as ONE setting
+ * row. It used to live in the browser's localStorage, which could only ever
+ * style the playground — the embed on the company site has to read the same
+ * values this console publishes, so the server owns them now.
+ *
+ * Everything here ships to the VISITOR'S browser (the agent runs client-side,
+ * so even `guidance` travels with the page). Nothing secret can live in it.
+ */
+export const WIDGET_SETTING = "widget.config";
+
+export interface WidgetSettings {
+  /** Shown in the widget header. */
+  companyName: string;
+  /** The line under the company name. */
+  tagline: string;
+  /** A small data-URL image; empty shows the company initial instead. */
+  logo: string;
+  /** A hex like #2563eb from the console's swatch row; empty follows the theme. */
+  accent: string;
+  /** First agent message; empty uses the shipped greeting. */
+  greeting: string;
+  /** Operator instructions the intake agent is handed on every turn. */
+  guidance: string;
+}
+
+export const WIDGET_DEFAULTS: WidgetSettings = {
+  companyName: "Frontline",
+  tagline: "Kitchen extract & ductwork cleaning",
+  logo: "",
+  accent: "",
+  greeting: "",
+  guidance: "",
+};
+
+const WIDGET_KEYS = Object.keys(WIDGET_DEFAULTS) as (keyof WidgetSettings)[];
+
+/** Longest value each field accepts — the logo cap (~120KB of image) is what
+    keeps one settings row from growing past what a handler round-trip carries. */
+const WIDGET_LIMITS: Record<keyof WidgetSettings, number> = {
+  companyName: 80,
+  tagline: 140,
+  logo: 160_000,
+  accent: 7,
+  greeting: 400,
+  guidance: 2000,
+};
+
+export function widgetSettings(): WidgetSettings {
+  const raw = getSetting<unknown>(WIDGET_SETTING, null);
+  const stored = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+
+  // Field by field over the defaults, so a key added later is never undefined
+  // for a row saved under the older shape.
+  const out = { ...WIDGET_DEFAULTS };
+  for (const key of WIDGET_KEYS) {
+    const v = stored[key];
+    if (typeof v === "string") out[key] = v;
+  }
+  return out;
+}
+
+/**
+ * Merge a partial update over what is stored. `""` clears a field back to its
+ * fallback behaviour (theme accent, shipped greeting, initial-only logo);
+ * an absent key leaves the stored value alone.
+ */
+export function saveWidgetSettings(patch: Record<string, unknown>): WidgetSettings {
+  const next = widgetSettings();
+
+  for (const key of WIDGET_KEYS) {
+    const v = patch[key];
+    if (v === undefined || v === null) continue;
+    if (typeof v !== "string") throw new Error(`${key} must be a string`);
+
+    const value = v.trim();
+    if (value.length > WIDGET_LIMITS[key]) {
+      throw new Error(
+        key === "logo"
+          ? "the logo image is too large — use one under ~100KB"
+          : `${key} must be ${WIDGET_LIMITS[key]} characters or fewer`
+      );
+    }
+    if (key === "accent" && value && !/^#[0-9a-f]{6}$/i.test(value)) {
+      throw new Error("accent must be a hex colour like #2563eb");
+    }
+    if (key === "logo" && value && !value.startsWith("data:image/")) {
+      throw new Error("logo must be a data:image/… URL");
+    }
+    next[key] = value;
+  }
+
+  setSetting(WIDGET_SETTING, next);
+  return next;
+}
 
 export interface IntakeSession {
   id: string;
@@ -60,6 +159,11 @@ export function startSession(input: { sourceUrl?: string | null; userAgent?: str
 } {
   const now = nowIso();
 
+  // The published greeting, resolved HERE so the transcript stores the words
+  // the visitor actually saw — a client-side override could drift from what a
+  // later reader of fl_intake_message believes opened the conversation.
+  const greeting = widgetSettings().greeting.trim() || GREETING;
+
   // Token from Postgres, never Math.random() — the sandbox has no crypto, and a
   // guessable token would let anyone read another visitor's conversation.
   const row = one<{ sessionToken: string }>(
@@ -78,10 +182,10 @@ export function startSession(input: { sourceUrl?: string | null; userAgent?: str
        (id, session_id, role, content, turn_index, data_json, created_at, updated_at)
      select gen_random_uuid()::text, id, 'agent', $2, 0, '{}', $3, $3
        from fl_intake_session where session_token = $1`,
-    [row.sessionToken, GREETING, now]
+    [row.sessionToken, greeting, now]
   );
 
-  return { sessionToken: row.sessionToken, greeting: GREETING };
+  return { sessionToken: row.sessionToken, greeting };
 }
 
 export interface TurnResult {
