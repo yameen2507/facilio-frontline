@@ -363,7 +363,11 @@ export function NewLeadDialog({
       return;
     }
 
-    if (data.duplicateOf) {
+    // ONLY when the lead actually closed. A domain-only match no longer closes
+    // anything — it opens as `new`, linked to the earlier enquiry, and the lead
+    // page carries the banner. Stopping here for one of those would announce a
+    // dead end that is not there.
+    if (data.duplicateOf && data.status === "closed") {
       // The row exists but is closed, so the Closed tab should pick it up while
       // this dialog holds its ground on the outcome.
       onCreated?.();
@@ -430,7 +434,9 @@ export function NewLeadDialog({
               <DialogTitle>New lead</DialogTitle>
               <DialogDescription>
                 For an enquiry that arrived off-channel. The response clocks start the moment this
-                is saved, and a repeat of a lead already on file is closed and linked instead.
+                is saved. The same email or phone as a lead already on file is closed and linked;
+                the same company domain is only flagged, because two people at one company can
+                have two different jobs.
               </DialogDescription>
             </DialogHeader>
 

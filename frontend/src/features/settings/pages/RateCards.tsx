@@ -22,6 +22,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { CalendarRange, Hash, KeyRound, Layers, Plus, Ruler, Tag, Wallet } from "lucide-react";
+import { useActor } from "../../../app/auth";
 import { Card } from "../../../ui/Card";
 import { Chip, type Tone } from "../../../ui/Chip";
 import { ClickRow, ListTable, ListTableSkeleton, type Col } from "../../../ui/DataTable";
@@ -190,6 +191,8 @@ function RowDialog({
   const [record, setRecord] = useState<RateCardRow | null>(row);
   if (open && record !== row) setRecord(row);
 
+  const actor = useActor();
+
   const [serviceCode, setServiceCode] = useState(UNSET);
   const [description, setDescription] = useState("");
   const [estimationKey, setEstimationKey] = useState("");
@@ -254,18 +257,21 @@ function RowDialog({
     setBusy(true);
     setError(null);
 
-    const { error: err } = await saveRateCardRow({
-      cardId,
-      ...(row ? { rowId: row.id } : {}),
-      serviceCode: serviceCode === UNSET ? "" : serviceCode,
-      description: description.trim(),
-      estimationKey: estimationKey.trim(),
-      pricingBasis,
-      uom,
-      // Major units in; ratecards-util converts to minor at the wire.
-      price: priceValue,
-      defaultFrequency: frequency === UNSET ? "" : frequency,
-    });
+    const { error: err } = await saveRateCardRow(
+      {
+        cardId,
+        ...(row ? { rowId: row.id } : {}),
+        serviceCode: serviceCode === UNSET ? "" : serviceCode,
+        description: description.trim(),
+        estimationKey: estimationKey.trim(),
+        pricingBasis,
+        uom,
+        // Major units in; ratecards-util converts to minor at the wire.
+        price: priceValue,
+        defaultFrequency: frequency === UNSET ? "" : frequency,
+      },
+      actor
+    );
 
     setBusy(false);
     if (err) {
@@ -284,7 +290,7 @@ function RowDialog({
     }
     setBusy(true);
     setError(null);
-    const { error: err } = await removeRateCardRow(cardId, row.id);
+    const { error: err } = await removeRateCardRow(cardId, row.id, actor);
     setBusy(false);
     if (err) {
       setError(err);
@@ -534,6 +540,7 @@ const draftOf = (card: RateCard): HeaderDraft => ({
 
 export function RateCards() {
   const toast = useToast();
+  const actor = useActor();
 
   const [cards, setCards] = useState<RateCard[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -618,20 +625,23 @@ export function RateCards() {
     setSavingHeader(true);
     setHeaderError(null);
 
-    const { data, error: err } = await saveRateCard({
-      ...(selected ? { cardId: selected.id } : {}),
-      name: draft.name.trim(),
-      description: draft.description,
-      currency: draft.currency,
-      // Trimmed-empty clears the scope, which is what makes a card apply
-      // everywhere — the payload envelope is what lets the blank survive.
-      region: draft.region.trim(),
-      clientAccountId: draft.clientAccountId.trim(),
-      priority: Number(draft.priority) || 0,
-      status: draft.status,
-      effectiveFrom: draft.effectiveFrom,
-      effectiveTo: draft.effectiveTo,
-    });
+    const { data, error: err } = await saveRateCard(
+      {
+        ...(selected ? { cardId: selected.id } : {}),
+        name: draft.name.trim(),
+        description: draft.description,
+        currency: draft.currency,
+        // Trimmed-empty clears the scope, which is what makes a card apply
+        // everywhere — the payload envelope is what lets the blank survive.
+        region: draft.region.trim(),
+        clientAccountId: draft.clientAccountId.trim(),
+        priority: Number(draft.priority) || 0,
+        status: draft.status,
+        effectiveFrom: draft.effectiveFrom,
+        effectiveTo: draft.effectiveTo,
+      },
+      actor
+    );
 
     setSavingHeader(false);
     if (err) {

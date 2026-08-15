@@ -431,7 +431,7 @@ export function createLocation(input: CreateLocationInput): { location: Prospect
   // §4's ownership rule, enforced here because no CHECK constraint is creatable.
   // A row owned by nobody is unreachable from every surface in the product.
   const leadId = trimOrNull(input.leadId);
-  const dealId = trimOrNull(input.dealId);
+  let dealId = trimOrNull(input.dealId);
   let accountId = trimOrNull(input.accountId);
   if (!leadId && !accountId && !dealId) {
     throw new Error("a location needs an owner — a lead, an account or a deal");
@@ -459,6 +459,33 @@ export function createLocation(input: CreateLocationInput): { location: Prospect
       [dealId]
     );
     accountId = trimOrNull(owner?.accountId ?? null);
+  }
+
+  /**
+   * And the mirror of it: a location recorded against a lead that ALREADY has a
+   * deal or an account belongs to those too.
+   *
+   * This is the other direction from the rule above, and not in tension with it.
+   * That one refuses to copy a deal's originating LEAD onto a new building —
+   * the enquiry that opened the pursuit did not name this particular building.
+   * This one copies the lead's deal and account, which are facts about who the
+   * building belongs to, not about how it was found.
+   *
+   * The bug it closes: `convertLead` stamps the account and deal onto the lead's
+   * locations, but it runs ONCE. A site added to the lead after conversion
+   * carried `lead_id` alone, so it appeared on the lead's portfolio tab and was
+   * invisible from the deal, from the client, and from every survey raised off
+   * that deal — with nothing anywhere saying it had been stranded.
+   *
+   * Anything passed in still wins; this only fills what was left empty.
+   */
+  if (leadId && (!dealId || !accountId)) {
+    const owner = one<{ dealId: string | null; accountId: string | null }>(
+      `select deal_id, account_id from fl_lead where id = $1 limit 1`,
+      [leadId]
+    );
+    if (!dealId) dealId = trimOrNull(owner?.dealId ?? null);
+    if (!accountId) accountId = trimOrNull(owner?.accountId ?? null);
   }
 
   const provenance = input.provenance

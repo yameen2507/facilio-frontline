@@ -27,9 +27,9 @@ import {
   FileText,
   GitCompareArrows,
   Handshake,
+  ListPlus,
   Send,
   ShieldCheck,
-  Sparkles,
   TriangleAlert,
   Undo2,
   XCircle,
@@ -81,8 +81,14 @@ import {
 
 type TabId = "pricing" | "terms" | "negotiation" | "revision" | "activity";
 
-/** The two agents that read a proposal. Both advise; neither writes. */
-type ProposalAgent = "proposal-intelligence" | "estimation-intelligence";
+/**
+ * The agent this page runs. It advises; it does not write.
+ *
+ * A one-member union rather than a bare string: `estimation-intelligence` is
+ * still a live agent with its handlers intact — only its panel came off this
+ * page — so the day it comes back this is the one line that widens.
+ */
+type ProposalAgent = "proposal-intelligence";
 
 /** The newest run of one agent, or null before it has ever run. */
 const assessmentBy = (proposal: Proposal, agent: ProposalAgent): Assessment | null =>
@@ -192,7 +198,7 @@ export function ProposalDetail() {
       return;
     }
     if (showing.current !== startedOn) {
-      toast(`${agent === "proposal-intelligence" ? "Pre-send check" : "Pricing review"} finished`);
+      toast("Pre-send check finished");
       return;
     }
     setProposal(data.proposal);
@@ -292,10 +298,10 @@ export function ProposalDetail() {
                   onSaved={setProposal}
                 />
 
-                {/* Both agents read the lines above, which is why they sit
-                    under them rather than in the band at the top. Neither can
-                    change anything: `Generate lines` remains the deterministic
-                    survey-to-rate-card join, and these two only say where the
+                {/* The agent reads the lines above, which is why it sits under
+                    them rather than in the band at the top. It cannot change
+                    anything: `Generate lines` remains the deterministic
+                    survey-to-rate-card join, and this only says where the
                     result does not hold up. */}
                 <AssessmentPanel
                   title="Pre-send check"
@@ -307,22 +313,6 @@ export function ProposalDetail() {
                   recordUpdatedAt={proposal.updatedAt}
                   recordNoun="proposal"
                   staleAdvice="Run it again before sending."
-                />
-                <AssessmentPanel
-                  title="Pricing review"
-                  assessment={assessmentBy(proposal, "estimation-intelligence")}
-                  running={assessing === "estimation-intelligence"}
-                  onRun={() => runAgent("estimation-intelligence")}
-                  runLabel="Review the pricing"
-                  disabledReason={
-                    proposal.rateCard
-                      ? null
-                      : "No rate card resolved for this proposal, so there is nothing to check the prices against."
-                  }
-                  blurb="Checks the quantities, rates and minimums on these lines back against the survey they came from and the card they were priced off."
-                  recordUpdatedAt={proposal.updatedAt}
-                  recordNoun="proposal"
-                  staleAdvice="The lines have moved since — run it again."
                 />
               </>
             ) : null}
@@ -496,7 +486,12 @@ function ProposalActions({
               : "This proposal has no survey revision behind it, so there is nothing to generate from — add the lines by hand"
           }
         >
-          <Sparkles className="size-4" />
+          {/* NOT a sparkle, deliberately. In this app the sparkle means "an
+              agent reads this" — it is on six buttons that make a model call.
+              This one is a deterministic join from the frozen survey to the
+              rate card, and wearing the same icon made three people in a row
+              ask whether it was AI. */}
+          <ListPlus className="size-4" />
           {generating ? "Generating…" : "Generate lines"}
         </Button>
       ) : null}

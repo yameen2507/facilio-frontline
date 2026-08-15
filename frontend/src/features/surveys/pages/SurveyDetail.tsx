@@ -175,9 +175,14 @@ export function SurveyDetail() {
               <UserPlus className="size-4" />
               Assign
             </Button>
+            {/* "Edit details", not "Edit". This dialog changes the survey
+                RECORD — title, target date, notes — and people read a bare
+                "Edit" beside a survey as "open the form I filled in", press it,
+                and get three fields that look like a new and emptier survey.
+                The form itself is "Open walk", next to this. */}
             <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
               <Pencil className="size-4" />
-              Edit
+              Edit details
             </Button>
             {detail?.visits.length ? (
               // Primary while capture is still the job; once the survey is
@@ -282,7 +287,11 @@ export function SurveyDetail() {
             onOpenChange={(open) => !open && setMoving(null)}
             surveyId={id}
             actor={actor}
-            actorIsLead={survey?.leadUserEmail === actor}
+            // Always true while the server treats every actor as the lead
+            // (ANY_ACTOR_ACTS_AS_LEAD, modules/survey.ts) — with no invite flow
+            // the recorded lead often cannot sign in. Restore the
+            // `survey?.leadUserEmail === actor` comparison when invites land.
+            actorIsLead
             // The gate the SERVER would apply to this exact move, handed
             // straight down — never re-derived here. A lead's submit crosses
             // both gates in one tap (P-06), and T7's guard set subsumes T5's,
@@ -853,6 +862,14 @@ function OverviewTab({
                       : null,
               },
               {
+                // Saveable since the Edit dialog shipped, and displayed
+                // nowhere until now — so a note typed here was written to a
+                // column nobody could read back. The one free-text field on the
+                // survey record belongs on the record's own summary.
+                label: "Notes",
+                value: (s as { notes?: string | null }).notes?.trim() || null,
+              },
+              {
                 label: "Lead",
                 // The lead is one of the assignees, which carry the joined
                 // name — so the fact shows a person, not an address (X-05).
@@ -1097,7 +1114,7 @@ function TeamTab({ detail }: { detail: SurveyDetailResponse }) {
       <Card pad={false}>
         <Empty
           title="No one assigned"
-          body="A survey carries any number of assignees and exactly one lead. Only the lead can send it for review or submit it. Assigning arrives with the next backend slice."
+          body="A survey carries any number of assignees and exactly one lead. Until invites ship, anyone signed in can submit or send back a survey — assignment records who walked it, it does not gate the buttons."
         />
       </Card>
     );
@@ -2251,9 +2268,9 @@ function LifecycleDialog({
     move === "submit" && actorIsLead
       ? {
           ...MOVE_COPY.submit,
-          // The lead is told the truth BEFORE the tap: their submit IS the
-          // review, and completed is terminal.
-          body: "You are the survey lead, so submitting completes the survey in one step — the payload freezes and the estimator prices from it. Completed is terminal; a re-walk is a new linked survey.",
+          // The truth BEFORE the tap: this submit IS the review, and
+          // completed is terminal.
+          body: "Submitting completes the survey in one step — the payload freezes and the estimator prices from it. Completed is terminal; a re-walk is a new linked survey.",
           destructive: true,
         }
       : MOVE_COPY[move];
@@ -2420,7 +2437,7 @@ function EditSurveyDialog({
       <DialogContent className="sm:max-w-md">
         <form onSubmit={submit}>
           <DialogHeader>
-            <DialogTitle>Edit this survey</DialogTitle>
+            <DialogTitle>Edit survey details</DialogTitle>
             <DialogDescription>
               What it is called and when it is wanted by. Status moves through the actions in the
               header, never through a form.

@@ -4,9 +4,20 @@
  * | handler          | returns / accepts                                          |
  * | ---------------- | ---------------------------------------------------------- |
  * | `card-list`      | `{ cards: [...] }`, `includeRows` to bring the rows with it |
- * | `card-save`      | the 9 header fields; no `cardId` creates                    |
+ * | `card-save`      | the 9 header fields; no `rateCardId` creates                |
  * | `card-row-save`  | one pricing row; no `rowId` creates                         |
  * | `card-row-remove`| deactivates a row (there is no hard delete)                 |
+ *
+ * ── THE CARD ID IS `rateCardId` ON THE WIRE ──────────────────────────────────
+ * The app calls it `cardId`; all three handlers read `rateCardId`. The rename
+ * happens HERE so no page has to know. It matters more than a naming nit:
+ * `card-save` reads the id with `optStr`, so a mis-keyed id does not error — it
+ * reads as absent and every EDIT silently CREATES a second card.
+ *
+ * ── EVERY WRITE CARRIES `actorEmail` ─────────────────────────────────────────
+ * All three handlers read it with `str`, which throws on blank, so a save that
+ * omits it is rejected outright. Passed as the second argument, matching
+ * `saveUser`/`saveRole` in access-util.ts; call sites read it from `useActor()`.
  *
  * ── MONEY ────────────────────────────────────────────────────────────────────
  * `price` crosses the wire in integer MINOR units (10000 = 100.00). The two
@@ -235,8 +246,10 @@ export type CardHeaderInput = {
   effectiveTo: string;
 };
 
-export const saveRateCard = (input: CardHeaderInput) =>
-  requestFrom<Wire>(FN, "card-save", { payload: JSON.stringify(input) });
+export const saveRateCard = ({ cardId, ...rest }: CardHeaderInput, actorEmail: string) =>
+  requestFrom<Wire>(FN, "card-save", {
+    payload: JSON.stringify({ ...rest, ...(cardId ? { rateCardId: cardId } : {}), actorEmail }),
+  });
 
 export type CardRowInput = {
   cardId: string;
@@ -252,9 +265,9 @@ export type CardRowInput = {
   defaultFrequency: string;
 };
 
-export const saveRateCardRow = ({ price, ...rest }: CardRowInput) =>
+export const saveRateCardRow = ({ cardId, price, ...rest }: CardRowInput, actorEmail: string) =>
   requestFrom<Wire>(FN, "card-row-save", {
-    payload: JSON.stringify({ ...rest, price: toMinor(price) }),
+    payload: JSON.stringify({ ...rest, rateCardId: cardId, price: toMinor(price), actorEmail }),
   });
 
 /**
@@ -262,5 +275,5 @@ export const saveRateCardRow = ({ price, ...rest }: CardRowInput) =>
  * removed row stops pricing while the proposals that already used it keep
  * resolving. Flat args: both are plain ids with nothing to clear.
  */
-export const removeRateCardRow = (cardId: string, rowId: string) =>
-  requestFrom<Wire>(FN, "card-row-remove", { cardId, rowId });
+export const removeRateCardRow = (cardId: string, rowId: string, actorEmail: string) =>
+  requestFrom<Wire>(FN, "card-row-remove", { rateCardId: cardId, rowId, actorEmail });

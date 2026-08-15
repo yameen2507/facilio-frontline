@@ -190,6 +190,15 @@
   body {
     @apply bg-background text-foreground text-sm antialiased;
   }
+
+  /* The `#/embed` route (features/chat/pages/Embed) — the widget inside someone
+     else's page. An iframe composites over its host ONLY while its own document
+     stays transparent, so the app's opaque `--background` has to come off both
+     boxes; leaving it on lands a grey card on the host's website. */
+  body.embed,
+  html:has(body.embed) {
+    background: transparent;
+  }
 }
 
 /* ── The phone tab bar's footprint ───────────────────────────────────────────

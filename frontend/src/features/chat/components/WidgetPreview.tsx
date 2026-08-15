@@ -68,6 +68,15 @@ export const WIDGET_WRAP = "relative mx-auto w-full max-w-[400px]";
 export const WIDGET_FRAME =
   "flex h-[60vh] max-h-[620px] min-h-[420px] flex-col overflow-hidden rounded-2xl border lg:h-[66vh] lg:max-h-[720px]";
 
+/** EMBEDDED geometry — the widget as the whole of a host page's iframe.
+    The console sizes the widget inside a page that has other things in it; an
+    embed does not. There the IFRAME is what carries the width and the rounded
+    corner, so the wrap gives up its max-width and the frame takes the full
+    height it is given. Keeping `60vh` here would have been wrong twice over:
+    inside a 600px frame it clamps to the 420px minimum and then overflows. */
+export const WIDGET_FILL_WRAP = "relative h-full w-full";
+export const WIDGET_FILL_FRAME = "flex h-full flex-col overflow-hidden rounded-2xl border";
+
 /** Inner glass edges (header, composer, bubbles) — same light/dark logic as
     the panel border, one step softer. */
 const GLASS_EDGE = "border-black/10 dark:border-white/10";
@@ -79,7 +88,15 @@ const MSG_AGENT_GLASS = `${MSG} self-start rounded-bl-sm border shadow-sm shadow
 const HEADER_ROW = "flex items-center gap-3 border-b px-4 py-3";
 const COMPOSER_ROW = "flex items-center gap-2 border-t p-3";
 
-export function WidgetPreview({ config }: { config: WidgetConfig }) {
+/**
+ * `embedded` is the same widget on a REAL host page rather than in the console.
+ * Two things change and both are about audience: it fills the frame it was
+ * given (see WIDGET_FILL_*), and it drops the footer — the price disclaimer and
+ * "Start a new conversation" are an operator's reassurances while they test,
+ * and a visitor who is handed a restart button treats the conversation as
+ * disposable.
+ */
+export function WidgetPreview({ config, embedded = false }: { config: WidgetConfig; embedded?: boolean }) {
   const toast = useToast();
 
   const [session, setSession] = useState<Session | null>(null);
@@ -213,8 +230,8 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
   const initial = (companyName[0] ?? "•").toUpperCase();
 
   return (
-    <div className={WIDGET_WRAP}>
-      <div className={cn(WIDGET_FRAME, GLASS_PANEL)}>
+    <div className={embedded ? WIDGET_FILL_WRAP : WIDGET_WRAP}>
+      <div className={cn(embedded ? WIDGET_FILL_FRAME : WIDGET_FRAME, GLASS_PANEL)}>
         {/* The brand header: logo (or initial), name, the online dot + tagline. */}
         <div className={cn(HEADER_ROW, GLASS_EDGE)}>
           {config.logo ? (
@@ -309,12 +326,14 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
       {/* Stacked, not a row: the widget is 400px wide and the note beside the
           button broke into three ragged lines against it. The note stays above
           the control it qualifies. */}
-      <div className="text-muted-foreground mt-3 flex flex-col items-center gap-2 text-center text-xs">
-        <span>The assistant never quotes a price — a surveyor confirms that on site.</span>
-        <Button small onClick={() => void start()}>
-          Start a new conversation
-        </Button>
-      </div>
+      {embedded ? null : (
+        <div className="text-muted-foreground mt-3 flex flex-col items-center gap-2 text-center text-xs">
+          <span>The assistant never quotes a price — a surveyor confirms that on site.</span>
+          <Button small onClick={() => void start()}>
+            Start a new conversation
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -324,10 +343,10 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
  * composer the real one renders (skeleton rule 1: reuse the real structure),
  * so nothing drops when the config lands and WidgetPreview takes over.
  */
-export function WidgetSkeleton() {
+export function WidgetSkeleton({ embedded = false }: { embedded?: boolean }) {
   return (
-    <div className={WIDGET_WRAP} aria-busy="true" aria-label="Loading widget">
-      <div className={cn(WIDGET_FRAME, GLASS_PANEL)} aria-hidden="true">
+    <div className={embedded ? WIDGET_FILL_WRAP : WIDGET_WRAP} aria-busy="true" aria-label="Loading widget">
+      <div className={cn(embedded ? WIDGET_FILL_FRAME : WIDGET_FRAME, GLASS_PANEL)} aria-hidden="true">
         <div className={cn(HEADER_ROW, GLASS_EDGE)}>
           <Skeleton className="bg-border size-9 shrink-0 rounded-full" />
           <div className="min-w-0 flex-1">

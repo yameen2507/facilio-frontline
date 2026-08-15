@@ -26,7 +26,7 @@
 import { HashRouter, Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import Layout from "../layout";
 import { AccountsRouter } from "../features/accounts";
-import { ChatRouter } from "../features/chat";
+import { ChatRouter, Embed } from "../features/chat";
 import { DealsRouter } from "../features/deals";
 import { LeadsRouter } from "../features/leads";
 import { ProposalsRouter } from "../features/proposals";
@@ -96,7 +96,29 @@ function NotFound() {
   );
 }
 
+/**
+ * `#/embed` is the widget alone, for a host page's iframe — and it is answered
+ * HERE, above the router, because the router is not reachable from outside the
+ * gate. `AuthGate` wraps `HashRouter`, so a route declared in the table below
+ * would still be behind a sign-in prompt, and a sign-in prompt is not what
+ * belongs in a 400px frame on a company website.
+ *
+ * Read from `location.hash` rather than a route: HashRouter has not mounted yet
+ * at this point. The query string is stripped so `#/embed?x=1` still matches.
+ *
+ * ToastProvider stays — the widget reports failures through it.
+ */
+const isEmbed = () => window.location.hash.replace(/^#/, "").split("?")[0] === "/embed";
+
 export function App() {
+  if (isEmbed()) {
+    return (
+      <ToastProvider>
+        <Embed />
+      </ToastProvider>
+    );
+  }
+
   return (
     <ToastProvider>
       <ThemeProvider>

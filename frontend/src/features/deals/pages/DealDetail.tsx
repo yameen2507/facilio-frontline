@@ -111,6 +111,28 @@ const DISCOVERY_LABELS: [string, string][] = [
   ["budget", "Budget"],
 ];
 
+/**
+ * One discovery value as text.
+ *
+ * `decisionMakers` is a list of {name, email} since the capture form stopped
+ * being one box — `String()` on that prints "[object Object]". Rows captured
+ * before the change are still plain strings and print unchanged, so the card
+ * reads correctly on old deals and new ones without knowing which it has.
+ */
+function discoveryValue(raw: unknown): string {
+  if (!Array.isArray(raw)) return String(raw);
+  const people = raw
+    .filter((r): r is Record<string, unknown> => Boolean(r) && typeof r === "object")
+    .map((r) => {
+      const name = String(r.name ?? "").trim();
+      const email = String(r.email ?? "").trim();
+      if (name && email) return `${name} (${email})`;
+      return name || email;
+    })
+    .filter(Boolean);
+  return people.length ? people.join(", ") : "—";
+}
+
 export function DealDetail() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
@@ -545,7 +567,7 @@ export function DealDetail() {
                       rows={discoveryRows.map(([key, label]) => ({
                         icon: ClipboardList,
                         label,
-                        value: String(discovery[key]),
+                        value: discoveryValue(discovery[key]),
                       }))}
                     />
                   ) : (

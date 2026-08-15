@@ -59,5 +59,39 @@ export function snapshotTemplate(
     [surveyId, templateId, templateVersionNo, now]
   );
 
+  /**
+   * The FIRST entry of every repeatable section that demands one.
+   *
+   * Questions on a repeatable section belong to its entries, not to the section
+   * — a "Room" section holds its three questions once per room walked. With no
+   * entry there is nothing to hang them on, so a freshly scheduled survey opened
+   * to a page with no questions on it at all, whatever the template said. The
+   * template had already said what to do about it: `min_repeats` is copied above
+   * and, until now, read by nobody.
+   *
+   * Only `min_repeats >= 1`. A repeatable section with no stated minimum is
+   * genuinely optional — seeding one there would invent a room nobody walked.
+   * And only the FIRST: seeding all of a minimum of three would be three empty
+   * rooms to delete, where one is an obvious starting point.
+   *
+   * Idempotent like its two neighbours: re-scheduling repairs a half-finished
+   * snapshot rather than adding a second empty entry to every section.
+   */
+  mutate(
+    `insert into fl_survey_section_entry
+       (id, survey_id, section_instance_id, entry_no, entry_label, prospect_node_id,
+        visit_id, created_by, is_active, data_json, created_at, updated_at)
+     select gen_random_uuid()::text, $1, i.id, 1,
+            coalesce(nullif(i.repeat_label, ''), i.name), null,
+            null, 'snapshot', 'true', '{}', $2, $2
+       from fl_survey_section_instance i
+      where i.survey_id = $1 and i.is_active = 'true'
+        and i.is_repeatable = 'true'
+        and coalesce(i.min_repeats, 0) >= 1
+        and not exists (select 1 from fl_survey_section_entry e
+                         where e.survey_id = $1 and e.section_instance_id = i.id)`,
+    [surveyId, now]
+  );
+
   return { sections, questions };
 }

@@ -78,6 +78,7 @@ import {
   claimLead,
   convertLead,
   getLead,
+  listAccountDeals,
   listDealSurveys,
   logCall,
   storeAnalysis,
@@ -85,6 +86,7 @@ import {
   updateLead,
 } from "../api/leads-util";
 import { AiAssessment } from "../components/AiAssessment";
+import { DealsPane } from "../components/DealsPane";
 import {
   LeadActionDialogs,
   type AssignRole,
@@ -98,10 +100,10 @@ import { PortfolioTree } from "../../prospects/pages/PortfolioTree";
 import { Ownership, Timeline } from "../components/Timeline";
 import { TranscriptPane } from "../components/TranscriptCard";
 import { Tabs, type Tab } from "../../../ui/Tabs";
-import type { DealSurvey, LeadDetail as LeadDetailShape } from "../types/lead";
+import type { DealSurvey, LeadAccountDeal, LeadDetail as LeadDetailShape } from "../types/lead";
 
 /** The right-hand container's panes. */
-type DetailTab = "assessment" | "portfolio" | "surveys" | "activity" | "conversation";
+type DetailTab = "assessment" | "portfolio" | "deals" | "surveys" | "activity" | "conversation";
 
 /**
  * How each channel presents in the header — the same vocabulary the new-lead
@@ -161,6 +163,9 @@ export function LeadDetail() {
   const [tab, setTab] = useState<DetailTab>("assessment");
   const [surveys, setSurveys] = useState<DealSurvey[] | null>(null);
   const [surveysError, setSurveysError] = useState<string | null>(null);
+  /** Every deal on this lead's account — see `listAccountDeals`. */
+  const [deals, setDeals] = useState<LeadAccountDeal[] | null>(null);
+  const [dealsError, setDealsError] = useState<string | null>(null);
   // Whether the full stage path has scrolled out of the work area — the
   // condensed sticky strip is shown only then.
   const [condensed, setCondensed] = useState(false);
@@ -302,6 +307,28 @@ export function LeadDetail() {
       live = false;
     };
   }, [dealIdForSurveys, reloadKey]);
+
+  // The client's other deals. Keyed on the ACCOUNT, which a lead can carry from
+  // the moment it is filed (the New lead form's existing-client picker) — so
+  // unlike surveys this does not wait on conversion. Refetched when the account
+  // appears, which is what Convert does to an unlinked lead.
+  const accountIdForDeals = detail?.lead.accountId ?? null;
+  useEffect(() => {
+    setDeals(null);
+    setDealsError(null);
+    if (!accountIdForDeals) return;
+
+    let live = true;
+    listAccountDeals(accountIdForDeals).then(({ data, error: err }) => {
+      if (!live) return;
+      if (err) setDealsError(err);
+      else setDeals(data?.deals ?? []);
+    });
+
+    return () => {
+      live = false;
+    };
+  }, [accountIdForDeals, reloadKey]);
 
   // Watches the point just under the path card, WITH the work-area scroller as
   // the observer's root — against the window the sentinel can be "hidden" while
@@ -794,6 +821,17 @@ export function LeadDetail() {
                   { id: "portfolio", label: "Portfolio" },
                   // Surveys exist only once a deal does — a tab that can never
                   // hold content is noise on an unconverted lead.
+                  // Keyed on the ACCOUNT, not on this lead's own deal, so it
+                  // answers "what else is in flight for this client" rather than
+                  // linking to the single row the fact rail already links to.
+                  // Available before conversion too: a lead captured against an
+                  // existing client (the New lead form's client picker) carries
+                  // an accountId from the moment it is filed.
+                  ...(lead.accountId
+                    ? [{ id: "deals", label: "Deals", count: deals?.length } as Tab<DetailTab>]
+                    : []),
+                  // Surveys exist only once a deal does — a tab that can never
+                  // hold content is noise on an unconverted lead.
                   ...(lead.dealId
                     ? [{ id: "surveys", label: "Surveys", count: surveys?.length } as Tab<DetailTab>]
                     : []),
@@ -849,6 +887,11 @@ export function LeadDetail() {
           {lead.dealId ? (
             <div className={tab === "surveys" ? undefined : "hidden"}>
               <SurveysPane dealId={lead.dealId} surveys={surveys} error={surveysError} />
+            </div>
+          ) : null}
+          {lead.accountId ? (
+            <div className={tab === "deals" ? undefined : "hidden"}>
+              <DealsPane deals={deals} error={dealsError} thisLeadId={lead.id} />
             </div>
           ) : null}
           <div className={tab === "portfolio" ? undefined : "hidden"}>

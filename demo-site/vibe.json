@@ -1,0 +1,7 @@
+{
+  "name": "Sterling",
+  "app": "sterling",
+  "build": {
+    "publish": "dist"
+  }
+}

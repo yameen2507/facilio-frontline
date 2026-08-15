@@ -1,0 +1,835 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sterling Soft Services — Commercial cleaning & integrated soft FM</title>
+    <meta
+      name="description"
+      content="Sterling Soft Services — commercial cleaning, hygiene and integrated soft FM for buildings that never stop."
+    />
+
+    <!--
+      ══════════════════════════════════════════════════════════════════════════
+      A DEMO CUSTOMER'S WEBSITE. Sterling does not exist; this page exists so the
+      Frontline intake widget can be seen where it will actually live — the
+      bottom-right corner of a soft-services company's marketing site — instead
+      of inside our own console, where it is surrounded by the thing that is
+      supposed to be invisible.
+
+      Everything above the widget is theatre. The widget is not: the frame in
+      the corner loads `#/embed` from the real frontline app, so the agent that
+      answers, the enquiry it captures and the LEAD ROW IT WRITES are all live.
+
+      WHY AN IFRAME AND NOT THE SDK. Agents and functions are app-scoped — a
+      widget served from this app would resolve `intake` against THIS app and
+      404 — and pointing the SDK back at frontline cross-origin is refused: the
+      preflight answers 204 with no `Access-Control-Allow-Origin`. The framed
+      document IS frontline, so none of that applies to it.
+
+      WHAT THIS DEMO CANNOT SHOW. The frame only renders for a viewer already
+      signed in to Facilio: frontline is auth-gated, and an anonymous request
+      302s to id.facilio.com, which refuses to be framed. On a customer's own
+      domain the widget needs PUBLIC APP ACCESS — a platform setting, currently
+      off. Drive this demo signed in, and say that sentence out loud.
+
+      NO EXTERNAL ASSETS. No CDN font, no icon pack, no stock photo — nothing
+      that can half-load in front of an audience. `logo.jpg` ships inside the
+      same deploy bundle, and the hero is a gradient standing in for the
+      photograph the real site would carry.
+      ══════════════════════════════════════════════════════════════════════════
+    -->
+
+    <link rel="icon" href="./logo.jpg" />
+
+    <style>
+      :root {
+        --maroon: #7b1e32;
+        --maroon-deep: #5d1526;
+        --maroon-ink: #4a1120;
+        --gold: #c9a227;
+        --gold-soft: #d9bb57;
+        --ink: #1c1417;
+        --muted: #6b5c61;
+        --line: #e7dfe1;
+        --paper: #fdfbfb;
+        --shell: 1240px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font: 16px/1.6 "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .shell {
+        max-width: var(--shell);
+        margin: 0 auto;
+        padding: 0 32px;
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      h1,
+      h2,
+      h3 {
+        margin: 0;
+        letter-spacing: -0.02em;
+        line-height: 1.1;
+      }
+
+      /* ── Utility bar ──────────────────────────────────────────────────────── */
+      .utility {
+        background: var(--maroon-ink);
+        color: #e8d9dd;
+        font-size: 13px;
+      }
+      .utility .shell {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+        min-height: 40px;
+      }
+      .utility-links {
+        display: flex;
+        align-items: center;
+        gap: 22px;
+      }
+      .utility-links strong {
+        color: #fff;
+        letter-spacing: 0.02em;
+      }
+      .utility-links a:hover {
+        color: #fff;
+      }
+      .socials {
+        display: flex;
+        gap: 10px;
+      }
+      .socials span {
+        width: 20px;
+        height: 20px;
+        border-radius: 5px;
+        background: #ffffff26;
+        display: grid;
+        place-items: center;
+        font-size: 10px;
+        font-weight: 700;
+        color: #fff;
+      }
+
+      /* ── Masthead ─────────────────────────────────────────────────────────── */
+      .masthead {
+        background: #fff;
+        border-bottom: 1px solid var(--line);
+        position: sticky;
+        top: 0;
+        z-index: 40;
+      }
+      .masthead .shell {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 32px;
+        min-height: 84px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+      /* The logo arrives as a JPEG with its white ground baked in, so the tile
+         is white rather than maroon and the corner radius is CLIPPED (overflow
+         hidden) rather than merely set — a radius on the container alone leaves
+         the image's square corners sitting proud of it.
+
+         On the white masthead that leaves the tile edgeless, hence the hairline
+         border; on the maroon footer the white reads as a badge and the border
+         is invisible, which is why one rule serves both. */
+      .brand-mark {
+        width: 46px;
+        height: 46px;
+        border-radius: 12px;
+        overflow: hidden;
+        background: #fff;
+        border: 1px solid var(--line);
+        display: grid;
+        place-items: center;
+        flex: none;
+      }
+      .brand-mark img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        display: block;
+      }
+      .brand-name {
+        font: 700 24px/1.05 Georgia, serif;
+        color: var(--maroon);
+      }
+      .brand-sub {
+        font-size: 11px;
+        letter-spacing: 0.24em;
+        color: var(--muted);
+        text-transform: uppercase;
+        margin-top: 3px;
+      }
+      nav.primary {
+        display: flex;
+        gap: 30px;
+        font-weight: 600;
+        font-size: 15px;
+      }
+      nav.primary a:hover {
+        color: var(--maroon);
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 15px 30px;
+        border-radius: 999px;
+        font-weight: 700;
+        font-size: 15px;
+        border: 2px solid transparent;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: transform 0.15s ease, opacity 0.15s ease;
+      }
+      .pill:hover {
+        transform: translateY(-1px);
+      }
+      .pill-maroon {
+        background: var(--maroon);
+        color: #fff;
+      }
+      .pill-gold {
+        background: var(--gold);
+        color: #3a2a06;
+      }
+      .pill-ghost {
+        background: transparent;
+        color: #fff;
+        border-color: #ffffff8c;
+      }
+
+      /* ── Hero ─────────────────────────────────────────────────────────────── */
+      .hero {
+        position: relative;
+        color: #fff;
+        background: linear-gradient(115deg, var(--maroon-ink) 0%, var(--maroon) 55%, #8f2b40 100%);
+        overflow: hidden;
+      }
+      /* Stands in for the photograph: a soft light source top-right and a faint
+         diagonal weave, so the panel reads as a treated image rather than a
+         flat block of colour. */
+      .hero::before,
+      .hero::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+      .hero::before {
+        background: radial-gradient(58% 70% at 74% 24%, #ffffff40 0%, #ffffff00 60%);
+      }
+      .hero::after {
+        background: repeating-linear-gradient(58deg, #ffffff0f 0 2px, #ffffff00 2px 22px);
+        opacity: 0.55;
+      }
+      .hero .shell {
+        position: relative;
+        z-index: 1;
+        padding-top: 108px;
+        padding-bottom: 120px;
+        max-width: 1000px;
+      }
+      .eyebrow {
+        color: var(--gold-soft);
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        margin-bottom: 26px;
+      }
+      .hero h1 {
+        font-size: clamp(38px, 5.4vw, 70px);
+        font-weight: 700;
+        max-width: 15ch;
+      }
+      .hero p.lede {
+        font-size: 19px;
+        line-height: 1.55;
+        color: #f3e6e9;
+        max-width: 46ch;
+        margin: 28px 0 40px;
+      }
+      .hero-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+      }
+      .assurances {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 34px;
+        margin-top: 64px;
+        font-size: 15px;
+        color: #f0e2e6;
+      }
+      .assurances span::before {
+        content: "✓";
+        color: var(--gold-soft);
+        font-weight: 700;
+        margin-right: 10px;
+      }
+
+      /* ── Sections ─────────────────────────────────────────────────────────── */
+      section.band {
+        padding: 96px 0;
+      }
+      .section-head {
+        max-width: 640px;
+        margin-bottom: 52px;
+      }
+      .section-head .eyebrow {
+        color: var(--maroon);
+        margin-bottom: 16px;
+      }
+      .section-head h2 {
+        font-size: clamp(28px, 3.4vw, 40px);
+        font-weight: 700;
+      }
+      .section-head p {
+        color: var(--muted);
+        font-size: 17px;
+        margin: 18px 0 0;
+      }
+
+      .grid {
+        display: grid;
+        gap: 24px;
+        grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+      }
+      .card {
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 30px;
+      }
+      .card h3 {
+        font-size: 19px;
+        font-weight: 700;
+        margin-bottom: 12px;
+      }
+      .card p {
+        color: var(--muted);
+        margin: 0;
+        font-size: 15px;
+      }
+      .card-rule {
+        width: 38px;
+        height: 4px;
+        border-radius: 2px;
+        background: var(--gold);
+        margin-bottom: 22px;
+      }
+
+      .stats {
+        background: var(--maroon-ink);
+        color: #fff;
+      }
+      .stats .grid {
+        gap: 40px;
+      }
+      .stat-figure {
+        font: 700 46px/1 Georgia, serif;
+        color: var(--gold-soft);
+      }
+      .stat-label {
+        color: #e0cdd2;
+        margin-top: 10px;
+        font-size: 15px;
+      }
+
+      .industries {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+      .chip {
+        border: 1px solid var(--line);
+        background: #fff;
+        border-radius: 999px;
+        padding: 11px 22px;
+        font-size: 15px;
+        font-weight: 600;
+      }
+
+      .closer {
+        background: linear-gradient(100deg, var(--maroon) 0%, var(--maroon-deep) 100%);
+        color: #fff;
+        text-align: center;
+      }
+      .closer h2 {
+        font-size: clamp(28px, 3.4vw, 40px);
+        max-width: 20ch;
+        margin: 0 auto;
+      }
+      .closer p {
+        color: #f2e4e7;
+        max-width: 52ch;
+        margin: 20px auto 36px;
+      }
+
+      footer {
+        background: var(--maroon-ink);
+        color: #cbb6bc;
+        font-size: 14px;
+        padding: 56px 0 40px;
+      }
+      footer .cols {
+        display: grid;
+        gap: 40px;
+        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      }
+      footer h4 {
+        color: #fff;
+        font-size: 13px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        margin: 0 0 16px;
+      }
+      footer li {
+        list-style: none;
+        margin-bottom: 9px;
+      }
+      footer ul {
+        margin: 0;
+        padding: 0;
+      }
+      .colophon {
+        border-top: 1px solid #ffffff1f;
+        margin-top: 44px;
+        padding-top: 22px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 14px;
+        font-size: 13px;
+      }
+
+      /* ── The widget ───────────────────────────────────────────────────────── */
+
+      /* The launcher belongs to the HOST page, not to the frame. Keeping it out
+         here is what lets the iframe be exactly widget-sized: a launcher inside
+         the frame would need the frame to cover the viewport, transparent, with
+         pointer-events threaded through the empty part of it. */
+      .launcher {
+        position: fixed;
+        right: 26px;
+        bottom: 26px;
+        z-index: 60;
+        display: inline-flex;
+        align-items: center;
+        gap: 11px;
+        padding: 15px 24px;
+        border: 0;
+        border-radius: 999px;
+        background: #fff;
+        color: var(--maroon-ink);
+        font: 700 15px/1 "Segoe UI", system-ui, sans-serif;
+        box-shadow: 0 12px 34px #3d0e1a40;
+        cursor: pointer;
+        transition: transform 0.16s ease;
+      }
+      .launcher:hover {
+        transform: translateY(-2px);
+      }
+      .launcher::after {
+        content: "";
+        position: absolute;
+        top: -3px;
+        right: -3px;
+        width: 13px;
+        height: 13px;
+        border-radius: 50%;
+        background: var(--gold);
+        border: 2px solid #fff;
+      }
+      .launcher svg {
+        width: 19px;
+        height: 19px;
+      }
+
+      /* The frame's seat. The blur lives HERE because backdrop-filter cannot
+         reach across a document boundary — inside the iframe it would blur an
+         empty page. The widget's own translucent glass then lands on top of
+         this blurred pane, which is what makes it read as one material. */
+      .widget-dock {
+        position: fixed;
+        right: 26px;
+        bottom: 100px;
+        z-index: 59;
+        width: 400px;
+        height: min(620px, calc(100vh - 140px));
+        /* 16px, matching the widget's own `rounded-2xl` inside the frame — a
+           larger radius out here leaves a visible seam between the two curves. */
+        border-radius: 16px;
+        background: #ffffff59;
+        backdrop-filter: blur(22px);
+        -webkit-backdrop-filter: blur(22px);
+        box-shadow: 0 26px 70px #3d0e1a3d;
+        overflow: hidden;
+        transform-origin: 100% 100%;
+        transition: opacity 0.2s ease, transform 0.2s ease;
+      }
+      .widget-dock[hidden] {
+        display: none;
+      }
+      .widget-dock.closing,
+      .widget-dock.opening {
+        opacity: 0;
+        transform: translateY(10px) scale(0.98);
+      }
+      .widget-dock iframe {
+        width: 100%;
+        height: 100%;
+        border: 0;
+        display: block;
+        background: transparent;
+      }
+
+      @media (max-width: 900px) {
+        nav.primary,
+        .utility-links a,
+        .socials {
+          display: none;
+        }
+        .masthead .pill {
+          padding: 12px 20px;
+        }
+      }
+      @media (max-width: 520px) {
+        .shell {
+          padding: 0 20px;
+        }
+        .widget-dock {
+          right: 12px;
+          left: 12px;
+          width: auto;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="utility">
+      <div class="shell">
+        <span>Trusted commercial soft-services partner · Serving 240+ sites nationwide</span>
+        <div class="utility-links">
+          <strong>1-800-STERLING</strong>
+          <a href="#">Careers</a>
+          <a href="#">Team Login</a>
+          <div class="socials"><span>in</span><span>f</span><span>ig</span></div>
+        </div>
+      </div>
+    </div>
+
+    <header class="masthead">
+      <div class="shell">
+        <div class="brand">
+          <div class="brand-mark"><img src="./logo.jpg" alt="Sterling Soft Services" /></div>
+          <div>
+            <div class="brand-name">Sterling</div>
+            <div class="brand-sub">Soft Services</div>
+          </div>
+        </div>
+        <nav class="primary">
+          <a href="#services">Services</a>
+          <a href="#industries">Industries</a>
+          <a href="#why">Why Us</a>
+          <a href="#about">About</a>
+          <a href="#contact">Contact</a>
+        </nav>
+        <!-- Every quote path on this page opens the same widget: the point of
+             the demo is that the enquiry has one front door. -->
+        <button class="pill pill-maroon" data-open-chat>Get a Free Quote</button>
+      </div>
+    </header>
+
+    <div class="hero">
+      <div class="shell">
+        <div class="eyebrow">Commercial &amp; Facilities Soft Services</div>
+        <h1>A Highly-Trained, Professional Soft-Services Company</h1>
+        <p class="lede">
+          Setting the standard for excellence through quality, reliability and trusted service — cleaning, hygiene and
+          integrated soft FM for buildings that never stop.
+        </p>
+        <div class="hero-actions">
+          <button class="pill pill-gold" data-open-chat>Schedule a Walk-Through</button>
+          <a class="pill pill-ghost" href="#services">Explore Services</a>
+        </div>
+        <div class="assurances">
+          <span>ISO-aligned quality system</span>
+          <span>Vetted, uniformed teams</span>
+          <span>Real-time reporting</span>
+        </div>
+      </div>
+    </div>
+
+    <section class="band" id="services">
+      <div class="shell">
+        <div class="section-head">
+          <div class="eyebrow">What we do</div>
+          <h2>One contract, every soft service your building runs on</h2>
+          <p>
+            Directly employed teams, one account manager, one monthly report — across a single site or a national
+            portfolio.
+          </p>
+        </div>
+        <div class="grid">
+          <div class="card">
+            <div class="card-rule"></div>
+            <h3>Daily office cleaning</h3>
+            <p>Day and night teams on a scoped specification, audited monthly against a published standard.</p>
+          </div>
+          <div class="card">
+            <div class="card-rule"></div>
+            <h3>Kitchen extract &amp; ductwork</h3>
+            <p>TR19-compliant deep cleans with pre and post photographic evidence and a certificate for your insurer.</p>
+          </div>
+          <div class="card">
+            <div class="card-rule"></div>
+            <h3>Washroom &amp; hygiene</h3>
+            <p>Consumables, sanitary disposal and periodic deep cleans on a schedule that matches real footfall.</p>
+          </div>
+          <div class="card">
+            <div class="card-rule"></div>
+            <h3>Specialist &amp; periodic</h3>
+            <p>Carpets, hard floors, high-level and façade work planned around the hours your building is quiet.</p>
+          </div>
+          <div class="card">
+            <div class="card-rule"></div>
+            <h3>Waste &amp; recycling</h3>
+            <p>Segregated streams, duty-of-care paperwork and diversion figures you can put in an ESG report.</p>
+          </div>
+          <div class="card">
+            <div class="card-rule"></div>
+            <h3>Front of house</h3>
+            <p>Reception, post room and helpdesk cover, trained to your brand rather than to ours.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="band stats" id="why">
+      <div class="shell">
+        <div class="grid">
+          <div>
+            <div class="stat-figure">240+</div>
+            <div class="stat-label">Sites cleaned every night</div>
+          </div>
+          <div>
+            <div class="stat-figure">1,900</div>
+            <div class="stat-label">Directly employed operatives</div>
+          </div>
+          <div>
+            <div class="stat-figure">98.4%</div>
+            <div class="stat-label">Audit pass rate, rolling 12 months</div>
+          </div>
+          <div>
+            <div class="stat-figure">4 hrs</div>
+            <div class="stat-label">Average response to a reactive call</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="band" id="industries">
+      <div class="shell">
+        <div class="section-head">
+          <div class="eyebrow">Industries</div>
+          <h2>Buildings we know well enough to price properly</h2>
+          <p>Each one carries its own compliance regime, and our specifications are written to it rather than to a template.</p>
+        </div>
+        <div class="industries">
+          <span class="chip">Commercial offices</span>
+          <span class="chip">Retail &amp; shopping centres</span>
+          <span class="chip">Hotels &amp; hospitality</span>
+          <span class="chip">Healthcare &amp; clinics</span>
+          <span class="chip">Education</span>
+          <span class="chip">Logistics &amp; industrial</span>
+          <span class="chip">Data centres</span>
+          <span class="chip">Residential &amp; BTR</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="band" id="about">
+      <div class="shell">
+        <div class="section-head">
+          <div class="eyebrow">How it starts</div>
+          <h2>A conversation, then a walk-through — never a guessed price</h2>
+          <p>
+            Tell us the building, the hours and what is going wrong today. A surveyor confirms the scope on site, and the
+            quotation follows from what they measured.
+          </p>
+        </div>
+        <div class="grid">
+          <div class="card">
+            <div class="card-rule"></div>
+            <h3>1 · Tell us the brief</h3>
+            <p>Two minutes in the chat, or a call. Site type, size, hours and the services you are looking at.</p>
+          </div>
+          <div class="card">
+            <div class="card-rule"></div>
+            <h3>2 · We walk the site</h3>
+            <p>A surveyor measures the areas, photographs the condition and agrees the specification with you.</p>
+          </div>
+          <div class="card">
+            <div class="card-rule"></div>
+            <h3>3 · You get a priced proposal</h3>
+            <p>Line by line against the specification, with the mobilisation plan and the audit regime attached.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="band closer" id="contact">
+      <div class="shell">
+        <h2>Ready to see what your building should really cost to run?</h2>
+        <p>Start the conversation now — our assistant takes the brief and a surveyor follows up the same working day.</p>
+        <button class="pill pill-gold" data-open-chat>Schedule a Walk-Through</button>
+      </div>
+    </section>
+
+    <footer>
+      <div class="shell">
+        <div class="cols">
+          <div>
+            <div class="brand" style="margin-bottom: 16px">
+              <div class="brand-mark" style="width: 38px; height: 38px; border-radius: 10px; border-color: #ffffff2e">
+                <img src="./logo.jpg" alt="" />
+              </div>
+              <div>
+                <div class="brand-name" style="color: #fff; font-size: 20px">Sterling</div>
+                <div class="brand-sub" style="color: #b79aa2">Soft Services</div>
+              </div>
+            </div>
+            <p style="margin: 0; max-width: 30ch">Commercial cleaning, hygiene and integrated soft FM.</p>
+          </div>
+          <div>
+            <h4>Services</h4>
+            <ul>
+              <li>Daily office cleaning</li>
+              <li>Kitchen extract &amp; ductwork</li>
+              <li>Washroom &amp; hygiene</li>
+              <li>Waste &amp; recycling</li>
+            </ul>
+          </div>
+          <div>
+            <h4>Company</h4>
+            <ul>
+              <li>About us</li>
+              <li>Careers</li>
+              <li>Sustainability</li>
+              <li>Accreditations</li>
+            </ul>
+          </div>
+          <div>
+            <h4>Contact</h4>
+            <ul>
+              <li>1-800-STERLING</li>
+              <li>hello@sterlingsoftservices.com</li>
+              <li>Mon–Fri, 8am–6pm</li>
+            </ul>
+          </div>
+        </div>
+        <div class="colophon">
+          <span>© 2026 Sterling Soft Services. A demonstration site — this company is not real.</span>
+          <span>The assistant in the corner is Facilio Frontline.</span>
+        </div>
+      </div>
+    </footer>
+
+    <div class="widget-dock" id="dock" hidden>
+      <!--
+        The real thing. `#/embed` renders the intake widget alone, above the
+        console's auth gate; the enquiry it captures becomes a row in fl_lead.
+
+        Pointed at PREVIEW deliberately — production is many deployments behind
+        and does not carry the widget at all. Swap the host when prod catches up.
+      -->
+      <iframe
+        id="widget"
+        title="Chat with Sterling"
+        allow="clipboard-write"
+        src="https://preview-frontline.vibe.facilio.com/#/embed"
+      ></iframe>
+    </div>
+
+    <button class="launcher" id="launcher" aria-expanded="false" aria-controls="dock">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
+        <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.6-.7L3 21l1.9-4.9A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5z" />
+      </svg>
+      <span id="launcher-label">Chat with us</span>
+    </button>
+
+    <script>
+      // The frame is created ONCE and hidden between openings rather than being
+      // torn down: reloading the iframe would start a new intake session, and a
+      // visitor who closes the panel to look at the services list expects their
+      // half-finished conversation to still be there when they come back.
+      const dock = document.getElementById("dock");
+      const launcher = document.getElementById("launcher");
+      const label = document.getElementById("launcher-label");
+
+      function openChat() {
+        if (!dock.hidden) return;
+        dock.classList.add("opening");
+        dock.hidden = false;
+        // TWO frames, not one. The element was `display:none` when `.opening`
+        // was applied, and a style computed on a box that is not in the layout
+        // is not a state a transition can move from — unhiding and clearing in
+        // the same frame snaps instead of fading.
+        requestAnimationFrame(() => requestAnimationFrame(() => dock.classList.remove("opening")));
+        launcher.setAttribute("aria-expanded", "true");
+        label.textContent = "Close";
+      }
+
+      function closeChat() {
+        if (dock.hidden) return;
+        dock.classList.add("closing");
+        launcher.setAttribute("aria-expanded", "false");
+        label.textContent = "Chat with us";
+        setTimeout(() => {
+          dock.hidden = true;
+          dock.classList.remove("closing");
+        }, 200);
+      }
+
+      launcher.addEventListener("click", () => (dock.hidden ? openChat() : closeChat()));
+      document.querySelectorAll("[data-open-chat]").forEach((el) => el.addEventListener("click", openChat));
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") closeChat();
+      });
+    </script>
+  </body>
+</html>

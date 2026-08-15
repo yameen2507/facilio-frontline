@@ -32,7 +32,15 @@
  */
 
 import { request, requestFrom } from "../../../lib/request";
-import type { CreatedLead, DealSurvey, Lead, LeadDetail, LeadSource, TranscriptMessage } from "../types/lead";
+import type {
+  CreatedLead,
+  DealSurvey,
+  Lead,
+  LeadAccountDeal,
+  LeadDetail,
+  LeadSource,
+  TranscriptMessage,
+} from "../types/lead";
 
 /** The page size the inbox asks for. The handler has no cursor; this is the cap. */
 export const LIST_LIMIT = 100;
@@ -181,3 +189,21 @@ export const getTranscript = (sessionToken: string) =>
  */
 export const listDealSurveys = (dealId: string) =>
   requestFrom<{ surveys: DealSurvey[]; total: number }>("survey", "list", { dealId, limit: 50 });
+
+/**
+ * Every deal belonging to this lead's ACCOUNT — `deal.list` filtered by account.
+ *
+ * By the account, not by the lead: a lead has exactly one `dealId`, so "the
+ * deals of this lead" is at most one row and no aggregation at all. What is
+ * actually wanted when a lead is open is what else this client has in flight —
+ * which is what makes the lead's own deal readable as one of several rather than
+ * as an isolated link.
+ *
+ * Same cross-feature rule as `listDealSurveys` above: call the `deal` function
+ * directly rather than importing the deals feature's api-util.
+ */
+export const listAccountDeals = (accountId: string) =>
+  requestFrom<{ deals: LeadAccountDeal[]; total: number }>("deal", "list", {
+    accountId,
+    limit: 50,
+  });

@@ -300,6 +300,21 @@ export type DealOption = {
  */
 export const listDeals = () => requestFrom<{ deals: DealOption[] }>("survey", "deal-list");
 
+/**
+ * The service catalogue, for the line editor's Service picker.
+ *
+ * `proposal.reference` carries the ENUMS the UI needs; the catalogue is data,
+ * not an enum, and it is owned by Settings — so it is read from the `lead`
+ * function that serves it rather than duplicated into the reference payload.
+ * Retired services are dropped: a line may not be priced against one, and the
+ * server refuses it in those words.
+ */
+export const listServiceOptions = () =>
+  requestFrom<{ services: { code: string; name: string; active?: string | null }[] }>(
+    "lead",
+    "service-list"
+  );
+
 /** A frozen survey revision, as the create dialog needs to describe it. */
 export type SurveyRevisionOption = {
   id: string;

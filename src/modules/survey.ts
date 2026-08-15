@@ -2132,6 +2132,19 @@ export function surveyReadiness(surveyId: string, reworkCount = 0): SurveyReadin
 
 // ── Transition ────────────────────────────────────────────────────────────────
 
+/**
+ * STOPGAP, 15 Aug: there is no invite flow yet, so the person recorded as a
+ * survey's lead is often someone who cannot sign in — which left assigned
+ * surveys unfinishable, since T6/T7 are the lead's alone. Until invites land,
+ * every signed-in actor is treated as the lead for the lead-only moves.
+ *
+ * The rules themselves are untouched: `domain/survey-state.ts` still says only
+ * the lead may send back or complete, and every move is still guarded, reasoned
+ * and written to the ledger under the actor's own email. Flip this to false the
+ * day invites ship and the real check comes back with no other edit.
+ */
+const ANY_ACTOR_ACTS_AS_LEAD = true;
+
 export function transitionSurvey(input: {
   surveyId: string;
   toStatus: string;
@@ -2153,12 +2166,15 @@ export function transitionSurvey(input: {
   if (!survey) throw new Error(`survey ${input.surveyId} not found`);
 
   // The honest limit (X8): the actor is client-asserted. What CAN be checked
-  // server-side is whether that asserted actor matches the recorded lead.
+  // server-side is whether that asserted actor matches the recorded lead —
+  // except that ANY_ACTOR_ACTS_AS_LEAD currently waives even that (see the
+  // flag: without invites, the recorded lead may be nobody who can sign in).
   const move = validateSurveyTransition({
     from: survey.status,
     to: input.toStatus,
     reason: input.reason,
-    actorIsLead: Boolean(input.actor) && input.actor === survey.leadUserEmail,
+    actorIsLead:
+      Boolean(input.actor) && (ANY_ACTOR_ACTS_AS_LEAD || input.actor === survey.leadUserEmail),
   });
 
   /**
@@ -2285,9 +2301,9 @@ export function transitionSurvey(input: {
  * gates even though one tap crossed them, and the T7 leg still runs the full
  * submit guard and the revision freeze).
  *
- * WHO may tap it: an active assignee or the recorded lead — this is the
- * surveyor's control, not the coordinator's. That check lives here rather than
- * in the state table because it needs rows.
+ * WHO may tap it: anyone signed in, for as long as ANY_ACTOR_ACTS_AS_LEAD
+ * stands. The assignee-or-lead check that used to live here is waived with it,
+ * so a survey can be finished without an invite reaching the recorded lead.
  */
 export function submitSurvey(input: {
   surveyId: string;
@@ -2303,17 +2319,9 @@ export function submitSurvey(input: {
   const actor = (input.actor ?? "").trim().toLowerCase();
   if (!actor) throw new Error("submit needs the actor's email");
 
-  const isAssignee = Boolean(
-    one(
-      `select 1 as x from fl_survey_assignee
-        where survey_id = $1 and user_email = $2 and is_active = 'true' limit 1`,
-      [input.surveyId, actor]
-    )
-  );
-  const isLead = actor === (survey.leadUserEmail ?? "").toLowerCase();
-  if (!isAssignee && !isLead) {
-    throw new Error("only an assigned surveyor can submit this survey");
-  }
+  // While ANY_ACTOR_ACTS_AS_LEAD stands, the assignee/lead check is waived:
+  // whoever is signed in submits, and their submit IS the review.
+  const isLead = ANY_ACTOR_ACTS_AS_LEAD || actor === (survey.leadUserEmail ?? "").toLowerCase();
 
   if (survey.status !== "in_progress" && survey.status !== "pending_review") {
     throw new Error(`a ${survey.status} survey cannot be submitted`);
@@ -2468,7 +2476,32 @@ export function assignSurveyors(
     body: cleaned.map((a) => byEmail.get(a.userEmail)?.name ?? a.userEmail).join(", "),
   });
 
-  return { assignees: readAssignees(surveyId) };
+  const saved = readAssignees(surveyId);
+
+  /**
+   * The FIRST person put on a survey becomes its lead, and that is what carries
+   * T3 (`scheduled -> assigned`).
+   *
+   * Until this, assigning somebody changed no status: T3 fires only from
+   * `setLead`, which is a separate handover action. So a survey with a surveyor
+   * on it sat in `scheduled` — "I assigned a user and nothing moved" — and,
+   * because the submit gate asks who the lead is, the person standing at the
+   * building could not submit either.
+   *
+   * Only when there is no lead yet. A survey that already has one keeps it:
+   * adding a second surveyor is not a handover, and `setLead` remains the only
+   * way to change who leads.
+   */
+  const lead = one<{ leadAssigneeId: string | null }>(
+    `select lead_assignee_id from fl_survey where id = $1 and is_active = 'true' limit 1`,
+    [surveyId]
+  );
+  if (!lead?.leadAssigneeId && saved.length) {
+    setLead(surveyId, saved[0].id, "first assignee", actor);
+    return { assignees: readAssignees(surveyId) };
+  }
+
+  return { assignees: saved };
 }
 
 /**

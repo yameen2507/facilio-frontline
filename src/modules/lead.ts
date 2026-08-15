@@ -247,8 +247,25 @@ export function createLead(input: CreateLeadInput): CreateLeadResult {
   const refNo = nextRef("lead");
   const due = dueDates(now, slaTargets());
 
-  const status: LeadStatus = duplicate ? "closed" : "new";
-  const disposition: DispositionReason | null = duplicate ? "duplicate" : null;
+  /**
+   * A SHARED COMPANY DOMAIN IS NOT THE SAME ENQUIRY.
+   *
+   * `findDuplicate` tries email, then phone, then domain — and its own header
+   * already says an email match is stronger evidence than a shared domain. It
+   * used not to matter which one hit: any match closed the new lead. That was
+   * wrong in the ordinary case. A facilities manager asks about one building in
+   * March; procurement asks about another in August. Same domain, two real
+   * enquiries — and the second one closed itself before anybody read it.
+   *
+   * So the weak signal now LINKS without closing: the lead opens as `new`, keeps
+   * `duplicate_of_lead_id` so the record still shows where it came from, and a
+   * person decides whether it is genuinely the same job. Email and phone still
+   * auto-close, because those really are the same person writing twice.
+   */
+  const sameEnquiry = duplicate !== null && duplicate.matchedOn !== "domain";
+
+  const status: LeadStatus = sameEnquiry ? "closed" : "new";
+  const disposition: DispositionReason | null = sameEnquiry ? "duplicate" : null;
 
   const row = one<{ id: string }>(
     `insert into fl_lead (
@@ -298,7 +315,8 @@ export function createLead(input: CreateLeadInput): CreateLeadResult {
       due.firstResponseDueAt,
       due.qualificationDueAt,
       due.assignmentDueAt,
-      duplicate ? now : null,
+      // closed_at — set only when the lead actually closed.
+      sameEnquiry ? now : null,
       // The D-05 fields ride data_json (the table's shape is permanent on this
       // platform); the read path surfaces them as first-class columns.
       JSON.stringify({
@@ -315,11 +333,13 @@ export function createLead(input: CreateLeadInput): CreateLeadResult {
   appendEvent({
     entityType: "lead",
     entityId: row.id,
-    kind: duplicate ? "created.duplicate" : "created",
+    kind: sameEnquiry ? "created.duplicate" : "created",
     actor: input.actor ?? null,
-    body: duplicate
-      ? `Duplicate of ${duplicate.refNo} (matched on ${duplicate.matchedOn}) — closed automatically`
-      : `Lead ${refNo} captured from ${input.source}`,
+    body: sameEnquiry
+      ? `Duplicate of ${duplicate?.refNo} (matched on ${duplicate?.matchedOn}) — closed automatically`
+      : duplicate
+        ? `Lead ${refNo} captured from ${input.source} — same company as ${duplicate.refNo} (${keys.domainNorm}), left open for a human to judge`
+        : `Lead ${refNo} captured from ${input.source}`,
     meta: { source: input.source, refNo, duplicate },
   });
 

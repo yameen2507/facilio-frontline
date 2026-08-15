@@ -26,7 +26,7 @@
  *    never agreed to.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -42,7 +42,9 @@ import {
 import { Card } from "../../../ui/Card";
 import { Empty } from "../../../ui/States";
 import { humanise } from "../../../lib/format";
-import { removeLine, saveLine, type LineDraft } from "../api/proposals-util";
+import { removeLine, saveLine, type LineDraft,
+  listServiceOptions,
+} from "../api/proposals-util";
 import { money, moneyInput, numeric, parseMoney, qty as fmtQty } from "../money";
 import { FrequencyChip, PricingModeChip } from "./ProposalChips";
 import {
@@ -65,7 +67,19 @@ const FALLBACK_FREQUENCIES = Object.keys(FREQUENCY_LABEL) as Frequency[];
 const FALLBACK_BASES = ["unit", "hour", "visit"];
 
 /** The editor's fields, held as strings because that is what an input holds. */
+/** One row of the service catalogue, as this pane needs it. */
+export type ServiceOption = { code: string; name: string };
+
+/**
+ * Radix treats "" as "nothing selected", so an explicit no-service choice needs
+ * a real value. It never reaches the server — it is mapped back to "" on change.
+ */
+const NO_SERVICE = "__none__";
+
 type Form = {
+  /** A code from the service catalogue. Blank is allowed — a one-off line has
+      no catalogue entry behind it, and the server says so in its own words. */
+  serviceCode: string;
   description: string;
   qty: string;
   pricingBasis: string;
@@ -83,6 +97,7 @@ type Form = {
 };
 
 const blankForm = (isOptional: boolean): Form => ({
+  serviceCode: "",
   description: "",
   qty: "1",
   pricingBasis: "unit",
@@ -97,6 +112,7 @@ const blankForm = (isOptional: boolean): Form => ({
 });
 
 const formOf = (line: ProposalLine): Form => ({
+  serviceCode: line.serviceCode ?? "",
   description: line.description ?? "",
   qty: String(numeric(line.qty) ?? 1),
   pricingBasis: String(line.pricingBasis ?? "unit"),
@@ -232,6 +248,7 @@ function LineEditor({
   form,
   setForm,
   reference,
+  services,
   currency,
   busy,
   error,
@@ -241,6 +258,8 @@ function LineEditor({
   form: Form;
   setForm: (next: Form) => void;
   reference: ProposalReference | null;
+  /** The service catalogue, or null while it loads / if the read failed. */
+  services: ServiceOption[] | null;
   currency: string | null | undefined;
   busy: boolean;
   error: string | null;
@@ -266,6 +285,38 @@ function LineEditor({
 
   return (
     <div className="bg-muted/30 flex flex-col gap-4 border-b px-4 py-4 last:border-b-0">
+      {/* The line's service. The column and the server-side check have existed
+          since the module shipped — `resolveService` refuses a code that is not
+          in the catalogue, and refuses a retired one — but the editor never
+          asked for it, so every line was written without one. Left optional
+          because a genuine one-off has no catalogue entry behind it. */}
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="ln-service">Service</Label>
+        <Select
+          value={form.serviceCode || NO_SERVICE}
+          onValueChange={(v) => set("serviceCode", v === NO_SERVICE ? "" : v)}
+        >
+          <SelectTrigger id="ln-service" className="w-full">
+            <SelectValue placeholder={services ? "Pick the service" : "Loading services…"} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={NO_SERVICE}>One-off — no catalogue service</SelectItem>
+            {(services ?? []).map((sv) => (
+              <SelectItem key={sv.code} value={sv.code}>
+                {`${sv.code} · ${sv.name}`}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {/* A code stored before this picker existed, or one since retired, would
+            otherwise vanish from the trigger and look like it had been cleared. */}
+        {form.serviceCode && services && !services.some((sv) => sv.code === form.serviceCode) ? (
+          <span className="text-muted-foreground text-xs">
+            {`${form.serviceCode} is not in the catalogue any more — saving keeps it unless you change it.`}
+          </span>
+        ) : null}
+      </div>
+
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="ln-desc">Description</Label>
         <Input
@@ -508,6 +559,29 @@ export function LinesPane({
   const editable = isLineEditable(proposal.status);
   const currency = proposal.currency;
 
+  /**
+   * The service catalogue for the Service picker. Fetched once per pane rather
+   * than per editor — the list is the same for every line, and three editors can
+   * be mounted at once. A failed read leaves null and the picker says so; it
+   * never blocks editing, because a service was optional before this and stays
+   * optional now.
+   */
+  const [services, setServices] = useState<ServiceOption[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    listServiceOptions().then(({ data }) => {
+      if (!live) return;
+      setServices(
+        (data?.services ?? [])
+          .filter((sv) => sv.active !== "false")
+          .map((sv) => ({ code: sv.code, name: sv.name }))
+      );
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
   /** The line being edited, `"new"` for one being added, null for neither. */
   const [editing, setEditing] = useState<string | null>(null);
   const [form, setForm] = useState<Form>(blankForm(false));
@@ -543,6 +617,9 @@ export function LinesPane({
 
     const draft: LineDraft = {
       ...(editing && editing !== "new" ? { lineId: editing } : {}),
+      // Sent as null when cleared, not omitted: an omitted field leaves the
+      // stored code alone, and taking a service OFF a line has to be sayable.
+      serviceCode: form.serviceCode.trim() || null,
       description: form.description.trim(),
       qty: Number(form.qty),
       pricingBasis: form.pricingBasis,
@@ -596,6 +673,7 @@ export function LinesPane({
         form={form}
         setForm={setForm}
         reference={reference}
+        services={services}
         currency={currency}
         busy={busy}
         error={error}
@@ -640,6 +718,7 @@ export function LinesPane({
             form={form}
             setForm={setForm}
             reference={reference}
+            services={services}
             currency={currency}
             busy={busy}
             error={error}
@@ -714,6 +793,7 @@ export function LinesPane({
               form={form}
               setForm={setForm}
               reference={reference}
+              services={services}
               currency={currency}
               busy={busy}
               error={error}

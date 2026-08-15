@@ -41,10 +41,15 @@ export type DuplicateMatch = {
 };
 
 /**
- * What `create` answers with — NOT a `LeadDetail`. A duplicate still gets a row:
- * it comes back `status: "closed"` with `duplicateOf` populated, and never enters
- * the queue. A caller that ignores `duplicateOf` reports a capture that, from the
- * inbox's point of view, did not happen.
+ * What `create` answers with — NOT a `LeadDetail`.
+ *
+ * `duplicateOf` does NOT mean the lead was closed. Read `status` for that:
+ *   - matched on email or phone -> `status: "closed"`, never enters the queue.
+ *     A caller that ignores this reports a capture that, from the inbox's point
+ *     of view, did not happen.
+ *   - matched on domain only    -> `status: "new"`, in the queue as normal, with
+ *     `duplicateOf` naming the earlier enquiry from the same company. Two people
+ *     at one company can have two different jobs.
  */
 export type CreatedLead = {
   leadId: string;
@@ -189,4 +194,20 @@ export type DealSurvey = {
   templateName?: string | null;
   targetCompletionDate?: string | null;
   createdAt?: string | null;
+};
+
+/**
+ * Just enough of a deal to list one beside its lead. The deals feature owns the
+ * full `DealListRow`; this is the leads feature's own thin copy, because
+ * features never import each other's internals.
+ */
+export type LeadAccountDeal = {
+  id: string;
+  refNo: string;
+  title: string | null;
+  stage: string;
+  estimatedValue: number | null;
+  currency: string | null;
+  leadId: string | null;
+  createdAt: string;
 };

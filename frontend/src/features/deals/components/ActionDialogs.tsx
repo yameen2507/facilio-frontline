@@ -16,6 +16,7 @@
  */
 
 import { useEffect, useState, type FormEvent } from "react";
+import { X } from "lucide-react";
 import {
   Dialog,
   DialogClose,
@@ -495,6 +496,34 @@ export function ReopenDialog({
  * blank leaves what was already captured alone, so two people can fill
  * different halves of the sheet.
  */
+/**
+ * A decision maker, as two facts rather than one sentence.
+ *
+ * It was a single free-text box labelled "Names and roles", so the people who
+ * actually sign were recorded as prose — unsearchable, and with no email, which
+ * is the one thing a proposal needs in order to reach them. Stored as an ARRAY
+ * because deals are won by committees; a second name used to mean a comma.
+ */
+export type DecisionMaker = { name: string; email: string };
+
+const BLANK_MAKER: DecisionMaker = { name: "", email: "" };
+
+/**
+ * Reads whatever is already on the deal. Rows captured before this field became
+ * a list are plain strings — kept, in the name box, rather than discarded for
+ * being the wrong shape.
+ */
+function readMakers(raw: unknown): DecisionMaker[] {
+  if (Array.isArray(raw)) {
+    const rows = raw
+      .filter((r): r is Record<string, unknown> => Boolean(r) && typeof r === "object")
+      .map((r) => ({ name: String(r.name ?? ""), email: String(r.email ?? "") }));
+    return rows.length ? rows : [BLANK_MAKER];
+  }
+  if (typeof raw === "string" && raw.trim()) return [{ name: raw.trim(), email: "" }];
+  return [BLANK_MAKER];
+}
+
 export function DiscoveryDialog({
   open,
   onOpenChange,
@@ -507,17 +536,27 @@ export function DiscoveryDialog({
   onConfirm: (values: Record<string, unknown>) => Promise<string | null>;
 }) {
   const [values, setValues] = useState<Record<string, string>>({});
+  /** One row per person. Always at least one, so the fields are visible without
+      having to press Add first. */
+  const [makers, setMakers] = useState<DecisionMaker[]>([BLANK_MAKER]);
   const { busy, setBusy, error, setError } = useDialogSubmit(open);
 
-  const FIELDS: { key: string; label: string; placeholder: string }[] = [
+  /**
+   * `decisionMakers` is absent on purpose — it is no longer one box, and it
+   * renders below as its own repeatable pair of fields.
+   *
+   * `startDate` carries `type: "date"`. It was a text box whose placeholder
+   * showed the format it wanted, which is a format only ever discovered by
+   * getting it wrong once.
+   */
+  const FIELDS: { key: string; label: string; placeholder: string; type?: string }[] = [
     { key: "facilityType", label: "Facility type", placeholder: "Restaurant, office, mall…" },
     { key: "numberOfSites", label: "Number of sites", placeholder: "1" },
     { key: "approxAreaSqft", label: "Approx. area (sqft)", placeholder: "12000" },
     { key: "frequency", label: "Frequency", placeholder: "Quarterly, monthly…" },
-    { key: "startDate", label: "Expected start", placeholder: "2026-10-01" },
+    { key: "startDate", label: "Expected start", placeholder: "", type: "date" },
     { key: "contractDurationMonths", label: "Duration (months)", placeholder: "12" },
     { key: "existingProvider", label: "Existing provider", placeholder: "Who serves them today" },
-    { key: "decisionMakers", label: "Decision makers", placeholder: "Names and roles" },
     { key: "procurementProcess", label: "Procurement process", placeholder: "Direct, RFP, tender…" },
     { key: "budget", label: "Budget", placeholder: "If they shared one" },
   ];
@@ -530,6 +569,7 @@ export function DiscoveryDialog({
         if (v !== undefined && v !== null) seed[f.key] = String(v);
       }
       setValues(seed);
+      setMakers(readMakers(existing.decisionMakers));
     }
     // FIELDS is a literal; `existing` is the real dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -543,6 +583,14 @@ export function DiscoveryDialog({
       const v = (values[f.key] ?? "").trim();
       if (v) out[f.key] = v;
     }
+    // A row with neither a name nor an email is an empty slot the user opened
+    // and did not use, not a person. Sent only when at least one is real —
+    // an empty array would CLEAR names already captured, and a blank field in
+    // this dialog means "I did not fill this in".
+    const people = makers
+      .map((m) => ({ name: m.name.trim(), email: m.email.trim() }))
+      .filter((m) => m.name || m.email);
+    if (people.length) out.decisionMakers = people;
     if (!Object.keys(out).length) return;
     setBusy(true);
     const err = await onConfirm(out);
@@ -551,7 +599,9 @@ export function DiscoveryDialog({
     onOpenChange(false);
   };
 
-  const filled = Object.values(values).some((v) => v.trim());
+  const filled =
+    Object.values(values).some((v) => v.trim()) ||
+    makers.some((m) => m.name.trim() || m.email.trim());
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -571,12 +621,68 @@ export function DiscoveryDialog({
                 <Label htmlFor={`dd-${f.key}`}>{f.label}</Label>
                 <Input
                   id={`dd-${f.key}`}
+                  type={f.type}
                   value={values[f.key] ?? ""}
                   onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
                   placeholder={f.placeholder}
                 />
               </div>
             ))}
+            <div className="col-span-full flex flex-col gap-1.5">
+              <Label>Decision makers</Label>
+              <div className="flex flex-col gap-2">
+                {makers.map((m, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <Input
+                      aria-label={`Decision maker ${i + 1} name`}
+                      className="min-w-0 flex-1"
+                      value={m.name}
+                      onChange={(e) =>
+                        setMakers((rows) =>
+                          rows.map((r, j) => (j === i ? { ...r, name: e.target.value } : r))
+                        )
+                      }
+                      placeholder="Name"
+                    />
+                    <Input
+                      aria-label={`Decision maker ${i + 1} email`}
+                      type="email"
+                      className="min-w-0 flex-1"
+                      value={m.email}
+                      onChange={(e) =>
+                        setMakers((rows) =>
+                          rows.map((r, j) => (j === i ? { ...r, email: e.target.value } : r))
+                        )
+                      }
+                      placeholder="Email"
+                    />
+                    {/* Never on the last remaining row: removing it would leave
+                        no fields at all and no obvious way back to them. */}
+                    {makers.length > 1 ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`Remove decision maker ${i + 1}`}
+                        onClick={() => setMakers((rows) => rows.filter((_, j) => j !== i))}
+                      >
+                        <X className="size-4" aria-hidden="true" />
+                      </Button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+              <div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setMakers((rows) => [...rows, { ...BLANK_MAKER }])}
+                >
+                  Add another
+                </Button>
+              </div>
+            </div>
             <div className="col-span-full">
               <ErrorLine error={error} />
             </div>
