@@ -24,9 +24,9 @@
  * and the body width doesn't jump when a short page becomes a long one.
  */
 
-import type { ReactNode } from "react";
+import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { ChevronLeft } from "lucide-react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { NAV_TOP } from "../../layout/sidebar/nav-config";
 import OverlayScrollbar from "../../ui/OverlayScrollbar";
 
@@ -151,7 +151,39 @@ export function PageShell({
   children: ReactNode;
 }) {
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   const back = backOverride ?? backOf(pathname);
+
+  /**
+   * Whether there is somewhere IN THIS APP to go back to.
+   *
+   * React Router stamps an index into history state on every in-app navigation,
+   * so a non-zero one means the user arrived here by clicking rather than by
+   * pasting a link or opening a new tab. Without the check, "back" on a
+   * deep-linked page would walk out of the app entirely.
+   */
+  const hasHistory =
+    typeof window !== "undefined" &&
+    typeof (window.history.state as { idx?: number } | null)?.idx === "number" &&
+    ((window.history.state as { idx: number }).idx ?? 0) > 0;
+
+  /**
+   * Back means BACK — the page you came from, not the lane this one files
+   * under. Arriving at a proposal from its deal and landing on the proposal
+   * list is the app forgetting how you got here.
+   *
+   * The lane stays as the fallback, and stays as the link's href: with no
+   * in-app history it is the only honest answer, and keeping it in `to` means
+   * middle-click and "open in new tab" still work on a control that is
+   * otherwise a real link.
+   */
+  const goBack = (e: ReactMouseEvent<HTMLAnchorElement>) => {
+    // A modified click is the user asking for a new tab or window; taking it
+    // over would break the one thing keeping this a link.
+    if (!hasHistory || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    e.preventDefault();
+    navigate(-1);
+  };
   // With no tabs there is no control row to anchor: search joins the actions
   // on the title row's right instead of sitting alone on a second line.
   const searchInTitleRow = Boolean(search && !strip);
@@ -191,8 +223,9 @@ export function PageShell({
             ) : back ? (
               <Link
                 to={back.to}
-                aria-label={`Back to ${back.label}`}
-                title={`Back to ${back.label}`}
+                onClick={goBack}
+                aria-label={hasHistory ? "Back" : `Back to ${back.label}`}
+                title={hasHistory ? "Back" : `Back to ${back.label}`}
                 className="text-muted-foreground hover:bg-muted hover:text-foreground flex size-7 shrink-0 items-center justify-center rounded-md transition-colors md:-ml-1.5"
               >
                 <ChevronLeft className="size-4" />
