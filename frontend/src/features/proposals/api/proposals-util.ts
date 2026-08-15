@@ -300,11 +300,22 @@ export const saveTemplate = (template: ProposalTemplate, actorEmail: string) =>
  * client, and a frozen revision must reproduce byte-identically — the same
  * problem, and the same solution, as the survey question snapshot.
  */
-export const renderProposal = (proposalId: string, actorEmail: string, templateId?: string) =>
+export const renderProposal = (
+  proposalId: string,
+  actorEmail: string,
+  templateId?: string,
+  /**
+   * Re-snapshot instead of reading the stored one. The handler refuses it on
+   * anything past draft — a document a client is holding does not get rewritten
+   * — which is exactly why the caller may ask for it freely.
+   */
+  force?: boolean
+) =>
   call<RenderResponse>("render", {
     proposalId,
     actorEmail,
     ...(templateId ? { templateId } : {}),
+    ...(force ? { force: "true" } : {}),
   });
 
 // ── Elsewhere ────────────────────────────────────────────────────────────────

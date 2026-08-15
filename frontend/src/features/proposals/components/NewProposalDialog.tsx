@@ -153,17 +153,33 @@ export function NewProposalDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-lg">
         <form onSubmit={submit}>
           <DialogHeader>
             <DialogTitle>New proposal</DialogTitle>
             <DialogDescription>
-              Creating it resolves the rate card for the deal's region and client, and stamps the
-              currency. Both are shown on the record, with the reason that card won.
+              Creating it stamps the currency and resolves the rate card for the deal's region and
+              client — both shown on the record, with the reason that card won.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid gap-4 py-4">
+          {/* `[&>*]:min-w-0` is what keeps the fields inside the panel. Each
+              field wrapper is a grid item, so its default `min-width: auto`
+              floors the track at the wrapper's min-content — and a select
+              trigger over `whitespace-nowrap` text reports the WHOLE deal name
+              as its min-content. The track then grows past the dialog and every
+              field and hint below it hangs over the right edge. `min-w-0` on
+              the item drops that floor, so the track can't exceed the panel and
+              the trigger's value ellipsizes instead. Note the trigger's own
+              `min-w-0` does not do this: a min-width is a floor, not a ceiling,
+              and only lets a box shrink once something above it is constrained.
+              `grid-cols-1` covers the other half of it: `minmax(0, 1fr)`
+              rather than an `auto` track, so the track can't be forced wide in
+              the first place. Neither alone is enough — an `auto` track with
+              `min-w-0` items shrinks correctly, and a `1fr` track with
+              `min-width: auto` items holds its width but lets the items spill
+              over it, which looks identical from the outside. */}
+          <div className="grid grid-cols-1 gap-4 py-4 [&>*]:min-w-0">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="np-deal">Deal</Label>
               <Select value={dealId} onValueChange={setDealId}>

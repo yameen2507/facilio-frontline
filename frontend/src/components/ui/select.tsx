@@ -35,10 +35,16 @@ function SelectTrigger({
       data-slot="select-trigger"
       data-size={size}
       className={cn(
-        // `min-w-0` plus a truncating value is what keeps a long selection from
-        // pushing the trigger past its container. Without it the trigger is
-        // `w-fit` over `whitespace-nowrap` text, so it grows without limit and
-        // drags the grid track it sits in wider than the dialog.
+        // `min-w-0` plus a truncating value is what lets a long selection
+        // ellipsize INSIDE a container that is already constrained — pass
+        // `w-full` to get that constraint, since the base here is `w-fit` over
+        // `whitespace-nowrap` text.
+        // It does not constrain anything on its own: a min-width is a floor,
+        // not a ceiling, so this trigger still reports the full text as its
+        // min-content and will drag an `auto` grid track wider than the dialog
+        // around it. The container that owns the track is what has to opt out
+        // of that — `[&>*]:min-w-0` on the grid, as DialogContent does for its
+        // own children and NewProposalDialog does for its field wrappers.
         "flex w-fit min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-transparent px-3 py-2 text-sm whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 data-[placeholder]:text-muted-foreground data-[size=default]:h-9 data-[size=sm]:h-8 *:data-[slot=select-value]:block *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:truncate dark:bg-input/30 dark:hover:bg-input/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground",
         className
       )}

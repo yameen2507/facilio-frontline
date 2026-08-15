@@ -381,6 +381,24 @@ export function ProposalDocument() {
     };
   }, [id, actor, reloadKey]);
 
+  const [rerendering, setRerendering] = useState(false);
+
+  /**
+   * Take the snapshot again from what the proposal says NOW.
+   *
+   * Not automatic. The stored snapshot is the document — re-rendering on every
+   * visit would mean a proposal quietly changed between two readings of it, and
+   * §6 exists to stop exactly that. So it is a button, on drafts only, pressed
+   * by someone who has just changed a value and wants the document to agree.
+   */
+  const rerender = async () => {
+    setRerendering(true);
+    const rendered = await renderProposal(id ?? "", actor, undefined, true);
+    setRerendering(false);
+    setRenderNote(rendered.error);
+    if (rendered.data?.document) setDoc(rendered.data.document);
+  };
+
   const label = proposal ? `${proposal.refNo} v${proposal.revisionNo ?? 1}` : "Proposal";
   // The date this document speaks as of: when it went to the client if it has,
   // and when it was rendered if it has not. Never "today" — a document that
@@ -417,7 +435,23 @@ export function ProposalDocument() {
           {/* Internal, and deliberately outside the print area: what the
               renderer could not resolve is for us, never for the client. */}
           {doc.warnings?.length ? (
-            <Card title="Not resolved in this render" pad={false} className="mb-5">
+            <Card
+              title="Not resolved in this render"
+              pad={false}
+              className="mb-5"
+              /* The snapshot is taken once and read forever after (§6), which is
+                 what makes a sent document reproducible — but it also means
+                 fixing a value leaves this list standing, still complaining
+                 about something now set. Offered only on a draft, because that
+                 is the only status the handler will re-snapshot. */
+              meta={
+                proposal.status === "draft" ? (
+                  <Button variant="outline" size="sm" disabled={rerendering} onClick={rerender}>
+                    {rerendering ? "Rebuilding…" : "Rebuild from current values"}
+                  </Button>
+                ) : undefined
+              }
+            >
               <ul className="flex flex-col">
                 {doc.warnings.map((w) => {
                   const fix = fixFor(w, proposal.id);

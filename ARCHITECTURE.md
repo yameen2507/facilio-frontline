@@ -385,7 +385,7 @@ opportunity → discovery → survey_required → survey_completed
 
 This replaced the four-stage placeholder (`open → surveying → quoted → won|lost`) once the survey and proposal lanes existed to fill the middle. `lost` carries a reason from `LOST_REASONS`, on the same status-and-reason-are-separate rule as the lead.
 
-**`won` is the promotion trigger.** The transition takes a capture (final value, contract start, signed note) and enqueues the client sync. What it does *not* yet enqueue is in §10.
+**`won` is the promotion trigger.** The transition takes a capture (final value, contract start, signed note) and enqueues the whole outward tail — client, contact, contract, service lines. Each queueing step is try/caught: **a queueing hiccup must never fail the win itself**, and the queue is re-runnable from the account or a later drain.
 
 ### The other lifecycles
 
@@ -422,7 +422,7 @@ Each lane owns its own state machine in `domain/`, all on the same rules — pla
 | **`deal`** | list · get · pipeline · update · capture · transition · reopen | `transition` to `won` takes the capture and enqueues promotion |
 | **`survey`** | create · schedule · assign · transition · walk · capture · reconcile · submit · settings | `submit` freezes a revision. **An open visit currently warns, it does not block** — `OPEN_VISITS_BLOCK = false` in `domain/survey-completeness.ts`. One line back to `true` restores the guard |
 | **`form`** | template CRUD · publish · clone · archive · section and question editing | A published template is versioned, not edited in place |
-| **`proposal`** | create · line-generate · edit · approve · send · respond · revise · diff · templates · rate cards | Created **from a frozen survey revision**, never from live answers |
+| **`proposal`** | create · line-generate · edit · approve · send · respond · revise · diff · templates · rate cards | Created **from a frozen survey revision**, never from live answers. A card is auto-resolved and the reason printed; `set-rate-card` lets a person override it, and the reason then names them — resolution and override occupy the same sentence |
 | **`prospect`** | tree CRUD · reparent · verdicts · observations · reconcile · link · convert | Only `convert-to-facilio` may write portfolio rows outward, and only when the deal is Won |
 | **`access`** | seed · bootstrap · users · roles · permissions | `actorEmail` is client-asserted — an audit label, not authentication |
 | **`migrate`** | per-lane seeds · `clean-seed` · backfills and repairs · `verify` · `status` | **No DDL** — the role cannot run it (§3a). This seeds, backfills and verifies, nothing more |
@@ -609,6 +609,7 @@ These exist so nothing built now has to be reworked later. **Honour them; do not
   - **The site promotion is a manual call, and the contract waits on it.** `convert-to-facilio` is batched (default 4, max 8, because Facilio calls are serialised at ~10s) and must be called until `remaining` is 0. The contract task **defers** until a promoted site exists, so nothing breaks if it is called late — it simply does not land. Order is still **convert run → contract → service lines**.
   - **A Facilio Service is minted on demand** if the local service line has no cached id (§2). First run of a new service code therefore creates a record in FSM as a side effect of a contract line.
   - **Work orders: no code path at all.**
+- **A survey can be submitted with visits still open.** `OPEN_VISITS_BLOCK = false` — the guard was downgraded to a warning because visits were being left open in ways the product cannot yet close, and that blocked every submit. The rule it suspends is sound (reconciling against a tree nobody finished walking prices a building nobody saw), so this is a temporary relaxation, not a decision. **Fix the closing path, then flip it back.**
 - **The lead's site address never becomes a site.** It rides onto the account and into the FSM client address, but a promotable site has to be named at survey creation. If sales expects the enquiry address to appear as a site, that is a gap, not a bug.
 - **Local `build/functions/*.js` says nothing about platform state.** A fix that is bundled but not pushed fails *silently and without an error anywhere* — this cost a full E2E run on 15 Aug, where the deployed `deal` function predated its own Won hook. Push before you conclude anything about behaviour.
 - **No SLA alerts, no polling, no automation until the app is promoted to production.**
