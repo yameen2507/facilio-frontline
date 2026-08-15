@@ -55,7 +55,19 @@ export type Service = {
 
 /** Coverage's word for the same record. */
 export type ServiceLine = Service;
-export type Area = { id: string; name: string; country?: string | null };
+/**
+ * One place we operate. Shaped by `fl_service_area`, all five columns — the type
+ * used to name only `id`/`name`/`country`, which meant the coverage editor had to
+ * cast to reach the region it edits and the flag that pauses an area.
+ */
+export type Area = {
+  id: string;
+  name: string;
+  region?: string | null;
+  country?: string | null;
+  /** "true"/"false" string, like every boolean column. */
+  active?: string;
+};
 /** `active` is the string "true"/"false" — there is no boolean column type. */
 export type Coverage = { areaId: string; serviceLineId: string; active: string };
 
@@ -71,6 +83,42 @@ export type Settings = {
 };
 
 export const getSettings = () => request<Settings>("settings-get");
+
+/**
+ * A coverage edit: areas to add or amend, coverage links to switch on or off.
+ *
+ * THREE KEYS MUST NEVER APPEAR HERE, and the type is narrow so they can't:
+ *
+ *  - `scopeNotes` / `analystTask` — the handler tests `"scopeNotes" in p`, not
+ *    whether it holds anything, so merely carrying the key writes it. A spread
+ *    of some wider draft object would blank the analyst's briefing as a side
+ *    effect of saving a checkbox. Build the object literally at the call site.
+ *  - `serviceLines` — that branch calls `saveService` with code/name/active
+ *    only, so it would wipe the description and default pricing basis of an
+ *    existing service. The catalogue's write path is `saveService`, one page over.
+ *
+ * Everything sent is an UPSERT on a natural key — an area by `name`, a link by
+ * its (area, service) pair — so a delta is the whole payload. Nothing omitted is
+ * deleted, and re-sending the same edit is a no-op.
+ */
+export type CoverageEdit = {
+  areas?: Array<{ name: string; region?: string; country?: string; active?: boolean }>;
+  /** Both sides by human name/code — the handler resolves ids, callers never see them. */
+  coverage?: Array<{ area: string; serviceLine: string; active?: boolean }>;
+};
+
+/**
+ * `settings-put`, for coverage only. Answers with the whole refreshed settings —
+ * including the recomposed `brief` — so a save needs no second read.
+ *
+ * Areas are processed before coverage in the same request, so ONE call can
+ * create an area and link its first service: the link resolves the name from
+ * what this very call just wrote, not from a stale read.
+ */
+export const putCoverage = (edit: CoverageEdit) =>
+  request<{ applied: Record<string, number>; settings: Settings }>("settings-put", {
+    payload: JSON.stringify(edit),
+  });
 
 // ── The Facilio outbox (F-09) ────────────────────────────────────────────────
 

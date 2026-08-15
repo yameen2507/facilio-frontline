@@ -9,9 +9,15 @@
  * `intake` agent and the assessment on the analyst; instructions, provider and
  * model for both are fixed when each agent is created — change those with
  * `facilio vibe agent update`. This card owns the part APPENDED per run.
+ *
+ * The SERVICE SCOPE block at the top of the preview is NOT owned here either:
+ * it is composed from the coverage matrix on every request, so it is always
+ * current and it is edited in Settings › Service coverage, which the scope-notes
+ * hint links to. Notes are for the caveat a matrix cannot express.
  */
 
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "../../../ui/Button";
 import { Card } from "../../../ui/Card";
@@ -79,7 +85,17 @@ export function AnalystCard({
         placeholder="e.g. No high-rise façade work. Minimum job value AED 2,000."
         onChange={(e) => onChange({ ...draft, scopeNotes: e.target.value })}
       />
-      <span className={FIELD_HINT}>Added to the service brief the analyst judges against.</span>
+      <span className={FIELD_HINT}>
+        Added to the service brief the analyst judges against. The brief itself — which areas and
+        which services count as in scope — is the matrix in{" "}
+        <Link
+          to="/settings"
+          className="font-medium underline-offset-4 hover:underline"
+        >
+          Settings › Service coverage
+        </Link>
+        . Say here only what a matrix cannot.
+      </span>
 
       <label className={`${FIELD_LABEL} mt-4`} htmlFor="an-task">
         Task instruction

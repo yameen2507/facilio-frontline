@@ -22,6 +22,7 @@
  */
 
 import { useEffect, useState, type FormEvent } from "react";
+import { Link } from "react-router-dom";
 import { Hash, Plus, Ruler, Tag } from "lucide-react";
 import { Card } from "../../../ui/Card";
 import { Chip } from "../../../ui/Chip";
@@ -443,7 +444,13 @@ export function Services() {
             </ListTable>
             <div className="text-muted-foreground border-t p-4 text-xs">
               A retired service stays on the proposals that already priced it, but nothing new can
-              be priced against it — pricing refuses to resolve one.
+              be priced against it — pricing refuses to resolve one. A service the AI should qualify
+              leads for also needs an area:{" "}
+              <Link to="/settings" className="font-medium underline-offset-4 hover:underline">
+                Service coverage
+              </Link>{" "}
+              is where each one is switched on per place, and until it is switched on somewhere the
+              analyst treats it as out of scope.
             </div>
           </>
         ) : (
