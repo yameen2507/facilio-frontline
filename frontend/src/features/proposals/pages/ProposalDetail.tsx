@@ -20,7 +20,7 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   CheckCircle2,
   Circle,
@@ -110,7 +110,24 @@ export function ProposalDetail() {
   const showing = useRef(id);
   showing.current = id;
 
-  const [tab, setTab] = useState<TabId>("pricing");
+  /**
+   * The tab is openable from a URL, because the document's render warnings link
+   * straight to the screen that fixes each one — a link that lands on the wrong
+   * tab is the same dead end it was meant to remove.
+   *
+   * Not stored back into the URL on every click: this is an entry point, not a
+   * filter, and rewriting history on each tab press would bury the page the user
+   * arrived from under five of its own tabs.
+   */
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState<TabId>(() => {
+    const wanted = params.get("tab");
+    return (["pricing", "terms", "negotiation", "revision", "activity"] as const).includes(
+      wanted as TabId
+    )
+      ? (wanted as TabId)
+      : "pricing";
+  });
   const [proposal, setProposal] = useState<Proposal | null>(null);
   const [changingCard, setChangingCard] = useState(false);
   const [reference, setReference] = useState<ProposalReference | null>(null);

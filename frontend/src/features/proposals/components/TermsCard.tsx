@@ -55,6 +55,15 @@ export function TermsCard({
   const editable = isLineEditable(proposal.status);
 
   const [editing, setEditing] = useState(false);
+  /**
+   * The document's own heading, and the one field here the CLIENT reads.
+   *
+   * `update` has always accepted it; nothing ever called it, so a title was
+   * whatever the deal was called at the moment the proposal was created — or
+   * whatever was typed while testing — and it printed at the top of the
+   * document with no way to correct it.
+   */
+  const [title, setTitle] = useState("");
   const [validUntil, setValidUntil] = useState("");
   const [paymentTerms, setPaymentTerms] = useState("");
   const [expectedProgramme, setExpectedProgramme] = useState("");
@@ -66,6 +75,7 @@ export function TermsCard({
   const open = () => {
     // Seeded from the record each time it opens, so a cancelled edit leaves
     // nothing behind and a reload never fights a stale form.
+    setTitle(proposal.title ?? "");
     setValidUntil(proposal.validUntil ? String(proposal.validUntil).slice(0, 10) : "");
     setPaymentTerms(proposal.paymentTerms ?? "");
     setExpectedProgramme(proposal.expectedProgramme ?? "");
@@ -83,6 +93,7 @@ export function TermsCard({
     // as sets, and only the payload envelope can carry an empty value at all
     // (a blank flat field is dropped upstream rather than arriving as "").
     const { data, error: err } = await updateProposal(proposal.id, actor, {
+      title,
       validUntil,
       paymentTerms,
       expectedProgramme,
@@ -103,6 +114,21 @@ export function TermsCard({
     return (
       <Card title="Commercial terms">
         <div className="flex flex-col gap-4">
+          {/* First, and full width: it is the document's heading and the only
+              field on this card the client ever sees. */}
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <Label htmlFor="tc-title">Proposal title</Label>
+            <Input
+              id="tc-title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Standard soft services proposal"
+            />
+            <span className="text-muted-foreground text-xs">
+              Prints at the top of the document. Blank falls back to the deal&rsquo;s name.
+            </span>
+          </div>
+
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="flex min-w-0 flex-col gap-1.5">
               <Label htmlFor="tc-valid">Valid until</Label>
@@ -199,6 +225,12 @@ export function TermsCard({
     >
       <Facts
         items={[
+          {
+            // Shown here because it is now editable here — a field that can be
+            // changed on a card it never appears on is a change nobody finds.
+            label: "Title",
+            value: proposal.title ?? "Not set — the deal's name is used",
+          },
           {
             label: "Valid until",
             value: proposal.validUntil ? (

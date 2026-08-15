@@ -49,11 +49,11 @@ The lead lane, the survey lane and the proposal lane are all built and walked en
 
 Not channels: **email-to-lead** (feasible — `gmail.list-messages` exists — but it adds an OAuth dependency and production-only polling) and **inbound webhook/API** (impossible; nothing can POST into a Vibe app).
 
-**Backend AND console.** The original build was backend-only, and that stage is finished: nine platform functions answer real calls. On top of them sits a React console — nine feature modules on shadcn + Tailwind, mounted on `HashRouter` because the static host has no rewrite rules (§12). The console is not a mock; the modules listed in §7 call the live handlers. Where a surface ships ahead of its handler it is marked `[SEAM]` in the feature's api-util and renders a real empty state — never fake data.
+**Backend AND console.** The original build was backend-only, and that stage is finished: eight platform functions answer real calls (plus a disposable `probe`). On top of them sits a React console — nine feature modules on shadcn + Tailwind, mounted on `HashRouter` because the static host has no rewrite rules (§12). The console is not a mock; the modules listed in §7 call the live handlers. Where a surface ships ahead of its handler it is marked `[SEAM]` in the feature's api-util and renders a real empty state — never fake data.
 
-**Designed but NOT built yet:** approval routing beyond auto-approve, the customer signing portal, work-order handoff, tender ingestion, email-to-lead, analytics, the automation engine — and the promotion tail below.
+**Designed but NOT built yet:** approval routing beyond auto-approve, the customer signing portal, work-order handoff, tender ingestion, email-to-lead, analytics, the automation engine.
 
-**The promotion tail is the live gap, not a future one.** Winning a deal today enqueues the Facilio client and its contact, and nothing else. `prospect.convert-to-facilio` exists only as a preflight, so surveyed sites and spaces never reach FSM; and because the contract task defers until a site is promoted, `create_client_contract` and `create_contract_service_line` are deployed and dispatchable but **nothing enqueues them**. Order is fixed: **convert run → contract → service lines.** See §10.
+**The promotion tail is built but unproven.** Winning a deal enqueues four things — client, contact, contract, and one service line per accepted proposal line — and `prospect.convert-to-facilio` writes the surveyed site/space tree into Facilio parent-first. **The 15 Aug E2E predates all of it**: that run reached client and contact only, and `docs/e2e-findings-2026-08-15.md` records the tail as missing because at the time it was. It has since landed and has not been walked end to end. Treat it as *built, not verified* — see §10 for what is genuinely still absent.
 
 The rest are not future guesswork — §9 defines the exact seam each one plugs into, so none of them requires reworking what is built now. **Do not build them. Do not stub them. Just do not block them.**
 
@@ -75,15 +75,17 @@ The Vibe app is the system of engagement. Facilio FSM is the system of record fo
 | Users, roles, permission matrix | **Vibe app** |
 | Account as a client record | **Facilio FSM** — `create-client` |
 | Contact | **Facilio FSM** — `create-client-contact` |
-| Sites / buildings / floors / spaces | **Facilio FSM on Won** — promoted from the prospect tree *(run not built — §10)* |
-| Client contract + its service lines | **Facilio FSM on Won** — dispatch built, nothing enqueues it yet *(§10)* |
-| Assets, work orders | Facilio FSM *(later)* |
+| Sites / buildings / floors / spaces | **Facilio FSM on Won** — promoted from the prospect tree by `prospect.convert-to-facilio` |
+| Client contract + its service lines | **Facilio FSM on Won** — `create-client-contract` and its service lines, off the accepted proposal |
+| Assets, work orders | Facilio FSM *(later — no code path at all)* |
 
 ### The service catalogue is ours now. This overturns a standing ruling.
 
 **Until 15 Aug 2026 a "service line" was a label for a Facilio Services record id, and that id was what every rate-card row and proposal line referenced.** As of 15 Aug the app owns its own service definitions — a service is this app's record of something it sells, with its own code, pricing basis and unit (`src/domain/service-catalogue.ts`, `fl_service_line`, edited under Settings → Services). **The code is the key**: `fl_rate_card_row.service_code` and `fl_proposal_line.service_code` name a service by code, and this database has no foreign keys to notice when one stops matching, so codes are normalised where they are minted.
 
-**This reverses C23**, which had ruled the Facilio Services id the source of truth. The reversal is recorded here because this file is the contract — but note the consequence the E2E run found: with no mapping from a local service code to a Facilio Services id, `create_contract_service_line` has no `facilioServiceId` to send. **The mapping C23 always wanted is now a prerequisite for contract lines**, not an alternative to the local catalogue.
+**This reverses C23**, which had ruled the Facilio Services id the source of truth. The reversal is recorded here because this file is the contract.
+
+**C23's concern was real and is answered, not dismissed.** A contract service line still needs a `facilioServiceId`, and the local catalogue does not have one — so `modules/sync.ts` resolves it at dispatch: reuse the `facilio_service_id` cached in the service line's `data_json`, else create the Facilio Service and cache what comes back. The local code stays the key everything references; the Facilio id is a lookup the outbox owns. **Do not reintroduce the Facilio id as a foreign key** — that is the coupling the reversal removed.
 
 ---
 
@@ -216,7 +218,7 @@ frontline/
 │   ├── lib/                 vibe.ts · request.ts (requestFrom(fn, handler, args))
 │   └── features/            one folder per module: api/ components/ pages/ types/
 ├── demo-site/               a host page that iframes #/embed
-└── tests/                   vitest over src/domain (21 files), plus units under frontend/
+└── tests/                   vitest over src/domain (22 files), plus units under frontend/
 ```
 
 Each feature folder owns its own `api/*-util.ts`, and that util names the function it calls — `requestFrom("survey", …)`, `requestFrom("form", …)`. `FUNCTION = "lead"` in `vibe.ts` is only the default. **A page never calls a handler directly**; the util is the one place a seam can be declared.
@@ -244,33 +246,83 @@ Two rules follow from the shape being permanent (§3a.2):
 
 Enum-likes are plain `text`, validated in `domain/` — never Postgres `ENUM`. New states and sources are code changes.
 
-### Built now
+### Built now — 45 tables defined, one CSV each in `db/tables/`
+
+The CSV headers are the authoritative column list; what follows is what each table is *for*. Where a column is load-bearing beyond its own row it is called out.
+
+**A CSV existing is not the same as the table being imported** — that convention drifted once already. `facilio vibe db tables` is the only answer to which of the 45 are live.
+
+**Kernel**
 
 | Table | Holds |
 |---|---|
-| `fl_schema_version` | migration ledger |
-| `fl_setting` | key + value_json — SLA targets, currency, defaults |
-| `fl_sequence` | ref numbers (`LEAD-0001`, `DEAL-0001`) |
-| `fl_event` | **one** append-only log: entity_type, entity_id, kind, actor, meta_json, at |
+| `fl_setting` | key + value_json — SLA targets, currency, agent prompt settings, defaults |
+| `fl_sequence` | ref numbers (`LEAD-0001`, `SUR-0021`, `PRP-0009`) |
+| `fl_event` | **one** append-only log for every entity: entity_type, entity_id, kind, actor, meta_json, at |
 | `fl_sync_task` | outbox: action, payload_json, **idempotency_key UNIQUE**, depends_on_id, status, attempts, next_attempt_at, last_error, facilio_id |
 | `fl_photo` | entity_type, entity_id, **vibe_file_id**, file_name, content_type, size |
+| `fl_assessment` | **every advisory agent's verdict, in one table** — entity_type, entity_id, agent, version, status, headline, summary, model_name, prompt_version (§8) |
+| `fl_user`, `fl_role` | identity and the permission matrix (§10 — advisory, not enforcement) |
+
+**Lead + account**
+
+| Table | Holds |
+|---|---|
 | `fl_lead` | see below |
-| `fl_lead_analysis` | versioned AI verdict — lead_id, version, verdict, score, understanding_json, reasons_json, model_name, created_at |
+| `fl_lead_analysis` | versioned analyst verdict — lead_id, version, verdict, score, understanding_json, reasons_json, model_name |
 | `fl_lead_assignment` | ownership history — lead_id, from_user, to_user, role, reason, at |
-| `fl_deal` | lead_id, account_id, contact_id, ref_no, title, stage, estimated_value, currency, sales_owner, source |
 | `fl_account` | lead_id *(the lead that first created it)*, name, email, phone, website_domain, address_json, **facilio_client_id**, sync_status |
 | `fl_account_contact` | account_id, name, email, phone, is_primary, **facilio_contact_id**, sync_status |
-| `fl_service_area` | name, emirate/region, country, active |
-| `fl_service_line` | code, name, active |
-| `fl_service_coverage` | area_id, service_line_id, active |
+| `fl_deal` | lead_id, account_id, contact_id, ref_no, title, stage, estimated_value, currency, sales_owner, source |
 | `fl_intake_session` | **session_token UNIQUE**, source_url, ip_hash, user_agent, turn_count, status, lead_id |
 | `fl_intake_message` | session_id, role (`visitor`\|`agent`), content, at |
+
+**Catalogue + coverage**
+
+| Table | Holds |
+|---|---|
+| `fl_service_line` | **the service catalogue** — code *(the key, §2)*, name, pricing basis, unit, active |
+| `fl_service_area`, `fl_service_coverage` | where each service is sold; what the analyst reads for relevance |
+| `fl_rate_card`, `fl_rate_card_row` | priced rows keyed by `service_code` + `estimation_key` |
+
+**Survey lane**
+
+| Table | Holds |
+|---|---|
+| `fl_form_template`, `fl_form_section`, `fl_form_question` | the template builder's output — what a walk asks |
+| `fl_survey` | the survey itself: deal_id, site, status, lead surveyor |
+| `fl_survey_visit`, `fl_survey_visit_assignee`, `fl_survey_assignee` | scheduled visits and who walks them |
+| `fl_survey_section_instance`, `fl_survey_section_entry`, `fl_survey_question_instance`, `fl_survey_answer` | the captured walk — a template instantiated per surveyed space |
+| `fl_survey_observation`, `fl_survey_recommendation`, `fl_survey_qualification` | what the surveyor found, advised and qualified |
+| `fl_survey_revision` | **the frozen handoff** — checksum + payload; a proposal is created from this, never from live answers |
+| `fl_survey_reconciliation` | differences between what was surveyed and what the portfolio held |
+
+**Prospect portfolio**
+
+| Table | Holds |
+|---|---|
+| `fl_prospect_node` | the site/space tree, parent-first, max depth 5 |
+| `fl_prospect_location`, `fl_portfolio_location` | locations before and after promotion |
+| `fl_prospect_observation` | observations against a node |
+| `fl_prospect_convert_log` | what the promotion run did, per node |
+
+**Proposal lane**
+
+| Table | Holds |
+|---|---|
+| `fl_proposal` | totals, tax, validity, `frozen_json` + `checksum`, revision chain (`parent_proposal_id`, `superseded_by_proposal_id`), decision |
+| `fl_proposal_line` | priced lines — `service_code`, quantity, rate, one-time vs recurring, optional |
+| `fl_proposal_template` | the document template a proposal renders through |
+
+**`fl_schema_version` does not exist and is not coming.** It was in an earlier draft of this section as a migration ledger; the app cannot run DDL (§3a), so there is no migration to record. The CSV set *is* the version.
 
 ### `fl_lead`
 
 ```
 ref_no, company_name, contact_name, contact_email, contact_phone, website_domain,
-source (widget|manual|tender|defect|reclean), source_detail,
+source (widget|tender|inapp), source_detail,   -- the three channels of §1; the
+                                               -- refinement (defect, reclean,
+                                               -- site visit) rides on detail
 service_type, description, estimated_value, currency,
 status, disposition_reason, duplicate_of_lead_id, nurture_until,
 owner_email,                      -- the actioner
@@ -283,7 +335,9 @@ Normalised dedup keys (`email_norm`, `phone_norm`, `domain_norm`) are stored alo
 
 ---
 
-## 6. Lead states
+## 6. Lifecycles
+
+The lead's is the one to read first — every other lane copies its rules.
 
 **Status and reason are separate fields.** `spam`, `duplicate`, `outside_region`, `wrong_service` are *reasons a lead closed*, not states. Flattening them means you cannot count "how many closed" without unioning five values.
 
@@ -319,51 +373,73 @@ closed     → (terminal; reopening creates a new lead linked to the old)
 
 `new → closed` lets obvious spam die unclaimed.
 
-### `fl_deal.stage`
+### `fl_deal.stage` — `domain/deal-state.ts`
 
-`open → surveying → quoted → won | lost`. Minimal on purpose — it maps onto the funnel that comes later rather than inventing a sales pipeline now.
+Eight working stages, then two terminals:
+
+```
+opportunity → discovery → survey_required → survey_completed
+   → estimation → proposal_submitted → negotiation → decision_pending
+                                                        → won | lost
+```
+
+This replaced the four-stage placeholder (`open → surveying → quoted → won|lost`) once the survey and proposal lanes existed to fill the middle. `lost` carries a reason from `LOST_REASONS`, on the same status-and-reason-are-separate rule as the lead.
+
+**`won` is the promotion trigger.** The transition takes a capture (final value, contract start, signed note) and enqueues the client sync. What it does *not* yet enqueue is in §10.
+
+### The other lifecycles
+
+Each lane owns its own state machine in `domain/`, all on the same rules — plain `text`, validated in pure code, terminal states never reopened:
+
+| Entity | States | File |
+|---|---|---|
+| Survey | `draft → scheduled → assigned → in_progress → pending_review → completed`, `cancelled` from any pre-completed state | `survey-state.ts` |
+| Visit | `planned → in_progress → done`, or `no_show` / `cancelled` | `visit-state.ts` |
+| Proposal | `draft → pending_approval → approved → sent → accepted \| rejected`, plus `expired`, `superseded`, `withdrawn` | `proposal-state.ts` |
+
+**A completed survey is never reopened.** A re-walk is a *new* survey linked to the old one — a row insert, not a transition. A superseded proposal works the same way: `revise` mints a new row and links the chain, so the sent document a customer holds is never edited underneath them.
 
 ---
 
 ## 7. The API contract
 
-**Frozen. The UI is built against this and nothing else.**
+**The console is built against this and nothing else.** These invariants are frozen; the handler set grows.
 
-- Every handler takes `payload` (a JSON string) plus, where useful, a scalar `id` or `token`. Nothing else — the platform allows only `number` and `string`.
+- Every handler takes `payload` (a JSON string) plus, where useful, a scalar `id` or `token`. Nothing else — the platform allows only `number` and `string`. **Arrays and objects passed as flat fields are silently dropped** — they must ride in the envelope.
 - Every handler returns `{ ok, data?, error? }`. Never a bare array, never a bare string.
 - `snake_case` in Postgres, `camelCase` in JSON. Convert in `shared/db.ts` **only**.
 - Money: integer minor units in JS, `numeric(14,2)` in Postgres. Never a float.
 - **No inventing field names.** Not in §5 ⇒ does not exist. Add it there first.
 - **No inventing Facilio action slugs.** Discover with `facilio connections search`, verify with `facilio connections schemas`. An invented slug fails at runtime, not at build.
 
-### `migrate`
+### The functions — eight that carry the product, plus a probe
 
-| Handler | Does |
+**One module, one function** (§9 rule 4) — builds are per-function, and that is what keeps two people out of each other's files. `API.md` carries the field-level contract; this table carries the rule attached to each group.
+
+| Function | Handler groups | The rule that matters |
+|---|---|---|
+| **`lead`** | capture · read · workflow · analysis · convert · accounts · settings · services · intake · widget · outbox | `create` is the **only** writer of `fl_lead`; `transition` is the **only** way status changes |
+| **`deal`** | list · get · pipeline · update · capture · transition · reopen | `transition` to `won` takes the capture and enqueues promotion |
+| **`survey`** | create · schedule · assign · transition · walk · capture · reconcile · submit · settings | `submit` freezes a revision. **An open visit currently warns, it does not block** — `OPEN_VISITS_BLOCK = false` in `domain/survey-completeness.ts`. One line back to `true` restores the guard |
+| **`form`** | template CRUD · publish · clone · archive · section and question editing | A published template is versioned, not edited in place |
+| **`proposal`** | create · line-generate · edit · approve · send · respond · revise · diff · templates · rate cards | Created **from a frozen survey revision**, never from live answers |
+| **`prospect`** | tree CRUD · reparent · verdicts · observations · reconcile · link · convert | Only `convert-to-facilio` may write portfolio rows outward, and only when the deal is Won |
+| **`access`** | seed · bootstrap · users · roles · permissions | `actorEmail` is client-asserted — an audit label, not authentication |
+| **`migrate`** | per-lane seeds · `clean-seed` · backfills and repairs · `verify` · `status` | **No DDL** — the role cannot run it (§3a). This seeds, backfills and verifies, nothing more |
+| **`probe`** | reachability + DB checks | Disposable. Nothing depends on it |
+
+Every function also exposes `reference` (the enum and lookup values its UI needs) and, where an advisory agent is wired to its entity, `assess-input` / `assess-store` (§8).
+
+**Four directories under `src/functions/` are empty, and each is a deliberate decision, not an oversight:**
+
+| Directory | Why it is empty |
 |---|---|
-| `up` | idempotent DDL + indexes + seed settings and service lines |
-| `status` | applied schema version |
+| `portal/` | The intake handlers this file once assigned to a public `portal` function live in `lead` — `intake-start`, `intake-turn`, `intake-transcript`, `intake-submit`, plus `widget-get`/`widget-put`. They are still token-gated on `session_token` and still return redacted projections; only the file moved. **The `portal` seam is reserved for the signing portal** (§9), which is the first thing that genuinely needs its own public function |
+| `quote/` | Superseded by `proposal`. The quote lane was renamed, not deferred |
+| `sync/` | The outbox handlers are on `lead` — `sync-drain`, `sync-status`, `sync-retry` |
+| `core/` | Never used |
 
-### `lead`
-
-| Handler | Does |
-|---|---|
-| `create` | **the only writer of `fl_lead`.** Normalises, dedups, stamps SLA dates, enqueues analysis |
-| `list` | queue and list views — filters: status, owner, overdue, score band, source |
-| `get` | lead + latest analysis + timeline + assignment history |
-| `update` | editable fields only; never status |
-| `transition` | the **only** way status changes; validated by `domain/lead-state.ts` |
-| `claim` | actioner takes an unclaimed lead → `in_review` |
-| `assign` | assign/reassign actioner or sales owner; writes `fl_lead_assignment` |
-| `log-activity` | call, email, note, attachment → `fl_event` |
-| `analyse` | run `lead-analyst`, store a new `fl_lead_analysis` version |
-| `convert` | qualified → Account + Contact + Deal; resolves the company's existing account before creating one; enqueues Facilio client + contact writes |
-| `account-list` | companies with their lead and deal counts |
-| `account-get` | account + contacts + deals + every lead that resolved to it. Read-only: editing needs an `update_client` outbox action first |
-| `settings-get` / `settings-put` | service areas, service lines, coverage, SLA targets |
-
-### `portal` (public, added with the widget)
-
-Every handler requires `share_token` / `session_token` and returns a redacted projection: `intake-start`, `intake-turn`, `intake-attach`, `intake-submit`.
+**`intake-attach` does not exist.** Earlier drafts of this section listed it; the code has `intake-transcript` instead. Attachment on the public path is unbuilt.
 
 ### Mechanisms forced by "no transactions"
 
@@ -373,6 +449,8 @@ Every handler requires `share_token` / `session_token` and returns a redacted pr
 - **Idempotency** — deterministic keys (`lead:{id}:create_client`) on a UNIQUE index, so retries cannot double-write
 - **Reads** — always `LIMIT`, always check `truncated`
 - **Realtime** — one `events.publish()` per mutation, after the write, never in a loop
+
+**The outbox knows four actions** (`modules/sync.ts`): `create_client`, `create_client_contact`, `create_client_contract`, `create_contract_service_line`. All four are enqueued by the deal's `won` transition and dispatched by `sync-drain`. **Deferral is the ordering mechanism** — a contract with no promoted site comes back `deferred`, consumes no attempt, and lands on a later drain. No orchestrator, no ordering burden at the queueing site.
 
 ---
 
@@ -432,18 +510,21 @@ Consequences to respect:
 
 ---
 
-## 8. The two agents
+## 8. The agents — three tiers, and they do not merge
 
-Do not merge them. **Extraction and judgment are different jobs.**
+**Extraction, judgment and advice are different jobs.** The first two were the original pair; the third tier landed 15 Aug.
 
-| | `intake` | `lead-analyst` |
-|---|---|---|
-| Job | extraction — what did they say? | judgment — is this ours, how good? |
-| Shape | conversational, multi-turn, **stateless** | classifier, one call, structured |
-| Runs | live per visitor turn, **public** | once per lead, **every channel** |
-| Cost exposure | public → hard rate limits | bounded |
+| | `intake` | `lead-analyst` | the six advisory agents |
+|---|---|---|---|
+| Job | extraction — what did they say? | judgment — is this ours, how good? | advice — what should a human look at? |
+| Shape | conversational, multi-turn, **stateless** | classifier, one call, structured | one call, a flat map of prose + enums |
+| Runs | live per visitor turn, **public** | once per lead, **every channel** | on demand, from the entity's page |
+| Writes | `fl_intake_*` | `fl_lead_analysis` (+ score onto the lead) | `fl_assessment` — **and nothing else** |
+| Cost exposure | public → hard rate limits | bounded | bounded, human-triggered |
 
 Judgment runs once per lead on one path regardless of channel: a manually entered lead has no conversation but still needs relevance and a score. And because relevance depends on `fl_service_coverage`, two agents holding opinions about scope would drift.
+
+### The original pair
 
 **`intake` must be stateless.** Stateful threads scope to *the signed-in user*, and in a public app every anonymous visitor shares one identity — so stateful would leak one visitor's conversation into another's. Pass the transcript yourself, keyed by `session_token`.
 
@@ -464,17 +545,42 @@ Judgment runs once per lead on one path regardless of channel: a manually entere
 
 **SLA without a scheduler:** stamp `*_due_at` on arrival from `fl_setting` targets, then compute *overdue* **at read time** in `list`. The whole overdue/priority queue works on day one; only alerting needs production.
 
+### The advisory tier
+
+Six agents, wired in `modules/assessment.ts`, reachable as `assess-input` / `assess-store` on the function that owns their entity:
+
+| Agent | Entity | Reads for |
+|---|---|---|
+| `lead-intelligence` | lead | actioner priority, out-of-scope flag |
+| `survey-intelligence` | survey | is this walk complete enough to estimate from |
+| `estimation-intelligence` | proposal | pricing review — rate-card exceptions, missing information |
+| `proposal-intelligence` | proposal | pre-send check — commercial consistency, compliance risk |
+| `lost-deal-intelligence` | deal | why it was lost, and how confident that reading is |
+| `handover-intelligence` | deal | is a won deal ready for operations |
+
+**Why they share one table while the analyst has its own.** The analyst returns a *shape the app reasons about* — a 0–100 score and a verdict enum the inbox sorts and filters on — so it earned promoted columns and a denormalisation onto `fl_lead`. These six return tens of prose fields that nothing sorts on. So they share `fl_assessment`, keyed like `fl_event`, and the verdict rides whole in `data_json`. Each agent nominates one enum for `status`, optionally a second for `headline`, and one prose field for `summary` — enough for a panel to render a colour and a heading before anyone parses JSON. **An off-enum value lands as null and survives in `data_json`**: a near-miss is still a miss, and a status the UI has no colour for is worse than no status.
+
+**No assessment writes its entity's own columns.** Not the proposal's status, not the survey's, not the deal's stage. These agents advise and refuse to decide — several say so in their own guardrails — and a row that quietly moved a proposal to "not ready" would be an agent making a commercial decision. A human reads the panel and acts.
+
+**Their field names and enum values are copied from each agent's own `output_schema`**, fixed at `agent create/update`, with no runtime path to them (§8a). That is exactly why they are written down in one place: if the schema changes there, it changes in `AGENTS` here, or the panel silently stops colouring.
+
+**They run on the same client-driven path as the analyst** (§8a) — the browser makes the model call, the function only parses and stores. `assess-input` builds the prompt; `assess-store` takes the reply. No handler waits on a model, ever.
+
 ---
 
-## 9. Provisions — how unbuilt modules connect
+## 9. Provisions — how the remaining modules connect
 
 These exist so nothing built now has to be reworked later. **Honour them; do not build against them.**
 
-| Later module | Seam it uses | What must stay true |
+**Two of these have since been built, and the seams held.** `fl_survey.deal_id → fl_deal` and `fl_proposal.deal_id → fl_deal` are live — the deal is the parent of operational work, and nothing hangs a survey or a proposal off a lead. The `fl_quote` seam was consumed by `fl_proposal` under a different name; the rule it carried is unchanged. They stay listed below as worked examples of what honouring a seam looks like.
+
+| Module | Seam it uses | What must stay true |
 |---|---|---|
-| **Survey** | `fl_survey.deal_id → fl_deal` | Deal is the parent of operational work. Nothing hangs surveys off a lead |
-| **Quote** | `fl_quote.deal_id → fl_deal` | Same |
+| ~~**Survey**~~ **BUILT** | `fl_survey.deal_id → fl_deal` | Deal is the parent of operational work. Nothing hangs surveys off a lead |
+| ~~**Quote**~~ **BUILT as `proposal`** | `fl_proposal.deal_id → fl_deal` | Same — and a proposal is built from a **frozen** survey revision, never live answers |
+| ~~**Portfolio promotion**~~ **BUILT** | `prospect.convert-to-facilio` + `fl_prospect_convert_log` | Parent-first, idempotent, batched, and only when the deal is Won — checked server-side against the deal, never trusted from the caller |
 | **Signing portal** | the `portal` function + token pattern | Public handlers are token-gated and return redacted projections. Never add an untokenised public handler |
+| ~~**Contract + service lines**~~ **BUILT** | `fl_sync_task` actions `create_client_contract`, `create_contract_service_line` | Enqueued by the Won hook, deferred in the drain until the client and a site exist. Never called inline |
 | **Work-order handoff** | `fl_sync_task.action` + `shared/facilio.ts` | New external write = new action value + handler. Never a new outbox table, never an inline Facilio call |
 | **Tender ingestion** | `lead.create` with `source='tender'` | `create` is the **only** writer of `fl_lead`. A new channel is an adapter producing a normalised draft, nothing more |
 | **Email-to-lead** | same as above, `source='email'` | Same. `gmail.list-messages` exists; it needs an OAuth link and production polling |
@@ -482,13 +588,12 @@ These exist so nothing built now has to be reworked later. **Honour them; do not
 | **Analytics + dashboard** | read-only over `fl_lead`, `fl_event`, `fl_deal` | **Never denormalise counters.** Derive at read time so analytics needs no writes and no migration |
 | **SLA alerting** | the `*_due_at` columns + a scheduled job | Columns exist now; the job is added post-promotion. No schema change |
 | **Automation engine** | outbox + `*_due_at` | Same substrate. Automation is scheduling over existing state, not a new state store |
-| **Permissions** | `role` in settings + the two-app split | See §10 |
-| **Contract** | `fl_deal` + a handoff marker | Facilio has no contract API — it stays a human step |
+| **Permissions enforcement** | `fl_role` + the `access` function + the two-app split | The matrix is built and advisory. Enforcement is what is missing — see §10 |
 
 **Rules that keep the provisions valid:**
 
 1. **Additive-only migrations.** Preview and production share one schema; old code must keep working.
-2. **One writer per aggregate.** `lead.create` and `lead.transition` are the only paths that create leads and change status. Every channel and every automation goes through them.
+2. **One writer per aggregate.** `lead.create` and `lead.transition` are the only paths that create leads and change status; the same holds per lane — `survey.transition`, `deal.transition`, the `proposal` transition set. Every channel and every automation goes through them.
 3. **Enum-likes are `text`, validated in `domain/`.** New values are code, not migrations.
 4. **New module = new function.** Never widen an existing function for a different module — builds are per-function and that is what keeps two people out of each other's files.
 5. **No denormalised counts.** Derive.
@@ -497,12 +602,20 @@ These exist so nothing built now has to be reworked later. **Honour them; do not
 
 ## 10. Known limitations — state these, do not imply otherwise
 
-- **Permissions are not enforceable server-side.** Functions get no caller identity, so an RBAC matrix across Admin / Sales Manager / Sales Rep / Lead Actioner / Surveyor prevents accidents via the UI, not a determined user. Real enforcement needs the two-app split or Facilio-side auth.
-- **Actor identity is client-asserted** — the browser passes it from `getCurrentUser()`. The audit trail is honest about *what* changed, and trusting about *who*.
+- **Permissions are not enforceable server-side.** Functions get no caller identity, so the `fl_role` matrix — edited under Settings → Permissions and read by the console's `AccessProvider` — prevents accidents via the UI, not a determined user. Real enforcement needs the two-app split or Facilio-side auth. **The matrix existing is not the same as the matrix being enforced**; do not let a screen imply otherwise.
+- **Actor identity is client-asserted** — the browser passes it from `getCurrentUser()`, and every mutation takes it as `actorEmail`. The audit trail is honest about *what* changed, and trusting about *who*.
+- **The promotion tail is built but has never been walked end to end.** The Won hook enqueues client, contact, contract and one service line per accepted proposal line; `prospect.convert-to-facilio` promotes the site tree. What is *unproven*:
+  - **The 15 Aug E2E reached client and contact only** — the rest landed after that run. `docs/e2e-findings-2026-08-15.md` describes a state the code has since left; read it for the traps it found, not for the gap list.
+  - **The site promotion is a manual call, and the contract waits on it.** `convert-to-facilio` is batched (default 4, max 8, because Facilio calls are serialised at ~10s) and must be called until `remaining` is 0. The contract task **defers** until a promoted site exists, so nothing breaks if it is called late — it simply does not land. Order is still **convert run → contract → service lines**.
+  - **A Facilio Service is minted on demand** if the local service line has no cached id (§2). First run of a new service code therefore creates a record in FSM as a side effect of a contract line.
+  - **Work orders: no code path at all.**
+- **The lead's site address never becomes a site.** It rides onto the account and into the FSM client address, but a promotable site has to be named at survey creation. If sales expects the enquiry address to appear as a site, that is a gap, not a bug.
+- **Local `build/functions/*.js` says nothing about platform state.** A fix that is bundled but not pushed fails *silently and without an error anywhere* — this cost a full E2E run on 15 Aug, where the deployed `deal` function predated its own Won hook. Push before you conclude anything about behaviour.
 - **No SLA alerts, no polling, no automation until the app is promoted to production.**
-- **The widget needs public app access**, set in the platform UI. Until then, intake is testable only as a first-party page.
-- **Contracts cannot be created via any Facilio action** — a human does it in FSM.
+- **The widget needs public app access**, set in the platform UI and not confirmed granted (§3a). Until then, intake is testable only as a first-party page.
+- **Contracts are no longer a human step.** An earlier draft of this list said no Facilio action existed; `create-client-contract` does, and the outbox calls it. It is mandatory-field fussy — a contract with no `startDate` is rejected, so the dispatcher falls back through the payload, then the Won capture read fresh from the deal, then today.
 - **Photos cannot attach to a Facilio asset** — no such action exists. They live in the app file store.
+- **`create-client-contact` returns no id we can extract**, so `fl_account_contact.facilio_contact_id` stays null even when `sync_status` is `synced` (§7a).
 
 ---
 
@@ -513,7 +626,7 @@ These exist so nothing built now has to be reworked later. **Honour them; do not
 **Stage 2 — backend.**
 
 1. Scaffold `scripts/bundle.mjs` + `push.mjs`; `.d.ts` shim for `@facilio/studio-functions`
-2. `facilio vibe db create` *(pending — one platform write)*
+2. `facilio vibe db create`
 3. **Probe function** — settles env var names, DDL permission, transaction support, numeric typing, `gen_random_uuid()`
 4. `shared/` kernel + `migrate` → verify with `facilio vibe db tables` / `describe`
 5. `domain/` states + scoring + SLA maths, unit-tested locally **before** any handler uses them
@@ -523,39 +636,57 @@ These exist so nothing built now has to be reworked later. **Honour them; do not
 9. `convert` → Account + Contact + Deal, enqueue Facilio writes
 10. `sync` drain for the client/contact actions
 
-**Exit gate:** every handler in §7 returns real data via `facilio vibe function run`, and a full CLI walk passes — create lead → analyse → dedup → claim → contact → qualify → convert → drain → confirm the Facilio client exists.
+**Exit gate — met.** Every handler returns real data via `facilio vibe function run`, and `scripts/walk.mjs` passes the lead lane end to end.
 
-**Stage 3 — frontend. OUT OF SCOPE for this build.** When it is picked up, it goes against the frozen §7 contract with nothing mocked, in this order: shell + auth → lead list/queue → lead detail (intelligence card + timeline) → qualification actions → conversion → settings → intake widget last (needs public app access). Recorded here so the contract is designed for it, not so anyone starts it.
+**Stage 3 — the survey and proposal lanes.** Built in slices, each landing backend before UI: form/template builder → survey desk → survey walk and reconciliation → frozen revision → proposal, pricing and revisions → the prospect portfolio → access and roles.
+
+**Exit gate — met 15 Aug.** A single live run took LEAD-0028 → deal → SUR-0021 → frozen revision → PRP-0009 → accepted → Won → FSM client 30289 with its primary contact, and field fidelity in FSM was exact for everything wired. Recorded in `docs/e2e-findings-2026-08-15.md`, including what it found broken.
+
+**Stage 4 — the frontend. No longer out of scope; it is built.** Nine feature modules on shadcn + Tailwind, against the §7 handlers with nothing mocked. What ships ahead of a handler is marked `[SEAM]` in that feature's api-util and renders a real empty state.
+
+**Stage 5 — the promotion tail.** The site-promotion run, the contract and its service lines, and the service-id resolution behind them all landed after the E2E. **Its exit gate is not met**: nothing has yet driven Won → convert run → contract → service lines against a live FSM in one pass. That walk is the next thing to do, and it is worth doing before anything is built on top of it.
+
+**Stage 6 — production promotion.** It is what unlocks SLA alerting, scheduled drains and any automation at all, and until it happens someone must call `sync-drain` by hand.
 
 ### Ownership
 
-Split by **function**, so two people never edit the same file.
+Split by **function**, so two people never edit the same file. The split has widened with the lanes:
 
 | Owner | Owns |
 |---|---|
-| One | `lead` handlers: create, dedup, list, get, queue, claim, assign |
-| The other | `analysis` + `lead-analyst` agent, `convert` + `deal`, settings |
-| Shared — agreed once, then frozen | `migrate`, `shared/`, `domain/` |
+| One | the lead lane: `lead` capture/queue/workflow, `access` |
+| The other | the survey and proposal lanes: `survey`, `form`, `proposal`, `prospect`, `deal` |
+| Shared — agreed once, then frozen | `migrate`, `shared/`, `domain/`, the agent specs in `modules/assessment.ts` |
 
-**Gate before pushing any function:** `npm test` passes on `domain/`.
+**Gate before pushing any function:** `npm test` passes, and `npm run typecheck:all` is clean on both halves.
 
 ---
 
 ## 12. Local development
 
-- **`npm test`** — vitest over `src/domain` only. Runs on a laptop, no platform, no network. State machines, scoring, SLA date maths. This is where the logic that matters gets proven.
+- **`npm test`** — vitest, 22 files over `src/domain` plus a few frontend units (`leads/actions`, `leads/filters`, `ui/assessment-fields`). Runs on a laptop, no platform, no network. State machines, scoring, SLA date maths, pricing, completeness, reconciliation. This is where the logic that matters gets proven.
+- **`npm run typecheck:all`** — both halves, backend and frontend. Neither is allowed to go red.
 - **There is no local Postgres.** The app DB is remote, so handler tests hit the real schema; use a `_probe_` prefix for throwaway tables.
 - **Backend integration loop, no UI needed:** `node scripts/bundle.mjs && node scripts/push.mjs lead && facilio vibe function run lead create --args '{"payload":"…"}'`
+- **Frontend:** `node scripts/build-frontend.mjs` → `dist/`. React 19 + `react-router` 7 on **HashRouter** — the platform serves a static folder with no rewrite rules, so a real path would 404 on reload. URLs are therefore `#/leads/<id>`.
+- **The UI is shadcn + Tailwind v4.** The DSM npm dependency was dropped on 13 Aug; only `@facilio/icons` survives of the old stack, behind `ui/Icon.tsx`. **`DSM-TOKENS.md` documents a system this app no longer uses** — historical reading only.
 - **esbuild:** `bundle: true`, `format: 'esm'`, `external: ['@facilio/studio-functions']`, `target: 'es2020'`, **no minify** initially so platform build errors stay readable. `server.execute()` must remain the last top-level statement and nothing may do IO at module scope.
 
 ---
 
 ## 13. Platform state
 
-Already created: app **`frontline`** (`https://frontline.vibe.facilio.com/`), function `tenderprobe` (a reachability probe, safe to delete).
+App **`frontline`** at `https://frontline.vibe.facilio.com/`. Database provisioned, `fl_*` tables imported and carrying real working data — plus E2E leftovers listed in `docs/e2e-findings-2026-08-15.md`.
 
-Database provisioned, with the `fl_*` tables imported and carrying working data. Functions `lead` and `migrate` are uploaded and built; the other five directories under `src/functions/` are still empty, so nothing else ships.
+**Eight functions are uploaded and built:** `lead`, `deal`, `survey`, `form`, `proposal`, `prospect`, `access`, `migrate` — all re-pushed from current `src/` on 15 Aug after the deployed-vs-local trap bit (§10). `probe` exists in the repo as a disposable ninth. Four directories under `src/functions/` are empty by decision (§7).
 
 Deployed to **preview only** — `https://preview-frontline.vibe.facilio.com/`. `facilio vibe deploy` publishes there by default; production is the separate `--prod` flag.
 
-Not yet done: any production promotion (`facilio vibe deploy --prod`), public access.
+Not yet done:
+
+- **Production promotion** (`facilio vibe deploy --prod`) — and with it, every scheduled behaviour in §10.
+- **Public app access** — and with it, the embeddable widget.
+- **Facilio connection actions are DRAFT and cover `lead` only** — `scripts/gen-connection-actions.mjs` hardcodes it, so no `survey`, `form`, `proposal`, `prospect` or `deal` handler has an action.
+- Leftover probe functions and a `_probe_types` table sit on the platform, all safe to delete.
+
+Real records exist in Facilio from testing (clients 30248, 30249, 30289 and their contacts). **No delete API exists for them** — cleanup is manual in the FSM admin UI.

@@ -28,7 +28,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { Printer } from "lucide-react";
 import { useActor } from "../../../app/auth";
 import { PageShell } from "../../../app/shell/PageShell";
@@ -302,6 +302,28 @@ function SystemSection({
 
 // ── The page ─────────────────────────────────────────────────────────────────
 
+/**
+ * Where a render warning gets fixed.
+ *
+ * The renderer reports what it could not resolve, which is right — a client
+ * document with a blank where a date belongs is worse than one that never
+ * claimed a date. But naming the gap and not the cure leaves the reader holding
+ * a complaint with nowhere to take it, and every one of these has exactly one
+ * screen that fills it.
+ *
+ * Matched on the placeholder token rather than the sentence, so rewording a
+ * warning server-side does not silently drop its link.
+ */
+function fixFor(warning: string, proposalId: string): { to: string; label: string } | null {
+  const terms = `/proposals/${proposalId}?tab=terms`;
+  if (warning.includes("{{valid_until}}")) return { to: terms, label: "Set the validity" };
+  if (warning.includes("{{payment_terms}}")) return { to: terms, label: "Set payment terms" };
+  if (warning.includes("pricing table has no lines")) {
+    return { to: `/proposals/${proposalId}?tab=pricing`, label: "Add pricing lines" };
+  }
+  return null;
+}
+
 export function ProposalDocument() {
   const { id } = useParams();
   const actor = useActor();
@@ -397,11 +419,28 @@ export function ProposalDocument() {
           {doc.warnings?.length ? (
             <Card title="Not resolved in this render" pad={false} className="mb-5">
               <ul className="flex flex-col">
-                {doc.warnings.map((w) => (
-                  <li key={w} className="border-b px-4 py-2 text-sm last:border-b-0">
-                    {w}
-                  </li>
-                ))}
+                {doc.warnings.map((w) => {
+                  const fix = fixFor(w, proposal.id);
+                  return (
+                    <li
+                      key={w}
+                      className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-2 text-sm last:border-b-0"
+                    >
+                      <span className="min-w-0 flex-1">{w}</span>
+                      {/* Naming the gap and not the cure is how a diagnostic
+                          becomes a dead end. Each of these has exactly one
+                          screen that fills it; this is the way there. */}
+                      {fix ? (
+                        <Link
+                          to={fix.to}
+                          className="shrink-0 text-sm underline-offset-4 hover:underline"
+                        >
+                          {fix.label}
+                        </Link>
+                      ) : null}
+                    </li>
+                  );
+                })}
               </ul>
             </Card>
           ) : null}
