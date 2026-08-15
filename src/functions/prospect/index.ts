@@ -82,11 +82,11 @@ const server = new StudioFunctions({ name: "prospect" });
 server.addHandler({
   name: "create",
   description:
-    "Create one location at any level. `name` is the ONLY mandatory descriptive field — a phone call gives you 'the Bleecker Street store' and nothing else. OWNERSHIP: pass at least one of leadId, accountId or dealId; a building named in an enquiry exists before any deal does. LEVELS: a site has no parent, a building hangs off a site, a floor off a building, a space off a floor OR a building OR directly off a site (25,110 live Facilio spaces have no building), and a space may nest inside a space five deep. ancestry_path AND the site_id/building_id/floor_id columns are stamped here.",
+    "Create one location at any level. `name` is the ONLY mandatory descriptive field — a phone call gives you 'the Bleecker Street store' and nothing else. OWNERSHIP: pass at least one of leadId, accountId or dealId; a building named in an enquiry exists before any deal does. Pass a dealId and the account is stamped from that deal for you — the portfolio is listed by account as well as by deal, so a deal-owned row with no account would be invisible from the client that owns it. A leadId is never inferred. LEVELS: a site has no parent, a building hangs off a site, a floor off a building, a space off a floor OR a building OR directly off a site (25,110 live Facilio spaces have no building), and a space may nest inside a space five deep. ancestry_path AND the site_id/building_id/floor_id columns are stamped here.",
   parameters: {
     ...ENV,
     leadId: S("The enquiry that named this building, before any deal exists"),
-    accountId: S("The client it belongs to, across every deal"),
+    accountId: S("The client it belongs to, across every deal. Optional when dealId is given — it is taken from the deal — and what you pass wins"),
     dealId: S("The pursuit this row is scoped to"),
     type: S(`One of: ${LOCATION_TYPES.join(", ")}`),
     name: S("What it is called — required"),

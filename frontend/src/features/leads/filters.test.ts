@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { countBuckets, filterLeads, type LeadFilter } from "./filters";
+import { countBuckets, countToggles, filterLeads, type LeadFilter } from "./filters";
 import type { Lead, LeadStatus, Sla } from "./types/lead";
 
 let n = 0;
@@ -41,14 +41,9 @@ describe("countBuckets", () => {
     expect(b.all).toBe(4);
   });
 
-  it("counts unclaimed only among non-terminal leads", () => {
-    const b = countBuckets([mk("new"), mk("in_review", { owner: "rep@x.com" }), mk("converted")]);
-    expect(b.unclaimed).toBe(1);
-  });
-
-  it("counts an overdue lead even after it closed — the breach still happened", () => {
+  it("counts a closed lead under closed, not open, however it got there", () => {
     const b = countBuckets([mk("closed", { sla: overdue })]);
-    expect(b.overdue).toBe(1);
+    expect(b.closed).toBe(1);
     expect(b.open).toBe(0);
   });
 });
@@ -101,5 +96,46 @@ describe("filterLeads — three independent axes", () => {
     for (const tab of ["open", "converted", "closed", "all"] as const) {
       expect(filterLeads(leads, f({ tab }))).toHaveLength(b[tab]);
     }
+  });
+});
+
+/**
+ * The regression these exist for: the toggle counts used to be a single global
+ * tally, so a chip under the Converted tab advertised a number drawn from every
+ * lead in the system. Clicking it produced a different list — often an empty one
+ * — and an honest zero is indistinguishable from a broken filter.
+ */
+describe("countToggles — a chip's number is the list it produces", () => {
+  const leads = [
+    mk("new"),
+    mk("in_review", { owner: "rep@x.com" }),
+    mk("qualified", { sla: overdue }),
+    mk("converted"),
+    mk("closed", { sla: overdue }),
+  ];
+
+  it("agrees with the filter on every tab and toggle combination", () => {
+    for (const tab of ["open", "converted", "closed", "all"] as const) {
+      for (const unclaimed of [false, true]) {
+        for (const overdueOn of [false, true]) {
+          const base = f({ tab, unclaimed, overdue: overdueOn });
+          const c = countToggles(leads, base);
+          expect(c.unclaimed).toBe(filterLeads(leads, { ...base, unclaimed: true }).length);
+          expect(c.overdue).toBe(filterLeads(leads, { ...base, overdue: true }).length);
+        }
+      }
+    }
+  });
+
+  it("scopes to the tab — the converted lead is unclaimed, the open ones are counted apart", () => {
+    expect(countToggles(leads, f({ tab: "open" })).unclaimed).toBe(2);
+    expect(countToggles(leads, f({ tab: "converted" })).unclaimed).toBe(1);
+    expect(countToggles(leads, f({ tab: "closed" })).unclaimed).toBe(1);
+  });
+
+  it("narrows by the toggle already on, so the pair reads as one question", () => {
+    // Of the two unclaimed open leads, only the qualified one is late.
+    expect(countToggles(leads, f({ overdue: true })).unclaimed).toBe(1);
+    expect(countToggles(leads, f({ unclaimed: true })).overdue).toBe(1);
   });
 });

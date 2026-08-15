@@ -2,12 +2,19 @@
  * S1 — the prospect portfolio tree. §8 calls this one "P1 — this is the module",
  * and §14's cut line says do not cut it.
  *
- * WHY IT IS A PAGE WITH A DEAL PICKER RATHER THAN A TAB: v1.1 §8 puts this on a
- * Portfolio tab on the Deal, and the Deal detail surface does not exist (`F-14`).
- * Rather than block the module on someone else's page, the deal is a control at
- * the top; when the Deal page lands, this component becomes its tab body and the
- * picker is deleted. The deal also rides in the URL, so a specific pursuit's
- * portfolio is a link.
+ * WHY IT IS A PAGE **AND** A TAB. v1.1 §8 puts this on a Portfolio tab on the
+ * Deal; it is now mounted as exactly that (`DealDetail`, `LeadDetail`,
+ * `AccountDetail` all pass a `scope`), and it is still a page of its own, which
+ * is what makes the portfolio a module rather than a tab — you can look at every
+ * building without first naming whose it is.
+ *
+ * THE DEAL CONTROL IS A FILTER, NOT A GATE. It was a gate while Deal detail did
+ * not exist (`F-14`) and there was nowhere else for a deal-scoped view to live.
+ * Deal detail landed, so the control went back to being what it reads as: it
+ * narrows the list and rides in `?deal=`, so a pursuit's portfolio is a link.
+ * Ownership of a NEW property comes from the tab, from the parent row, or from
+ * `NewLocationDialog` asking — never from a filter, which is a view and not a
+ * decision about where a record belongs.
  *
  * THE TREE IS RENDERED IN SERVER ORDER AND NEVER SORTED HERE. `prospect.list`
  * returns rows ordered by `ancestry_path`, and lexicographic order over those
@@ -551,15 +558,20 @@ export function PortfolioTree({ scope }: { scope?: PortfolioScope } = {}) {
   );
 
   /**
-   * Whether a new property has somewhere to belong.
+   * The owner this surface already knows — or null, which is now a state the UI
+   * can work in rather than a dead end.
    *
-   * THE BUG THIS FIXES: the gate used to be `dealId` alone, so the Lead and
-   * Account tabs — where the owner IS known, just not as a deal — showed no Add
-   * buttons at all. The Lead tab exists precisely so the sites named in an
+   * THE FIRST BUG THIS FIXED: the gate used to be `dealId` alone, so the Lead
+   * and Account tabs — where the owner IS known, just not as a deal — showed no
+   * Add buttons at all. The Lead tab exists precisely so the sites named in an
    * enquiry can be recorded before any deal exists, and it could not record one.
    *
-   * §4's rule is "at least one of lead, account or deal", and the server enforces
-   * exactly that, so the UI should ask exactly that too.
+   * THE SECOND: on the unfiltered module page there is no owner, so every Add
+   * button vanished. That taught the reader a rule the product does not have —
+   * "a property needs a deal" — when §4's rule is "at least one of lead, account
+   * or deal" and the server enforces exactly that. So Add now stays, and
+   * `NewLocationDialog` asks the question this page cannot answer. The deal
+   * filter is back to being a filter.
    */
   const owner: PortfolioScope | null = scope
     ? scope
@@ -567,27 +579,35 @@ export function PortfolioTree({ scope }: { scope?: PortfolioScope } = {}) {
       ? { dealId: filters.dealId }
       : null;
 
+  /**
+   * The other two still need an owner up front, for reasons of their own rather
+   * than a leftover gate:
+   *
+   * - Paste reads the existing tree to warn about duplicates, and with no owner
+   *   that read is the WHOLE portfolio — it would flag a name as already present
+   *   because some other client has one.
+   * - Copy-forward's whole meaning is "onto this pursuit"; `prospect.copy-forward`
+   *   takes a target `dealId` and refuses a same-deal copy.
+   */
   const addActions = (
-        owner ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => show({ kind: "copy" })}>
-              <CopyPlus className="size-4" />
-              From a previous pursuit
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => show({ kind: "paste", parent: null })}
-            >
-              <ClipboardPaste className="size-4" />
-              Paste a site list
-            </Button>
-            <Button size="sm" onClick={() => show({ kind: "create", parent: null })}>
-              <Plus className="size-4" />
-              Add a property
-            </Button>
-          </div>
-        ) : null
+    <div className="flex flex-wrap items-center gap-2">
+      {dealId ? (
+        <Button variant="outline" size="sm" onClick={() => show({ kind: "copy" })}>
+          <CopyPlus className="size-4" />
+          From a previous pursuit
+        </Button>
+      ) : null}
+      {owner ? (
+        <Button variant="outline" size="sm" onClick={() => show({ kind: "paste", parent: null })}>
+          <ClipboardPaste className="size-4" />
+          Paste a site list
+        </Button>
+      ) : null}
+      <Button size="sm" onClick={() => show({ kind: "create", parent: null })}>
+        <Plus className="size-4" />
+        Add a property
+      </Button>
+    </div>
   );
 
   const content = (
@@ -626,12 +646,20 @@ export function PortfolioTree({ scope }: { scope?: PortfolioScope } = {}) {
             title="Nothing here yet"
             body="Sites named in the RFP, a building someone walked last week, or a store described on a phone call — all three land here. A name on its own is enough to start."
             action={
+              /* Paste only where it has an owner to dedupe against — see
+                 `addActions`. Adding by hand is offered either way, and becomes
+                 the primary action when it is the only one. */
               <div className="flex flex-wrap justify-center gap-2">
-                <Button onClick={() => show({ kind: "paste", parent: null })}>
-                  <ClipboardPaste className="size-4" />
-                  Paste a site list
-                </Button>
-                <Button variant="outline" onClick={() => show({ kind: "create", parent: null })}>
+                {owner ? (
+                  <Button onClick={() => show({ kind: "paste", parent: null })}>
+                    <ClipboardPaste className="size-4" />
+                    Paste a site list
+                  </Button>
+                ) : null}
+                <Button
+                  variant={owner ? "outline" : "default"}
+                  onClick={() => show({ kind: "create", parent: null })}
+                >
                   <Plus className="size-4" />
                   Add one by hand
                 </Button>

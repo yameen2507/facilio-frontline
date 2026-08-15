@@ -52,22 +52,66 @@ import { Combobox } from "../../../ui/Combobox";
 import type { CreatedLead, LeadSource } from "../types/lead";
 
 /**
- * `widget` is missing on purpose. It means the public web chat, and a lead
- * labelled that way is expected to carry an intake session token — the lead page
- * offers a transcript for it. A hand-typed lead has no transcript, so claiming
- * the channel would make the provenance a lie for the sake of one dropdown line.
+ * ONE source field. It used to be three — "How it came in", a free-text
+ * "Detail", and "Where it came from" — which asked whoever was capturing a phone
+ * call to split a single fact across two axes and a text box.
+ *
+ * The two axes still exist in the DATA, because the reporting is built on them:
+ * `source` is the channel a lead ARRIVED through (a closed enum the intake
+ * agent, the conversion to a deal and the inbox filter all read), `origin` is
+ * where the enquiry CAME FROM. Each option below declares both, so the person
+ * picks once and neither column loses a thing.
+ *
+ * `widget` is absent on purpose — "Website form" included. It means the public
+ * web chat, and a lead labelled that way is expected to carry an intake session
+ * token; the lead page offers a transcript for it. A hand-typed lead has no
+ * transcript, so the channel stays `inapp` and the label is kept in
+ * `sourceDetail` rather than claiming a provenance that is not there.
  */
-const SOURCES: { id: LeadSource; label: string; hint: string }[] = [
-  { id: "inapp", label: "Raised internally", hint: "Phone, email, a defect, or a re-clean falling due" },
-  { id: "tender", label: "Tender notice", hint: "An RFQ or tender someone picked up" },
+/** Mirrors LEAD_ORIGINS server-side — spelt out so a typo below fails to compile
+    rather than failing the create call. */
+type LeadOriginId =
+  | "referral"
+  | "existing_client"
+  | "marketing"
+  | "hubspot"
+  | "cold_outreach"
+  | "other";
+
+const SOURCE_OPTIONS: {
+  id: string;
+  label: string;
+  source: LeadSource;
+  /** null = this option says nothing about origin, so nothing is written. */
+  origin: LeadOriginId | null;
+  hint: string;
+}[] = [
+  { id: "phone_email", label: "Phone or email", source: "inapp", origin: null,
+    hint: "An enquiry that reached someone directly" },
+  { id: "tender", label: "Tender box", source: "tender", origin: null,
+    hint: "An RFQ or tender notice someone picked up" },
+  { id: "website", label: "Website form", source: "inapp", origin: null,
+    hint: "Typed in from a form submission — there is no chat transcript behind it" },
+  { id: "marketing", label: "Marketing campaign", source: "inapp", origin: "marketing",
+    hint: "A campaign, an event, or an ad brought them in" },
+  { id: "referral", label: "Referral", source: "inapp", origin: "referral",
+    hint: "Someone outside the company pointed them at us" },
+  { id: "existing_client", label: "Existing client", source: "inapp", origin: "existing_client",
+    hint: "Repeat work, a defect, or a re-clean falling due" },
+  { id: "hubspot", label: "HubSpot", source: "inapp", origin: "hubspot",
+    hint: "Carried over from the CRM" },
+  { id: "cold_outreach", label: "Cold outreach", source: "inapp", origin: "cold_outreach",
+    hint: "We approached them first" },
+  { id: "other", label: "Other", source: "inapp", origin: "other",
+    hint: "None of the above — say the rest in the description" },
 ];
 
 /** The currencies the region actually quotes in. Free text would fragment the column. */
 const CURRENCIES = ["AED", "SAR", "OMR", "QAR", "KWD", "BHD", "USD", "GBP"];
 
 const BLANK = {
-  source: "inapp" as LeadSource,
-  sourceDetail: "",
+  // The one pick that feeds both `source` and `origin` — see SOURCE_OPTIONS.
+  sourceOption: "phone_email",
   companyName: "",
   contactName: "",
   contactEmail: "",
@@ -84,19 +128,7 @@ const BLANK = {
   // single amount box stays, the distinction it was destroying does not.
   valueType: "one_off",
   valueFrequency: "monthly",
-  // D-10: where it came from. "" = not said — never guessed.
-  origin: "",
 };
-
-/** D-10's second axis, with the labels a BDR would use. */
-const ORIGINS = [
-  { id: "referral", label: "Referral" },
-  { id: "existing_client", label: "Existing client" },
-  { id: "marketing", label: "Marketing / campaign" },
-  { id: "hubspot", label: "HubSpot" },
-  { id: "cold_outreach", label: "Cold outreach" },
-  { id: "other", label: "Other" },
-] as const;
 
 /** The explicit escape hatch on the city picker (D-04) — it names itself so an
     out-of-coverage enquiry is a recorded fact, not a mis-picked city. */
@@ -189,6 +221,11 @@ export function NewLeadDialog({
   const toggleService = (id: string) =>
     setServiceIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
 
+  // Never undefined: the list is the only thing that can set the value, and BLANK
+  // starts on a member of it.
+  const picked =
+    SOURCE_OPTIONS.find((o) => o.id === form.sourceOption) ?? SOURCE_OPTIONS[0];
+
   const company = form.companyName.trim();
   // A value that is not a number would be rejected server-side, so it is caught
   // here where the field it belongs to is still on screen.
@@ -210,9 +247,13 @@ export function NewLeadDialog({
     const serviceType = [...pickedNames, serviceOther.trim()].filter(Boolean).join(", ");
 
     const fields: NewLeadFields = {
-      source: form.source,
+      // The one pick, unpacked onto the columns it stands for. `sourceDetail`
+      // keeps the label so the row still records which of them it was — "Website
+      // form" and a phone call both land on the `inapp` channel and would
+      // otherwise be indistinguishable in the data. Nothing renders it today.
+      source: picked.source,
       companyName: company,
-      sourceDetail: form.sourceDetail.trim(),
+      sourceDetail: picked.label,
       contactName: form.contactName.trim(),
       contactEmail: form.contactEmail.trim(),
       contactPhone: form.contactPhone.trim(),
@@ -224,7 +265,7 @@ export function NewLeadDialog({
       // a failed catalogue read fall back to what was typed.
       siteCity: area ? area.name : form.siteCity.trim(),
       siteRegion: area ? (area.region ?? area.name) : form.siteRegion.trim(),
-      ...(form.origin ? { origin: form.origin } : {}),
+      ...(picked.origin ? { origin: picked.origin } : {}),
       // Only send a currency alongside a value — a currency on an empty amount
       // says nothing and still writes a column. The D-05 pair travels the same
       // way: a type on no amount types nothing.
@@ -331,57 +372,21 @@ export function NewLeadDialog({
                 />
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="flex min-w-0 flex-col gap-1.5">
-                  <Label htmlFor="nl-source">How it came in</Label>
-                  <Select
-                    value={form.source}
-                    onValueChange={(v) => set("source")(v as LeadSource)}
-                  >
-                    <SelectTrigger id="nl-source" className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {SOURCES.map((s) => (
-                        <SelectItem key={s.id} value={s.id}>
-                          {s.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <span className="text-muted-foreground text-xs">
-                    {SOURCES.find((s) => s.id === form.source)?.hint}
-                  </span>
-                </div>
-
-                <div className="flex min-w-0 flex-col gap-1.5">
-                  <Label htmlFor="nl-source-detail">Detail</Label>
-                  <Input
-                    id="nl-source-detail"
-                    value={form.sourceDetail}
-                    onChange={(e) => set("sourceDetail")(e.target.value)}
-                    placeholder={form.source === "tender" ? "ADGPG" : "Inbound call"}
-                  />
-                </div>
-
-                <div className="flex min-w-0 flex-col gap-1.5 sm:col-span-2">
-                  {/* D-10's second axis: HOW it arrived is above; this is WHERE
-                      it came from. Two fields, so "how many wins came from
-                      referrals" finally has an answer. */}
-                  <Label htmlFor="nl-origin">Where it came from</Label>
-                  <Select value={form.origin || undefined} onValueChange={set("origin")}>
-                    <SelectTrigger id="nl-origin" className="w-full">
-                      <SelectValue placeholder="Not said" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {ORIGINS.map((o) => (
-                        <SelectItem key={o.id} value={o.id}>
-                          {o.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <Label htmlFor="nl-source">Source</Label>
+                <Select value={form.sourceOption} onValueChange={set("sourceOption")}>
+                  <SelectTrigger id="nl-source" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SOURCE_OPTIONS.map((s) => (
+                      <SelectItem key={s.id} value={s.id}>
+                        {s.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <span className="text-muted-foreground text-xs">{picked.hint}</span>
               </div>
 
               <Separator />

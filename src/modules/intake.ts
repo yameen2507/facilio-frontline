@@ -311,7 +311,9 @@ export function recordTurn(input: {
  */
 export function missingFields(extracted: Record<string, unknown>): string[] {
   const missing: string[] = [];
-  if (!extracted.companyName) missing.push("companyName");
+  // NOT companyName. A residential enquiry has no business name — the brief says
+  // so explicitly — and requiring one meant a homeowner could answer every
+  // question the widget asked and still never produce a lead.
   if (!extracted.contactName) missing.push("contactName");
   // Email, not "email or phone": a lead with only a phone number cannot be
   // deduped on domain and cannot be followed up by the sequence the sales team
@@ -426,13 +428,19 @@ export function submitSession(sessionToken: string): CreateLeadResult & { sessio
     };
   }
 
-  const companyName = typeof extracted.companyName === "string" ? extracted.companyName.trim() : "";
-  if (!companyName) throw new Error("a business name is needed before this can be submitted");
-
   const str = (key: string): string | null => {
     const v = extracted[key];
     return typeof v === "string" && v.trim() ? v.trim() : null;
   };
+
+  // `fl_lead.company_name` is not nullable and every list column reads it, so a
+  // residential lead borrows the contact's name rather than landing blank and
+  // unreadable in the queue. `clientType` on data_json is what tells the two
+  // apart — the company name alone no longer does.
+  const companyName = str("companyName") ?? str("contactName");
+  if (!companyName) {
+    throw new Error("a name is needed before this can be submitted");
+  }
 
   // Everything the agent captured that has no column of its own. Kept whole
   // rather than summarised: an RFP deadline or a square footage the visitor

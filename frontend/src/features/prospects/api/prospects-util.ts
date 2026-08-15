@@ -57,14 +57,44 @@ const call = <T>(handler: string, args: Record<string, unknown> = {}): Promise<R
  * queries to maintain against one table for no gain — the proposals module reads
  * `survey.revision-list` the same way.
  *
- * This picker exists only because the Deal detail surface does not (`F-14`).
- * v1.1 §8 puts the portfolio on a tab there; when that page lands, this page
- * becomes the tab's body and the picker goes away.
+ * WHAT THIS PICKER IS, NOW THAT THE DEAL PAGE EXISTS. It used to be the page's
+ * gate, on the grounds that Deal detail did not exist (`F-14`) and the portfolio
+ * had nowhere else to hang. Deal detail landed and mounts the tree itself, so
+ * the gate is gone: this is a FILTER — it narrows the view and rides in `?deal=`
+ * so a pursuit's portfolio is a link. Ownership of a NEW property comes from the
+ * tab you are on, or from the create dialog asking. Not from this control.
  */
 export const listDeals = () =>
   requestFrom<{
     deals: Array<{ id: string; refNo: string; title: string | null; accountName: string | null }>;
   }>("survey", "deal-list", {});
+
+/**
+ * The other two owner pickers, read from the LEAD function on the same terms as
+ * `listDeals` above — §4 says a property belongs to a lead, an account or a
+ * deal, so the dialog that asks "whose is this?" needs all three lists.
+ *
+ * EVERY ONE OF THE THREE IS CAPPED, AND THE CAPS ARE NOT THE SAME. Leads and
+ * accounts take a `limit` and are asked for 200; `survey.deal-list` takes no
+ * limit at all and its SQL says `limit 100`. The Combobox searches only what it
+ * was handed, so past the cap a real record is simply absent — which is why the
+ * numbers are exported rather than assumed, and why the dialog shows the one
+ * that applies. When this starts to bite, the fix is the `search` param sent to
+ * the server the way `accounts-util.listAccounts` does it, not a bigger number.
+ */
+export const OWNER_OPTION_LIMITS = { lead: 200, account: 200, deal: 100 } as const;
+
+export const listLeadOptions = () =>
+  requestFrom<{
+    leads: Array<{ id: string; refNo: string; companyName: string; siteCity?: string | null }>;
+  }>("lead", "list", { limit: OWNER_OPTION_LIMITS.lead });
+
+export const listAccountOptions = () =>
+  requestFrom<{
+    accounts: Array<{ id: string; name?: string | null; websiteDomain?: string | null }>;
+    /** `account-list` says so itself — believed over counting the rows. */
+    truncated?: boolean;
+  }>("lead", "account-list", { limit: OWNER_OPTION_LIMITS.account });
 
 // ── Reads ────────────────────────────────────────────────────────────────────
 

@@ -463,10 +463,19 @@ export function captureBatch(input: CaptureInput): Record<string, unknown> {
         // so the site is already in hand here and stamping it is a copy, not a
         // guess. Leaving it null would fail the check every row copied forward
         // by `migrate.copy-portfolio-locations` already passes.
+        // `account_id` is stamped from the deal for the same reason
+        // `prospect.createLocation` derives it: `listLocations` scopes on that
+        // column, so a room discovered on a walk with a null account is
+        // invisible on the portfolio tab of the very client whose building it
+        // was found in. This insert does not go through `createLocation` — it is
+        // one set-based statement over the entries — so the rule is repeated
+        // here rather than inherited.
         `insert into fl_portfolio_location
-           (id, deal_id, survey_id, type, parent_id, site_id, ancestry_path, name,
+           (id, deal_id, account_id, survey_id, type, parent_id, site_id, ancestry_path, name,
             provenance, verdict, created_by, updated_by, is_active, data_json, created_at, updated_at)
-         select md5('node:' || e.id)::uuid::text, $1, $2, coalesce(i.node_type_created, 'space'),
+         select md5('node:' || e.id)::uuid::text, $1,
+                (select d.account_id from fl_deal d where d.id = $1),
+                $2, coalesce(i.node_type_created, 'space'),
                 $4, $4, $4 || '${ANCESTRY_SEPARATOR}' || md5('node:' || e.id)::uuid::text, e.entry_label,
                 'survey', 'added_on_site', $3, $3, 'true', '{}', e.created_at, e.created_at
            from fl_survey_section_entry e

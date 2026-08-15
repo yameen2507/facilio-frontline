@@ -36,7 +36,7 @@ import { Tabs } from "../../../ui/Tabs";
 import { listLeads } from "../api/leads-util";
 import { ScoreCell, SlaChip, StatusChip } from "../components/LeadChips";
 import { NewLeadDialog } from "../components/NewLeadDialog";
-import { countBuckets, filterLeads, type TabId } from "../filters";
+import { countBuckets, countToggles, filterLeads, type TabId } from "../filters";
 import type { Lead } from "../types/lead";
 
 /** Every leads console labels its columns; this one used not to. No phone
@@ -48,6 +48,28 @@ const COLS: Col[] = [
   { label: "Score", icon: Gauge, className: "w-24", skel: "num" },
   { label: "Response", icon: Timer, className: "w-36", skel: "chip" },
 ];
+
+/** How each lifecycle tab reads inside a sentence. `open` and `all` are absent:
+    open is the default lens and `all` narrows nothing, so naming either in a
+    "none of them are…" clause would describe a filter nobody applied. */
+const TAB_PHRASE: Partial<Record<TabId, string>> = {
+  converted: "converted",
+  closed: "closed",
+};
+
+/**
+ * The narrowings currently in force, as one clause — "converted and running
+ * late". Built rather than hard-coded because there are eight combinations of
+ * the three axes and a filtered-empty state that names the wrong one is worse
+ * than one that names none.
+ */
+function describeFilter(tab: TabId, unclaimed: boolean, overdue: boolean): string {
+  const parts = [TAB_PHRASE[tab], unclaimed ? "unclaimed" : null, overdue ? "running late" : null]
+    .filter((p): p is string => Boolean(p));
+  if (!parts.length) return "in this view";
+  if (parts.length === 1) return parts[0];
+  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
 
 /** The entity cell's second line, shared by the table cell and the phone card
     so the two can never describe a lead differently. */
@@ -115,10 +137,17 @@ export function Inbox() {
   }, [reloadKey]);
 
   const counts = useMemo(() => countBuckets(leads), [leads]);
-  const rows = useMemo(
-    () => filterLeads(leads, { tab, unclaimed, overdue }),
-    [leads, tab, unclaimed, overdue]
-  );
+  const filter = useMemo(() => ({ tab, unclaimed, overdue }), [tab, unclaimed, overdue]);
+  const rows = useMemo(() => filterLeads(leads, filter), [leads, filter]);
+  // Scoped to the tab and to whatever else is switched on, so each chip's number
+  // is the length of the list clicking it produces.
+  const toggleCounts = useMemo(() => countToggles(leads, filter), [leads, filter]);
+
+  /** Whether an empty result is a FILTERING outcome rather than an empty inbox.
+      Both halves matter: with no leads at all, "none match these filters" would
+      blame the controls for a queue that has simply never had anything in it. */
+  const filtered = counts.all > 0 && (tab !== "open" || unclaimed || overdue);
+  const clearFilters = () => setFilter({ tab: "open", unclaimed: false, overdue: false });
 
   // Feeds the sidebar badge. The shell never imports this feature; the number
   // travels up through the app-level counts context.
@@ -170,7 +199,7 @@ export function Inbox() {
                   : "text-muted-foreground hover:text-foreground"
               )}
             >
-              {`Nobody's picked up · ${counts.unclaimed}`}
+              {`Nobody's picked up · ${toggleCounts.unclaimed}`}
             </button>
             <button
               type="button"
@@ -183,7 +212,7 @@ export function Inbox() {
                   : "text-muted-foreground hover:text-foreground"
               )}
             >
-              {`Running late · ${counts.overdue}`}
+              {`Running late · ${toggleCounts.overdue}`}
             </button>
           </div>
         </div>
@@ -257,12 +286,28 @@ export function Inbox() {
             </MobileList>
             <CountLine>{`${plural(rows.length, "lead", "leads")} in this view`}</CountLine>
           </>
+        ) : filtered ? (
+          // A FILTERED empty is a different fact from an empty inbox, and saying
+          // where leads come from here answers a question nobody asked — there
+          // are leads, these filters just exclude all of them. So: name the
+          // filters, and offer the one action that undoes them.
+          <Empty
+            title="No leads match these filters"
+            body={`${plural(counts.all, "lead is", "leads are")} on file, but ${
+              counts.all === 1 ? "it is not" : "none of them are"
+            } ${describeFilter(tab, unclaimed, overdue)}.`}
+            action={
+              <Button small onClick={clearFilters}>
+                Clear filters
+              </Button>
+            }
+          />
         ) : (
-          // No buttons here: the body already says where leads come from and
-          // that one can be raised by hand, and the header's New lead sits a
+          // No buttons on THIS one: the body already says where leads come from
+          // and that one can be raised by hand, and the header's New lead sits a
           // few pixels above. Repeating it turned an explanation into a pitch.
           <Empty
-            title={tab === "open" ? "No open leads" : "Nothing in this view"}
+            title={counts.all ? "No open leads" : "No leads yet"}
             body="Enquiries arrive from the website chat as unclaimed leads. One that came in by phone, by email or as a tender notice is raised here by hand."
           />
         )}

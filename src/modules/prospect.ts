@@ -428,10 +428,34 @@ export function createLocation(input: CreateLocationInput): { location: Prospect
   // §4's ownership rule, enforced here because no CHECK constraint is creatable.
   // A row owned by nobody is unreachable from every surface in the product.
   const leadId = trimOrNull(input.leadId);
-  const accountId = trimOrNull(input.accountId);
   const dealId = trimOrNull(input.dealId);
+  let accountId = trimOrNull(input.accountId);
   if (!leadId && !accountId && !dealId) {
     throw new Error("a location needs an owner — a lead, an account or a deal");
+  }
+
+  /**
+   * A deal belongs to a client, so a property recorded against the deal belongs
+   * to that client too. `copyForward` has always carried `account_id` across for
+   * exactly this reason; a direct create did not, and the consequence is real:
+   * `listLocations` scopes on `account_id`, so a building added from the Deal
+   * tab came out with `account_id` null and was INVISIBLE on its own client's
+   * portfolio tab. The same building, unreachable from the client that owns it.
+   *
+   * Derived, never asked for — an account passed in wins. A lead is deliberately
+   * NOT inherited: §4 fills the owners progressively, and the enquiry that
+   * started the deal is not the enquiry that named this particular building.
+   *
+   * Reading `fl_deal` here does not widen the prospect module — functions share
+   * one schema, and ownership is this module's own concern (`survey.listDeals`
+   * reads the same table on the same grounds).
+   */
+  if (!accountId && dealId) {
+    const owner = one<{ accountId: string | null }>(
+      `select account_id from fl_deal where id = $1 limit 1`,
+      [dealId]
+    );
+    accountId = trimOrNull(owner?.accountId ?? null);
   }
 
   const provenance = input.provenance
@@ -732,9 +756,13 @@ export function copyForward(input: {
   // rules as anything else rather than round-tripping raw columns.
   const { location } = createLocation({
     dealId: input.dealId,
-    // Carried so the copy stays reachable from the client's own portfolio tab
-    // even before this new pursuit has a deal behind it.
-    accountId: source.accountId,
+    // The account is NOT carried from the source, it is derived from the TARGET
+    // deal inside `createLocation`. Copy-forward exists for the case where the
+    // same physical building is bid a second time, and the second pursuit is
+    // what the copy belongs to — carrying the old account would put a row on
+    // one client's portfolio tab while its deal names another. `buildingKey`
+    // above is what keeps the two pursuits' rows joined; ownership does not
+    // have to travel for that to hold.
     type: source.type,
     name: source.name,
     parentId: input.parentId ?? null,

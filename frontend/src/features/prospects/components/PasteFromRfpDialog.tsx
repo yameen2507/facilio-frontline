@@ -41,7 +41,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { createLocation, listLocations, updateLocation } from "../api/prospects-util";
-import type { OwnerScope } from "./ActionDialogs";
+import { hasOwner, type OwnerScope } from "./ActionDialogs";
 import { childTypesOf, TYPE_LABEL, type LocationType, type ProspectLocation } from "../types/prospect";
 
 /**
@@ -135,12 +135,27 @@ export function PasteFromRfpDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /**
+   * May be empty ONLY when `parent` is set — the unfiltered module page offers
+   * Paste on a row (whose owner is the parent's) and not at the top level, where
+   * there would be nothing to check duplicates against but the whole portfolio.
+   */
   owner: OwnerScope;
   /** Null means the pasted rows land as sites at the top level. */
   parent: ProspectLocation | null;
   actor: string;
   onDone: () => void;
 }) {
+  const scoped: OwnerScope = hasOwner(owner)
+    ? owner
+    : parent
+      ? {
+          ...(parent.leadId ? { leadId: parent.leadId } : {}),
+          ...(parent.accountId ? { accountId: parent.accountId } : {}),
+          ...(parent.dealId ? { dealId: parent.dealId } : {}),
+        }
+      : {};
+
   const [text, setText] = useState("");
   const [rows, setRows] = useState<ParsedRow[]>([]);
   /** One target per pasted column, guessed then corrected by the user (X-9). */
@@ -163,6 +178,10 @@ export function PasteFromRfpDialog({
     setError(null);
     setFailed([]);
     setWritten(0);
+    // Cleared here rather than relied on being overwritten: the load below can
+    // now decline to run, and a stale set would flag rows against a previous
+    // open's portfolio.
+    setExisting(new Set());
   }, [open, parent]);
 
   /**
@@ -171,9 +190,12 @@ export function PasteFromRfpDialog({
    * would actually collide with.
    */
   useEffect(() => {
-    if (!open) return;
+    // No owner means no scope, and `prospect.list` with no scope returns the
+    // WHOLE portfolio — which would flag a name as a duplicate because some
+    // other client has one. Better to check nothing than to check the wrong set.
+    if (!open || !hasOwner(scoped)) return;
     let live = true;
-    listLocations(owner, true).then(({ data }) => {
+    listLocations(scoped, true).then(({ data }) => {
       if (!live) return;
       setExisting(
         new Set((data?.locations ?? []).map((l) => dupeKey(l.name, l.code ?? "", l.city ?? "")))
@@ -182,7 +204,7 @@ export function PasteFromRfpDialog({
     return () => {
       live = false;
     };
-  }, [open, owner.leadId, owner.accountId, owner.dealId]);
+  }, [open, scoped.leadId, scoped.accountId, scoped.dealId]);
 
   /** What a row would become, given the current mapping. */
   const valuesFor = useCallback(
@@ -278,9 +300,9 @@ export function PasteFromRfpDialog({
       // because `create` does not set priced attributes — they go through the
       // ledger so the RFP's number is recorded AS the RFP's number and a later
       // survey disagreeing becomes a conflict rather than an overwrite (§6.3).
-      const { data, error: err } = await createLocation(owner.dealId ?? "", type, name, actor, {
-        ...(owner.leadId ? { leadId: owner.leadId } : {}),
-        ...(owner.accountId ? { accountId: owner.accountId } : {}),
+      const { data, error: err } = await createLocation(scoped.dealId ?? "", type, name, actor, {
+        ...(scoped.leadId ? { leadId: scoped.leadId } : {}),
+        ...(scoped.accountId ? { accountId: scoped.accountId } : {}),
         ...(parent ? { parentId: parent.id } : {}),
         // The rows came out of the client's document, and that is the whole point
         // of recording provenance: the RFP and the surveyor will disagree later,

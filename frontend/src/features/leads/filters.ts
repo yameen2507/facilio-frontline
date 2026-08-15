@@ -31,20 +31,37 @@ export type LeadFilter = {
   overdue: boolean;
 };
 
-export type Buckets = Record<TabId, number> & { unclaimed: number; overdue: number };
+/** The LIFECYCLE axis only. The toggles get their own count — see below. */
+export type Buckets = Record<TabId, number>;
 
 export function countBuckets(leads: Lead[]): Buckets {
-  const b: Buckets = { open: 0, converted: 0, closed: 0, all: leads.length, unclaimed: 0, overdue: 0 };
+  const b: Buckets = { open: 0, converted: 0, closed: 0, all: leads.length };
   for (const l of leads) {
     if (!isTerminal(l.status)) b.open++;
-    if (!isTerminal(l.status) && !l.ownerEmail) b.unclaimed++;
-    // Counted regardless of status: a breach that was later closed still happened,
-    // and hiding it would make the overdue toggle look better than reality.
-    if (l.sla?.isOverdue) b.overdue++;
     if (l.status === "converted") b.converted++;
     if (l.status === "closed") b.closed++;
   }
   return b;
+}
+
+/**
+ * What each toggle would GIVE YOU if you clicked it right now — the tab it sits
+ * under, plus whichever toggles are already on, plus this one.
+ *
+ * It used to be a global tally taken over every lead regardless of the tab, and
+ * the unclaimed one counted a different set than it filtered (non-terminal only
+ * when counting, any status when filtering). So "Nobody's picked up · 7" under
+ * the Converted tab promised seven rows and delivered an empty list, which reads
+ * as a broken filter rather than as an honest zero.
+ *
+ * Defined THROUGH filterLeads for exactly that reason: a count and the list it
+ * describes cannot drift apart if the count is the list's length.
+ */
+export function countToggles(leads: Lead[], f: LeadFilter): { unclaimed: number; overdue: number } {
+  return {
+    unclaimed: filterLeads(leads, { ...f, unclaimed: true }).length,
+    overdue: filterLeads(leads, { ...f, overdue: true }).length,
+  };
 }
 
 function onTab(l: Lead, tab: TabId): boolean {

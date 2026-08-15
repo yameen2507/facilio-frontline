@@ -39,12 +39,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Combobox, type ComboboxOption } from "@/ui/Combobox";
 import {
   copyForward,
   createLocation,
   deactivateLocation,
   linkFacilio,
+  listAccountOptions,
+  listDeals,
+  listLeadOptions,
   listLocations,
+  OWNER_OPTION_LIMITS,
   reparentLocation,
   setDecision,
   setVerdict,
@@ -146,6 +151,106 @@ function ActionDialog({
  */
 export type OwnerScope = { leadId?: string; accountId?: string; dealId?: string };
 
+/** Empty means nobody has been named yet — the dialog has to ask. */
+export const hasOwner = (o: OwnerScope) => Boolean(o.leadId || o.accountId || o.dealId);
+
+type OwnerKind = "lead" | "account" | "deal";
+
+const OWNER_KINDS: Array<{ kind: OwnerKind; label: string; hint: string }> = [
+  {
+    kind: "lead",
+    label: "An enquiry",
+    hint: "The sites named in an enquiry, before there is a deal to hang them on.",
+  },
+  {
+    kind: "account",
+    label: "A client",
+    hint: "A building this client owns, across every pursuit rather than one of them.",
+  },
+  { kind: "deal", label: "A pursuit", hint: "A property in the scope of one deal." },
+];
+
+/**
+ * "Whose is this?" — shown ONLY when the surface could not answer it.
+ *
+ * A Deal, Lead or Account tab already knows, and the module page knows whenever
+ * its deal filter is set, so in the ordinary case this never renders. It exists
+ * for the one case that had no answer at all: the unfiltered `/prospects` page,
+ * which used to hide its Add buttons entirely rather than ask. Hiding the action
+ * taught the reader that a property REQUIRES a deal, which is not the rule §4
+ * states nor the one the server enforces.
+ *
+ * All three lists load together the moment the dialog opens. That is three reads
+ * for a form most people submit once, and it is still the right trade: the kind
+ * can be switched twice while deciding, and a picker that re-fetches on every
+ * switch is a picker that is empty exactly when it is being looked at.
+ */
+function OwnerField({
+  kind,
+  onKindChange,
+  value,
+  onChange,
+  options,
+  loading,
+  truncated,
+}: {
+  kind: OwnerKind;
+  onKindChange: (kind: OwnerKind) => void;
+  value: string;
+  onChange: (id: string) => void;
+  options: ComboboxOption[];
+  loading: boolean;
+  /** Whether this kind's list hit its own cap — the caps differ per kind. */
+  truncated: boolean;
+}) {
+  const active = OWNER_KINDS.find((k) => k.kind === kind) ?? OWNER_KINDS[0];
+
+  return (
+    <div className="bg-muted/40 flex flex-col gap-3 rounded-md border p-3">
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="nl-owner-kind">
+          Who is this for? <span className="text-destructive">*</span>
+        </Label>
+        <Select value={kind} onValueChange={(v) => onKindChange(v as OwnerKind)}>
+          <SelectTrigger id="nl-owner-kind" className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {OWNER_KINDS.map((k) => (
+              <SelectItem key={k.kind} value={k.kind}>
+                {k.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <span className="text-muted-foreground text-xs">{active.hint}</span>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="nl-owner">{active.label}</Label>
+        <Combobox
+          id="nl-owner"
+          options={options}
+          value={value || null}
+          onChange={onChange}
+          loading={loading}
+          placeholder={`Pick ${active.label.toLowerCase()}`}
+          searchPlaceholder="Search…"
+          emptyText={loading ? "Loading…" : "Nothing matches."}
+        />
+        {/* The list is capped server-side, and a Combobox searches only what it
+            was handed. Saying so beats a reader concluding the record is gone. */}
+        {truncated ? (
+          <span className="text-muted-foreground text-xs">
+            The {OWNER_OPTION_LIMITS[kind]} most recent only. If yours is older, open it and add the
+            property from its own Portfolio tab.
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export function NewLocationDialog({
   open,
   onOpenChange,
@@ -156,6 +261,7 @@ export function NewLocationDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** May be empty — see `OwnerField`, which is what handles that. */
   owner: OwnerScope;
   /** Null means a site at the top level. */
   parent: ProspectLocation | null;
@@ -172,6 +278,40 @@ export function NewLocationDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  /**
+   * The owner the surface already knows, if any.
+   *
+   * A tab supplies it. Failing that the PARENT supplies it: adding a floor
+   * inside a building never needs to ask whose building it is, and §4 guarantees
+   * the parent has an owner — so on the unfiltered module page, a nested add
+   * still knows, and only a new top-level site has to ask.
+   */
+  const surfaceOwner: OwnerScope = hasOwner(owner)
+    ? owner
+    : parent
+      ? {
+          ...(parent.leadId ? { leadId: parent.leadId } : {}),
+          ...(parent.accountId ? { accountId: parent.accountId } : {}),
+          ...(parent.dealId ? { dealId: parent.dealId } : {}),
+        }
+      : {};
+
+  // Only ever read when nobody is known; the inherited case leaves them idle.
+  const inherited = hasOwner(surfaceOwner);
+  const [ownerKind, setOwnerKind] = useState<OwnerKind>("deal");
+  const [ownerId, setOwnerId] = useState("");
+  const [ownerLists, setOwnerLists] = useState<Record<OwnerKind, ComboboxOption[]>>({
+    lead: [],
+    account: [],
+    deal: [],
+  });
+  const [ownerLoading, setOwnerLoading] = useState(false);
+  const [ownerTruncated, setOwnerTruncated] = useState<Record<OwnerKind, boolean>>({
+    lead: false,
+    account: false,
+    deal: false,
+  });
+
   useEffect(() => {
     if (!open) return;
     setType(allowed[0] ?? "space");
@@ -181,18 +321,71 @@ export function NewLocationDialog({
     setStreet("");
     setCity("");
     setError(null);
+    setOwnerId("");
     // `allowed` is derived from `parent`, which is in the dep list already.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, parent]);
 
+  useEffect(() => {
+    if (!open || inherited) return;
+    let live = true;
+    setOwnerLoading(true);
+    Promise.all([listLeadOptions(), listAccountOptions(), listDeals()]).then(
+      ([leadRes, accountRes, dealRes]) => {
+        if (!live) return;
+        setOwnerLists({
+          lead: (leadRes.data?.leads ?? []).map((l) => ({
+            id: l.id,
+            label: l.companyName || l.refNo,
+            meta: [l.refNo, l.siteCity].filter(Boolean).join(" · "),
+          })),
+          account: (accountRes.data?.accounts ?? []).map((a) => ({
+            id: a.id,
+            label: a.name || "Unnamed client",
+            meta: a.websiteDomain ?? null,
+          })),
+          deal: (dealRes.data?.deals ?? []).map((d) => ({
+            id: d.id,
+            label: d.title || d.refNo,
+            meta: [d.refNo, d.accountName].filter(Boolean).join(" · "),
+          })),
+        });
+        setOwnerTruncated({
+          lead: (leadRes.data?.leads ?? []).length >= OWNER_OPTION_LIMITS.lead,
+          // `account-list` reports its own truncation; believed over counting.
+          account:
+            accountRes.data?.truncated ??
+            (accountRes.data?.accounts ?? []).length >= OWNER_OPTION_LIMITS.account,
+          deal: (dealRes.data?.deals ?? []).length >= OWNER_OPTION_LIMITS.deal,
+        });
+        setOwnerLoading(false);
+      }
+    );
+    return () => {
+      live = false;
+    };
+    // The three lists do not change while one dialog is open.
+  }, [open, inherited]);
+
+  /**
+   * The owner actually sent. Inherited from the surface when there is one, and
+   * otherwise whatever the field above collected — the same "at least one of
+   * three" the server checks, asked once at the only moment it is unanswerable.
+   */
+  const chosen: OwnerScope | null = inherited
+    ? surfaceOwner
+    : ownerId
+      ? { [`${ownerKind}Id`]: ownerId }
+      : null;
+
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || busy) return;
+    if (!name.trim() || !chosen || busy) return;
     setBusy(true);
     setError(null);
-    const { error: err } = await createLocation(owner.dealId ?? "", type, name.trim(), actor, {
-      ...(owner.leadId ? { leadId: owner.leadId } : {}),
-      ...(owner.accountId ? { accountId: owner.accountId } : {}),
+    const { error: err } = await createLocation(chosen.dealId ?? "", type, name.trim(), actor, {
+      ...(chosen.leadId ? { leadId: chosen.leadId } : {}),
+      ...(chosen.accountId ? { accountId: chosen.accountId } : {}),
       ...(parent ? { parentId: parent.id } : {}),
       provenance: "manual",
       ...(code.trim() ? { code: code.trim() } : {}),
@@ -214,15 +407,36 @@ export function NewLocationDialog({
       description={
         parent
           ? "Everything you add here is recorded underneath its parent, so it stays in the tree when the deal is won."
-          : "A property in this pursuit. A name is enough to start — the rest can be filled in as it arrives."
+          : inherited
+            ? "A property in this pursuit. A name is enough to start — the rest can be filled in as it arrives."
+            : "A building you hope to be paid to maintain. Say whose it is and what it is called; the rest can be filled in as it arrives."
       }
       error={error}
       busy={busy}
       submitLabel="Add"
-      canSubmit={Boolean(name.trim())}
-      blockedReason="Give it a name"
+      canSubmit={Boolean(name.trim() && chosen)}
+      blockedReason={chosen ? "Give it a name" : "Say who this is for, and give it a name"}
       onSubmit={submit}
     >
+      {/* First, because it is the question the rest of the form assumes an
+          answer to. */}
+      {!inherited ? (
+        <OwnerField
+          kind={ownerKind}
+          onKindChange={(k) => {
+            setOwnerKind(k);
+            // The id belongs to the old kind — carrying it over would send a
+            // lead's id as an account's.
+            setOwnerId("");
+          }}
+          value={ownerId}
+          onChange={setOwnerId}
+          options={ownerLists[ownerKind]}
+          loading={ownerLoading}
+          truncated={ownerTruncated[ownerKind]}
+        />
+      ) : null}
+
       {allowed.length > 1 ? (
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="nl-type">Level</Label>

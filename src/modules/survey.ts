@@ -1461,7 +1461,12 @@ export function importNodes(input: {
       survey.dealId, // $2
       input.surveyId, // $3
       node.nodeType || "space", // $4
-      parent && byName.has(parent.toLowerCase()) ? keyOf(parent) : null, // $5 parent key
+      // $5 parent key. Cast to ::text at BOTH use sites: a top-level node sends
+      // null here, and `case when $5 is null` gives the planner nothing to infer
+      // a type from — "could not determine data type of parameter $5", which
+      // failed every import whose first node had no parent. That is every
+      // import, since a tree starts at a site.
+      parent && byName.has(parent.toLowerCase()) ? keyOf(parent) : null, // $5
       node.name, // $6
       node.areaSqft ?? null, // $7
       node.floorCount ?? null, // $8
@@ -1481,24 +1486,31 @@ export function importNodes(input: {
     const updated = mutate(
       `update fl_portfolio_location
           set type = $4,
-              parent_id = case when $5 is null then null else md5($5)::uuid::text end,
+              parent_id = case when $5::text is null then null else md5($5::text)::uuid::text end,
               name = $6, area = $7, no_of_floors = $8,
               room_count = $9, restroom_count = $10, facilio_id = $11,
               updated_by = $12, updated_at = $13, is_active = 'true',
-              survey_id = coalesce(survey_id, $3), deal_id = $2
+              survey_id = coalesce(survey_id, $3), deal_id = $2,
+              -- Filled only when empty: the deal is being (re)pointed here, and
+              -- a row already homed to a client stays with that client.
+              account_id = coalesce(account_id,
+                (select d.account_id from fl_deal d where d.id = $2))
         where id = md5($1)::uuid::text and provenance in ('rfp', 'crm')`,
       p
     );
 
     if (!updated) {
       nodes += mutate(
+        // Same account stamp as the update above and as `createLocation` — this
+        // import writes the table directly, so it carries the rule itself.
         `insert into fl_portfolio_location
-           (id, deal_id, survey_id, type, parent_id, ancestry_path, name,
+           (id, deal_id, account_id, survey_id, type, parent_id, ancestry_path, name,
             area, no_of_floors, room_count, restroom_count, facilio_id,
             provenance, verdict, created_by, updated_by, is_active, data_json,
             created_at, updated_at)
-         select md5($1)::uuid::text, $2, $3, $4,
-                case when $5 is null then null else md5($5)::uuid::text end,
+         select md5($1)::uuid::text, $2,
+                (select d.account_id from fl_deal d where d.id = $2), $3, $4,
+                case when $5::text is null then null else md5($5::text)::uuid::text end,
                 md5($1)::uuid::text, $6, $7, $8, $9, $10, $11,
                 'rfp', 'unverified', $12, $12, 'true', '{}', $13, $13
           where not exists (
