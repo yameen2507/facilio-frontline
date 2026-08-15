@@ -132,16 +132,59 @@ export interface IntakeSession {
   sourceUrl: string | null;
 }
 
-/** Fields the agent may contribute. Anything else it invents is ignored. */
+/**
+ * Fields the agent may contribute. Anything else it invents is ignored.
+ *
+ * This list must track the deployed `intake` output schema — the agent returns
+ * every property on every turn, and a key missing from here is silently thrown
+ * away. Only the first block has a column on `fl_lead`; the rest ride in
+ * `data_json` (see `submitSession`), which is why widening this needed no
+ * migration.
+ */
 const EXTRACTABLE = [
+  // mapped to fl_lead columns
   "companyName",
+  "companyWebsite",
   "contactName",
   "contactEmail",
   "contactPhone",
   "serviceType",
   "siteCity",
+  "siteAddress",
   "description",
+  // enrichment — kept on the lead's data_json
+  "clientType",
+  "contactRole",
+  "preferredContactMethod",
+  "leadSource",
+  "siteType",
+  "numberOfSites",
+  "squareFootage",
+  "floors",
+  "roomDetails",
+  "surfaceTypes",
+  "frequency",
+  "specialRequirements",
+  "walkthroughNeeded",
+  "preferredTiming",
+  "isRFP",
+  "rfpDeadline",
+  "urgency",
+  "outOfScope",
 ] as const;
+
+/** The subset that has a real column — everything else is enrichment. */
+const COLUMN_FIELDS = new Set<string>([
+  "companyName",
+  "companyWebsite",
+  "contactName",
+  "contactEmail",
+  "contactPhone",
+  "serviceType",
+  "siteCity",
+  "siteAddress",
+  "description",
+]);
 
 function sessionByToken(token: string): IntakeSession {
   const row = one<IntakeSession>(
@@ -249,11 +292,31 @@ export function recordTurn(input: {
   };
 }
 
-/** Which of the four required details are still unknown. */
+/**
+ * Which of the required details are still unknown.
+ *
+ * THIS IS THE REAL COMPLETION RULE, and it must say exactly what the agent's
+ * brief says. The widget submits on `missing.length === 0`, never on the
+ * model's own `complete` flag — so if the two disagree, the server wins and the
+ * model's understanding of "done" is decorative. They disagreed until now: the
+ * brief asked for a name the server never checked, so a visitor who gave a
+ * phone but no name had a lead opened behind a conversation still asking for
+ * one.
+ *
+ * Presence only. The brief tells the agent to push for a business email rather
+ * than a gmail, but that stays a nudge: everything here is client-asserted (see
+ * the file header), so refusing a personal domain outright would turn a
+ * conversational preference into a wall the visitor cannot argue with, and
+ * every lead lands in a human queue anyway.
+ */
 export function missingFields(extracted: Record<string, unknown>): string[] {
   const missing: string[] = [];
   if (!extracted.companyName) missing.push("companyName");
-  if (!extracted.contactEmail && !extracted.contactPhone) missing.push("contactEmail or contactPhone");
+  if (!extracted.contactName) missing.push("contactName");
+  // Email, not "email or phone": a lead with only a phone number cannot be
+  // deduped on domain and cannot be followed up by the sequence the sales team
+  // actually runs. The brief calls it mandatory; so does this.
+  if (!extracted.contactEmail) missing.push("contactEmail");
   if (!extracted.serviceType) missing.push("serviceType");
   if (!extracted.siteCity) missing.push("siteCity");
   return missing;
@@ -371,19 +434,35 @@ export function submitSession(sessionToken: string): CreateLeadResult & { sessio
     return typeof v === "string" && v.trim() ? v.trim() : null;
   };
 
+  // Everything the agent captured that has no column of its own. Kept whole
+  // rather than summarised: an RFP deadline or a square footage the visitor
+  // stated is evidence, and the intelligence agents downstream read it.
+  const enrichment: Record<string, unknown> = {};
+  for (const key of EXTRACTABLE) {
+    if (COLUMN_FIELDS.has(key)) continue;
+    const v = extracted[key];
+    if (typeof v === "string" && v.trim()) enrichment[key] = v.trim();
+  }
+
   const result = createLead({
     source: "widget",
     sourceDetail: "web chat",
     companyName,
+    websiteDomain: str("companyWebsite"),
     contactName: str("contactName"),
     contactEmail: str("contactEmail"),
     contactPhone: str("contactPhone"),
     serviceType: str("serviceType"),
+    siteAddress: str("siteAddress"),
     siteCity: str("siteCity"),
     siteRegion: str("siteCity"),
     description: str("description"),
     actor: "web chat",
-    extra: { intakeSessionToken: sessionToken, sourceUrl: session.sourceUrl ?? null },
+    extra: {
+      intakeSessionToken: sessionToken,
+      sourceUrl: session.sourceUrl ?? null,
+      ...enrichment,
+    },
   });
 
   const now = nowIso();
