@@ -1,0 +1,2 @@
+id,data_json,created_at,updated_at,entity_type,entity_id,agent,version,status,headline,summary,model_name,prompt_version,created_by,is_active
+00000000-0000-0000-0000-000000000000,{},2000-01-01T00:00:00Z,2000-01-01T00:00:00Z,lead,00000000-0000-0000-0000-000000000000,seed-agent,0,seed-status,seed-headline,seed summary - safe to delete,seed-model,v0,seed@example.com,false

@@ -342,9 +342,15 @@ export function coverageView(data: ConfigData = configData()): CoverageView {
  * change any verdict.
  */
 export function coverageBrief(data: ConfigData = configData()): string {
-  const areas = data.areas.filter((a) => a.active === "true");
-  const lines = data.serviceLines.filter((l) => l.active === "true");
-  const coverage = data.coverage.filter((c) => c.active === "true");
+  // NOT `=== "true"`. `active` is nullable — rows seeded or imported before
+  // saveService/saveArea existed carry no flag at all — and everywhere else in
+  // the app an absent flag means ACTIVE: saveService (modules/service.ts),
+  // the settings list, the rate-card picker, proposals. Read strictly here, a
+  // service the operator can see in Settings was silently dropped from the
+  // scope the analyst is judging against, and no verdict said so.
+  const areas = data.areas.filter((a) => a.active !== "false");
+  const lines = data.serviceLines.filter((l) => l.active !== "false");
+  const coverage = data.coverage.filter((c) => c.active !== "false");
   const notes = promptConfig(data).scopeNotes.trim();
 
   // The operator's note is appended in both branches: it is the only place a
@@ -353,8 +359,14 @@ export function coverageBrief(data: ConfigData = configData()): string {
     (notes ? [...body, "", "ALSO TRUE OF OUR SCOPE:", notes] : body).join("\n");
 
   if (!areas.length || !lines.length) {
+    // It used to say "treat every lead as unsure" — and `unsure` is not one of
+    // the verdicts (domain/scoring.ts allows relevant | not_relevant |
+    // outside_region only). So this branch asked for an answer the schema would
+    // reject, and what came back was whatever the model settled on instead.
+    // It now names what CANNOT be concluded, which the three verdicts can carry.
     return withNotes([
-      "SERVICE SCOPE: not configured yet. Treat every lead as unsure and explain that coverage is unconfigured.",
+      "SERVICE SCOPE: not configured yet — there is no area or service list to judge against.",
+      "So nothing here can be called outside_region or not_relevant on scope grounds. Say in the summary that coverage is unconfigured and that the verdict is provisional.",
     ]);
   }
 

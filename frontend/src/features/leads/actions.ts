@@ -165,6 +165,105 @@ export const PERMISSION_OF: Record<LeadActionId, string> = {
   close: "disqualify",
 };
 
+// ── What a hand-raised lead cannot be filed without ──────────────────────────
+
+/**
+ * The manual form used to demand a company name and nothing else, while the
+ * website chat agent refused to file a lead without a contact name, an email, a
+ * service and a city (`src/modules/intake.ts`, missingFields). The two doors into
+ * the same queue required almost opposite things, so a typed-in lead routinely
+ * arrived with no way to reach anyone and no idea what was wanted.
+ *
+ * These are now the agent's own three, so a lead is the same object whichever
+ * door it came through. Phone is NOT among them: it was raised alongside the
+ * others but an email is what the duplicate check matches on and what the
+ * follow-up sequence runs on, and requiring both would block a genuine enquiry
+ * that only ever gave one.
+ *
+ * These rules bring the manual door in line with the agent's. Deliberately NOT
+ * enforced at the API: `create` also serves inbound integrations, and rejecting
+ * their payloads is a separate decision with its own blast radius. This governs
+ * what a person can file by hand, which is what was asked for.
+ *
+ * Pure and separate from the dialog for the usual reason — a validation rule
+ * spread across a render's inline conditionals can be neither read as a whole
+ * nor tested.
+ */
+/** `companyName` never blocks on its own — the company is optional — but the
+    dialog raises one against it when "existing client" is chosen with nobody
+    picked, so the field belongs in the union. */
+export type NewLeadField =
+  | "companyName"
+  | "contactName"
+  | "contactEmail"
+  | "serviceType"
+  | "estimatedValue";
+
+export type NewLeadBlocker = { field: NewLeadField; message: string };
+
+/** Deliberately loose. The job is to catch a typo or a phone number in the email
+    box, not to adjudicate RFC 5322 — a real address that fails a clever regex is
+    a worse outcome than a fake one that passes a simple one. */
+const EMAIL_SHAPE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+/**
+ * Everything standing between this form and a filed lead, in the order the
+ * fields appear. The caller shows the first; the rest arrive as they are fixed.
+ */
+export function newLeadBlockers(input: {
+  companyName: string;
+  contactName: string;
+  contactEmail: string;
+  /** Already resolved from the picked service chips AND the free-text box. */
+  serviceType: string;
+  /** Raw, as typed — "" when not given, which is allowed. */
+  estimatedValue: string;
+}): NewLeadBlocker[] {
+  const blockers: NewLeadBlocker[] = [];
+  const contact = input.contactName.trim();
+  const email = input.contactEmail.trim();
+
+  // The contact, not the company. A household enquiry has no business name — the
+  // intake brief says so — and demanding one turned every homeowner into a fake
+  // company; a lead with no PERSON on it, by contrast, is one nobody can act on.
+  // `companyName` is still accepted and still preferred for the row's title; it
+  // falls back to this name, exactly as the chat agent does.
+  if (!contact) {
+    blockers.push({
+      field: "contactName",
+      message: "A lead needs someone's name — it is who the follow-up call asks for.",
+    });
+  }
+
+  if (!email) {
+    blockers.push({
+      field: "contactEmail",
+      message: "An email address is how a repeat enquiry is spotted and how the follow-up runs.",
+    });
+  } else if (!EMAIL_SHAPE.test(email)) {
+    blockers.push({ field: "contactEmail", message: "That email address does not look right." });
+  }
+
+  if (!input.serviceType.trim()) {
+    blockers.push({
+      field: "serviceType",
+      message: "Say which service they want — it is the main thing the assessment scores on.",
+    });
+  }
+
+  // Kept here rather than beside the field so that ONE list decides whether the
+  // form can be submitted at all.
+  const value = input.estimatedValue.trim();
+  if (value !== "" && !Number.isFinite(Number(value))) {
+    blockers.push({
+      field: "estimatedValue",
+      message: "The value has to be a number — leave it blank if it is not known yet.",
+    });
+  }
+
+  return blockers;
+}
+
 /** The disposition reasons the server accepts when closing. */
 export const CLOSE_REASONS = [
   "spam",

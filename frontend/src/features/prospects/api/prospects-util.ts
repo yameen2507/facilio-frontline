@@ -167,6 +167,8 @@ export const createLocation = (
     country?: string;
     zip?: string;
     locationPhone?: string;
+    /** -1 basement, 0 ground, 1 first — known the moment a floor is added. */
+    floorLevel?: number;
     leadId?: string;
     accountId?: string;
     buildingKey?: string;

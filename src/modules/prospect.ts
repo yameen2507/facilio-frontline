@@ -393,6 +393,9 @@ export interface CreateLocationInput {
   country?: string | null;
   zip?: string | null;
   locationPhone?: string | null;
+  /** -1 basement, 0 ground, 1 first. The one fact about a floor that is known
+      the moment it is added, and was previously only settable afterwards. */
+  floorLevel?: string | number | null;
   sourceAttachmentId?: string | null;
   verdict?: Verdict | null;
   actor: string | null;
@@ -500,12 +503,14 @@ export function createLocation(input: CreateLocationInput): { location: Prospect
         site_id, building_id, floor_id, ancestry_path, name, description, code,
         client_level_label, tags, location_name, street, city, state, country, zip,
         location_phone, pursuit_decision, provenance, source_attachment_id, verdict,
-        convert_state, created_by, updated_by, is_active, data_json, created_at, updated_at)
+        convert_state, created_by, updated_by, is_active, data_json, created_at, updated_at,
+        floor_level)
      values (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7,
              $8, $9, $10, '', $11, $12, $13,
              $14, '[]', $15, $16, $17, $18, $19, $20,
              $21, 'undecided', $22, $23, $24,
-             'not_converted', $25, $25, 'true', '{}', $26, $26)
+             'not_converted', $25, $25, 'true', '{}', $26, $26,
+             $27)
      returning id`,
     [
       leadId,
@@ -534,6 +539,11 @@ export function createLocation(input: CreateLocationInput): { location: Prospect
       input.verdict ? inSet(input.verdict, VERDICTS, "verdict") : "unverified",
       input.actor,
       now,
+      // Appended last, so the parameters above keep their numbers. A floor could
+      // be created with no way to say WHICH floor it was — the level had to be
+      // added afterwards through the edit form, which is the one fact about a
+      // floor that nobody has to look up.
+      trimOrNull(input.floorLevel),
     ]
   );
   if (!row) throw new Error("location insert returned no row");

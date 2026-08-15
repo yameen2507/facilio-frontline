@@ -66,6 +66,50 @@ const tables = {
     occurred_at: NOW,
   },
 
+  /**
+   * One store for every advisory agent verdict, keyed like fl_event rather than
+   * per-entity like fl_lead_analysis.
+   *
+   * WHY GENERIC. All five wired agents return the same SHAPE — a flat map of
+   * strings, no arrays, no records — and differ only in which keys they fill.
+   * A table per agent would be five identical schemas with different column
+   * names, and a sixth agent would need a sixth import; this shape takes one.
+   *
+   * `data_json` holds the whole verdict verbatim. The promoted columns are only
+   * what a list has to read WITHOUT parsing JSON: which agent, which version,
+   * the one enum that colours the panel, and a line of prose for the header.
+   * `status` is clamped to the agent's declared enum before it lands here — an
+   * off-enum string is stored as null and survives in `data_json`, so a panel
+   * that colours by status can never be handed a value it has no colour for.
+   *
+   * These verdicts NEVER write their entity's own columns. The lead analyst
+   * denormalises score/verdict onto fl_lead because the queue sorts on them;
+   * nothing here is sorted on, and an advisory row that quietly moved a
+   * proposal's status would be an agent making a commercial decision.
+   */
+  fl_assessment: {
+    ...common,
+    // lead | survey | proposal | deal — the same addressing as fl_event.
+    entity_type: "lead",
+    entity_id: SEED_ID,
+    // The agent's LOGICAL name (proposal-intelligence), never the link name.
+    agent: "seed-agent",
+    version: 0,
+    // The agent's headline enum, clamped. Seeded with a non-numeric string so
+    // inference makes it text — a status that parsed as a number would arrive
+    // back from the DB as one.
+    status: "seed-status",
+    // The second enum where an agent has two worth promoting (severity on the
+    // proposal check); blank on the agents that have only one.
+    headline: "seed-headline",
+    // One line of the agent's own prose, for the panel header.
+    summary: "seed summary - safe to delete",
+    model_name: "seed-model",
+    prompt_version: "v0",
+    created_by: "seed@example.com",
+    is_active: "false",
+  },
+
   // The outbox. Every Facilio write goes through here, never inline.
   fl_sync_task: {
     ...common,

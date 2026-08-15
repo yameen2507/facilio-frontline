@@ -13,7 +13,7 @@
  * second fetch — the refreshed view arrives on the response.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowRight,
@@ -35,7 +35,9 @@ import {
 import { PageShell } from "../../../app/shell/PageShell";
 import { useActor } from "../../../app/auth";
 import { useUserDirectory } from "../../../app/users";
+import { runAssessment } from "../../../lib/assess";
 import { ago, humanise, money, placeLine, typedMoney, when } from "../../../lib/format";
+import { AssessmentPanel } from "../../../ui/AssessmentPanel";
 import { Button as UIButton } from "@/components/ui/button";
 import { LinkButton } from "../../../ui/Button";
 import { Card } from "../../../ui/Card";
@@ -67,6 +69,9 @@ import {
 } from "../types/deal";
 
 type DealTab = "overview" | "portfolio" | "surveys" | "proposals" | "activity";
+
+/** The two agents that read a deal — one per terminal stage. Both advise. */
+type DealAgent = "lost-deal-intelligence" | "handover-intelligence";
 
 /** Survey status tones, mirroring the survey feature's chips without importing them. */
 const SURVEY_TONE: Record<string, Tone> = {
@@ -123,6 +128,13 @@ export function DealDetail() {
   const [losing, setLosing] = useState(false);
   const [reopening, setReopening] = useState(false);
   const [capturing, setCapturing] = useState(false);
+  /** Which deal agent is mid-run, so only its own button says "Reading…". */
+  const [assessing, setAssessing] = useState<DealAgent | null>(null);
+
+  // Which deal this component is showing. A long agent run checks against it
+  // before writing — see `runLossAnalysis`.
+  const showing = useRef(id);
+  showing.current = id;
 
   useEffect(() => {
     let live = true;
@@ -145,6 +157,38 @@ export function DealDetail() {
     if (err) return err;
     if (data?.detail) setDetail(data.detail);
     return null;
+  };
+
+  /**
+   * The model call is made HERE, not in the handler: a platform function aborts
+   * at the ~10s fetch timeout and these agents take longer. The server builds
+   * the prompt and stores the reply — this page is the leg in between.
+   *
+   * The two deal agents are mutually exclusive by stage: one only reads a lost
+   * deal, the other only a won one. They still share this runner, because what
+   * differs between them is a string.
+   */
+  const runDealAgent = async (agent: DealAgent) => {
+    const startedOn = id;
+    setAssessing(agent);
+    const { data, error: err } = await runAssessment<{ detail: DealDetailResponse }>(
+      "deal",
+      "dealId",
+      id,
+      agent,
+      actor || ""
+    );
+    // Guarded on the id: this is the same component for every deal, and an
+    // agent run is tens of seconds — long enough that moving to another deal
+    // mid-run is ordinary. A reply for deal A must never paint over deal B,
+    // and least of all as an ERROR banner on a deal that is perfectly fine.
+    if (showing.current !== startedOn) return;
+    setAssessing(null);
+    if (err || !data?.detail) {
+      setError(err ?? "That read did not complete");
+      return;
+    }
+    setDetail(data.detail);
   };
 
   if (error) {
@@ -404,6 +448,26 @@ export function DealDetail() {
                   </Card>
                 ) : null}
 
+                {/* Only on a lost deal, because that is the only state the
+                    agent will read — it refuses anything else rather than
+                    guessing at a loss that has not happened. Sits under the
+                    capture sheet it is built from. */}
+                {deal.stage === "lost" ? (
+                  <AssessmentPanel
+                    title="Loss analysis"
+                    assessment={
+                      detail.assessments?.find((a) => a.agent === "lost-deal-intelligence") ?? null
+                    }
+                    running={assessing === "lost-deal-intelligence"}
+                    onRun={() => runDealAgent("lost-deal-intelligence")}
+                    runLabel="Analyse this loss"
+                    blurb="Reads the loss capture, the proposal history and every other lost deal for the pattern behind this one."
+                    recordUpdatedAt={deal.updatedAt}
+                    recordNoun="deal"
+                    staleAdvice="The loss record changed since — run it again."
+                  />
+                ) : null}
+
                 {deal.stage === "won" ? (
                   <Card>
                     <div className="mb-2 flex items-center justify-between gap-2">
@@ -438,6 +502,33 @@ export function DealDetail() {
                       Handed to operations for onboarding — the timeline carries the handover event.
                     </p>
                   </Card>
+                ) : null}
+
+                {/* Only on a won deal, directly under the win record it reads.
+                    It assembles the handover from the accepted proposal, the
+                    site tree and the contacts — and is told plainly that there
+                    is no contract module here, so it reports the signed
+                    document, the manpower plan and the exclusions as missing
+                    rather than inventing them. */}
+                {deal.stage === "won" ? (
+                  <AssessmentPanel
+                    title="Operations handover"
+                    assessment={
+                      detail.assessments?.find((a) => a.agent === "handover-intelligence") ?? null
+                    }
+                    running={assessing === "handover-intelligence"}
+                    onRun={() => runDealAgent("handover-intelligence")}
+                    runLabel="Prepare the handover"
+                    disabledReason={
+                      proposals.some((p) => p.status === "accepted" || p.status === "sent")
+                        ? null
+                        : "No proposal has been sent or accepted on this deal, so there is no agreed scope to hand over."
+                    }
+                    blurb="Turns this won deal into something Operations can act on — sites, services, frequencies, timing, contacts — and lists what is still outstanding before they can take it over."
+                    recordUpdatedAt={deal.updatedAt}
+                    recordNoun="deal"
+                    staleAdvice="The win record changed since — run it again."
+                  />
                 ) : null}
 
                 <Card>

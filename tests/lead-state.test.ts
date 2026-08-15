@@ -38,6 +38,20 @@ describe("lead status transitions", () => {
     expect(canTransition("nurture", "contacted")).toBe(true);
     expect(canTransition("nurture", "in_review")).toBe(true);
   });
+
+  /**
+   * The regression this exists for: the UI offers Qualify from nurture and
+   * `movesFor` makes it the RECOMMENDED move, but this table did not allow it.
+   * So the one action a nurtured lead was pushed towards always failed, and the
+   * only move that worked was closing it as lost — a dead end wearing a button.
+   */
+  it("qualifies straight out of nurture, without passing back through contacted", () => {
+    expect(canTransition("nurture", "qualified")).toBe(true);
+  });
+
+  it("still refuses to convert straight out of nurture — qualifying comes first", () => {
+    expect(canTransition("nurture", "converted")).toBe(false);
+  });
 });
 
 describe("validateTransition", () => {

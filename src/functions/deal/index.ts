@@ -41,6 +41,8 @@ import {
   LOST_REASONS,
   STAGE_LABEL,
 } from "../../domain/deal-state";
+import { buildBrief } from "../../modules/agent-brief";
+import { agentsFor, receiveAssessment } from "../../modules/assessment";
 
 const S = (description: string) => ({ description, type: "string" as const });
 const N = (description: string) => ({ description, type: "number" as const });
@@ -230,6 +232,59 @@ server.addHandler({
       captureSections: CAPTURE_SECTIONS,
       transitions: Object.fromEntries(DEAL_STAGES.map((s) => [s, allowedNext(s)])),
     })),
+});
+
+// --- AI ---------------------------------------------------------------------
+
+/**
+ * Two handlers, one round trip apart, because a platform function CANNOT make
+ * the model call: it aborts at the ~10s fetch timeout. The server builds the
+ * prompt, the BROWSER calls `vibe.executeAgent`, the server stores the reply —
+ * the same pair the lead analyst has used since it shipped.
+ *
+ * Advisory only. Nothing here changes a status, a stage or a price.
+ */
+server.addHandler({
+  name: "assess-input",
+  description:
+    "The exact labelled-block prompt to send an agent for this deal, plus its logical name. " +
+    "lost-deal-intelligence reads a LOST deal's capture sheet, its proposal history and other lost deals for patterns. It refuses a deal that is not lost. " +
+    "The caller makes the model call — a function cannot wait for one.",
+  parameters: {
+    ...ENV,
+    dealId: DEAL_ID,
+    agent: S(`Which agent: ${agentsFor("deal").join(" | ")}`),
+  },
+  execute: async (args) =>
+    handle(() => {
+      const p = parsePayload(args);
+      return buildBrief(str(p, "agent"), str(p, "dealId"));
+    }),
+});
+
+server.addHandler({
+  name: "assess-store",
+  description:
+    "Store an agent's verdict on this deal as a new version, and return the refreshed record.",
+  parameters: {
+    ...ENV,
+    dealId: DEAL_ID,
+    agent: S("The agent whose reply this is"),
+    replyJson: S("The agent's reply, as returned in response.content"),
+    actorEmail: ACTOR,
+  },
+  execute: async (args) =>
+    handle(() => {
+      const p = parsePayload(args);
+      const dealId = str(p, "dealId");
+      const stored = receiveAssessment({
+        agent: str(p, "agent"),
+        entityId: dealId,
+        reply: p.replyJson,
+        actor: optStr(p, "actorEmail"),
+      });
+      return { stored, detail: dealDetail(dealId) };
+    }),
 });
 
 server.execute();

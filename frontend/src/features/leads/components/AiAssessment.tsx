@@ -149,12 +149,24 @@ export function AiAssessment({
   onAssess,
   assessing,
   canAssess = true,
+  changedSince = false,
 }: {
   lead: Lead;
   band?: string | null;
   analysis?: Analysis | null;
   onAssess: () => void;
   assessing: boolean;
+  /**
+   * Something has happened to this lead since the verdict was reached.
+   *
+   * A verdict is a SNAPSHOT and cannot be otherwise: the model call runs in the
+   * browser (a platform function aborts at ~10s, ARCHITECTURE.md §8a), so a lead
+   * can only be re-assessed while someone has it open. Re-running on every
+   * activity is therefore not available — but going quiet about it is a choice,
+   * and it was the wrong one. A closed lead still showing "warm" with nothing
+   * saying the score predates the closing is how a stale number gets believed.
+   */
+  changedSince?: boolean;
   /** Whether the signed-in role may run the analyst — a run writes an analysis
       version, so the buttons are withheld, not just disabled, when it may not. */
   canAssess?: boolean;
@@ -192,6 +204,9 @@ export function AiAssessment({
           </div>
           <div className="text-muted-foreground mt-1.5 text-xs">
             out of 100 · assessed {ago(lead.analysedAt)}
+            {changedSince ? (
+              <span className="text-destructive"> · the lead has changed since</span>
+            ) : null}
             {/* X-07: the verdict's provenance — which model, which prompt,
                 which run — so a score can be argued with, not just believed. */}
             {analysis.modelName ? ` · ${analysis.modelName}` : ""}

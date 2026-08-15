@@ -17,6 +17,7 @@
 import { many, mutate, nowIso, one } from "../shared/db";
 import { appendEvent, timeline } from "../shared/events";
 import { queueClientSync } from "./account";
+import { assessmentSubquery, foldLatest, type Assessment } from "./assessment";
 import { queueContractSync } from "./sync";
 import {
   ACTIVE_STAGES,
@@ -193,6 +194,8 @@ export interface DealDetail {
   surveys: Array<Record<string, unknown>>;
   proposals: Array<Record<string, unknown>>;
   timeline: ReturnType<typeof timeline>;
+  /** The newest run of each agent that reads a deal. */
+  assessments: Assessment[];
 }
 
 /**
@@ -209,6 +212,7 @@ export function dealDetail(id: string): DealDetail {
     surveys: Array<Record<string, unknown>>;
     proposals: Array<Record<string, unknown>>;
     timeline: ReturnType<typeof timeline>;
+    assessments: unknown;
   }>(
     `select
        (select row_to_json(x) from (
@@ -262,7 +266,10 @@ export function dealDetail(id: string): DealDetail {
            where entity_type = 'deal' and entity_id = $1
            order by occurred_at desc
            limit 100
-        ) x) as timeline_arr`,
+        ) x) as timeline_arr,
+
+       -- Rides along rather than costing its own ~194ms.
+       ${assessmentSubquery("deal", "$1")} as assessments_arr`,
     [id]
   );
 
@@ -279,6 +286,8 @@ export function dealDetail(id: string): DealDetail {
     surveys: row.surveys,
     proposals: row.proposals,
     timeline: row.timeline,
+    // Advisory only — no assessment has moved this deal's stage.
+    assessments: foldLatest(row.assessments),
   };
 }
 

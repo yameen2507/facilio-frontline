@@ -19,6 +19,7 @@
  * | `analyse-input`     | `{ agent, input }` — the prompt, built from settings  |
  * | `analyse`           | `{ detail, verdict, score }`                          |
  * | `intake-transcript` | `{ messages: TranscriptMessage[] }`                  |
+ * | `account-list`      | `{ accounts: LeadAccount[] }` — for the new-lead picker |
  *
  * EVERY MUTATION ON AN EXISTING LEAD RETURNS THE REFRESHED `detail`. That is not
  * incidental — every request to this app costs about a second before it does any
@@ -65,7 +66,23 @@ export type NewLeadFields = {
   /** D-10: where it came from — referral, existing_client, marketing, hubspot,
       cold_outreach, other. `source` above is how it ARRIVED. */
   origin?: string;
+  /** The account this enquiry already belongs to, when the person raising it
+      knows. Convert ranks it above its own domain/email guess. */
+  accountId?: string;
 };
+
+/**
+ * Just enough of an account to pick one. The accounts feature has a fuller type;
+ * this is the leads feature's own thin copy, because features never import each
+ * other's internals — and `account-list` is served by the `lead` function, so it
+ * belongs on this client either way.
+ */
+export type LeadAccount = { id: string; name?: string | null; websiteDomain?: string | null };
+
+/** Every account, for the new-lead picker. The handler caps the page; there is no
+    cursor, so a very long list is searched in the combobox rather than paged. */
+export const listAccountOptions = () =>
+  request<{ accounts: LeadAccount[] }>("account-list", { limit: 200 });
 
 // ── The coverage catalogue (D-04) ────────────────────────────────────────────
 

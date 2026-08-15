@@ -1,0 +1,79 @@
+{
+  "accountSignal": {
+    "assessment": "No obvious existing match",
+    "candidateReference": "",
+    "reason": "CANDIDATE_MATCHES shows no duplicate lead and no accounts with this company name."
+  },
+  "actionerPriority": "P1",
+  "aiSummary": "Zaroob Restaurant Group requests TR19 kitchen extract & ductwork cleaning for 6 hoods in Dubai, driven by an insurance renewal next month requiring a TR19 certificate. Service and region both match configured scope (KEC in Dubai). No duplicate or existing account found. Deadline is time-sensitive; recommend prompt sales engagement to schedule the clean and issue the TR19 certificate before renewal.",
+  "completeness": {
+    "criticalMissing": [],
+    "importantMissing": [
+      "Exact insurance renewal date",
+      "Site address / kitchen access hours"
+    ],
+    "niceToHaveMissing": [
+      "Duct length/complexity",
+      "Preferred cleaning date/time window",
+      "Previous TR19 report if available"
+    ],
+    "status": "Sufficient to progress"
+  },
+  "confidence": {
+    "level": "High",
+    "reason": "Service and region are clearly within configured scope, contact and company are provided, and the driver (insurance renewal + TR19) is explicit."
+  },
+  "dataGaps": {
+    "candidateMatchesProvided": "Yes",
+    "crmServicesProvided": "Yes",
+    "currentDateProvided": "Yes",
+    "supportedRegionsProvided": "Yes"
+  },
+  "leadUnderstanding": "Zaroob Restaurant Group needs TR19 kitchen extract and ductwork cleaning for 6 extraction hoods in Dubai. It has been 11 months since the last clean and they need a TR19 certificate for an insurance renewal next month.",
+  "nextBestAction": {
+    "action": "Assign to Sales",
+    "reason": "Strong service and region fit with a time-bound compliance driver (insurance renewal next month) \u2014 should be routed to sales quickly to schedule and issue the TR19 certificate."
+  },
+  "opportunity": {
+    "level": "Medium",
+    "reasons": [
+      "Compliance-driven need (TR19 certificate for insurance renewal) increases likelihood of conversion",
+      "6 hoods across a restaurant group suggests potential for recurring extract cleaning",
+      "Restaurant group implies possible expansion to additional sites"
+    ]
+  },
+  "outOfScope": "false",
+  "provenanceNote": "CONFIRMED from lead: company, contact, service requested (TR19 kitchen extract & ductwork cleaning), 6 hoods, 11 months since last clean, insurance renewal next month, city/region Dubai. CONFIRMED from CRM config: KEC is offered in Dubai. AI INFERENCE: urgency level and opportunity level derived from stated renewal timing and site count. UNKNOWN: exact renewal date, site address, access constraints, duct complexity.",
+  "qualificationRecommendation": {
+    "reason": "Clear service and region fit, identified contact and company, and a concrete compliance-driven trigger. Minor gaps (exact renewal date, site access) do not block qualification.",
+    "recommendation": "Qualified"
+  },
+  "redFlags": [],
+  "regionFit": {
+    "country": "United Arab Emirates",
+    "countryClassification": "Match",
+    "reason": "Dubai is explicitly listed as a supported region for KEC.",
+    "region": "Dubai",
+    "regionClassification": "Match",
+    "serviceAvailabilityInRegion": "Available"
+  },
+  "rfp": {
+    "detected": "No",
+    "documentAvailable": "No",
+    "recommendTenderIntelligenceAgent": "No",
+    "type": ""
+  },
+  "serviceFit": [
+    {
+      "classification": "Match",
+      "closestConfiguredService": "Kitchen extract cleaning (KEC)",
+      "reason": "Requested TR19 kitchen extract & ductwork cleaning aligns directly with the configured Kitchen extract cleaning (KEC) service.",
+      "requestedService": "Kitchen extract & ductwork cleaning (TR19)"
+    }
+  ],
+  "urgency": {
+    "basis": "Lead states insurance renewal is next month relative to CURRENT_DATE 2026-08-15, and TR19 certificate is required beforehand; 11 months since last clean also approaches typical TR19 frequency thresholds for heavy-use kitchens.",
+    "deadlineVerbatim": "insurance renewal next month",
+    "level": "High"
+  }
+}

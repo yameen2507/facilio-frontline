@@ -19,7 +19,7 @@
  * still refuses reports its reason verbatim.
  */
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   CheckCircle2,
@@ -37,7 +37,9 @@ import {
 import { cn } from "@/lib/utils";
 import { useActor } from "../../../app/auth";
 import { PageShell } from "../../../app/shell/PageShell";
+import { runAssessment, type Assessment } from "../../../lib/assess";
 import { ago, humanise, plural, when } from "../../../lib/format";
+import { AssessmentPanel } from "../../../ui/AssessmentPanel";
 import { Card, Stack } from "../../../ui/Card";
 import { Facts } from "../../../ui/Facts";
 import { SkeletonRows } from "../../../ui/Skeleton";
@@ -79,6 +81,13 @@ import {
 
 type TabId = "pricing" | "terms" | "negotiation" | "revision" | "activity";
 
+/** The two agents that read a proposal. Both advise; neither writes. */
+type ProposalAgent = "proposal-intelligence" | "estimation-intelligence";
+
+/** The newest run of one agent, or null before it has ever run. */
+const assessmentBy = (proposal: Proposal, agent: ProposalAgent): Assessment | null =>
+  proposal.assessments?.find((a) => a.agent === agent) ?? null;
+
 /** Which dialog is open. One piece of state rather than six booleans — only one
     of these can ever be up, and six flags is six chances for two to be true. */
 type Action = "submit" | "approve" | "return" | "send" | "withdraw" | "respond" | "revise" | null;
@@ -88,6 +97,11 @@ export function ProposalDetail() {
   const { id } = useParams();
   const actor = useActor();
   const toast = useToast();
+
+  // Which proposal this component is currently showing. An agent run checks
+  // against it before writing — see `runAgent`.
+  const showing = useRef(id);
+  showing.current = id;
 
   const [tab, setTab] = useState<TabId>("pricing");
   const [proposal, setProposal] = useState<Proposal | null>(null);
@@ -101,6 +115,8 @@ export function ProposalDetail() {
   /** What the last generate could not price. Never dropped — an unpriced item
       the estimator cannot see is one that quietly leaves the proposal. */
   const [unpriced, setUnpriced] = useState<UnpricedItem[]>([]);
+  /** Which agent is mid-run, so only its own button says "Reading…". */
+  const [assessing, setAssessing] = useState<ProposalAgent | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -144,6 +160,43 @@ export function ProposalDetail() {
     setProposal(result.data.proposal);
     toast(done);
     return null;
+  };
+
+  /**
+   * The model call is made HERE, not in the handler: a platform function aborts
+   * at the ~10s fetch timeout and these agents take longer. The server builds
+   * the prompt and stores the reply; this page is the leg in between.
+   *
+   * GUARDED ON THE ID, unlike the lifecycle actions above, and the difference is
+   * the wait. This is the same component for /proposals/a and /proposals/b, and
+   * an agent run is tens of seconds — long enough that leaving for another
+   * proposal mid-run is ordinary behaviour, not a race you have to be unlucky to
+   * hit. The toast still fires either way: the user wants to hear that the check
+   * they started finished, even from the next page.
+   */
+  const runAgent = async (agent: ProposalAgent) => {
+    if (!id) return;
+    const startedOn = id;
+    setAssessing(agent);
+    const { data, error: err } = await runAssessment<{ proposal: Proposal }>(
+      "proposal",
+      "proposalId",
+      id,
+      agent,
+      actor
+    );
+    if (showing.current === startedOn) setAssessing(null);
+
+    if (err || !data?.proposal) {
+      toast(err ?? "The check did not complete", true);
+      return;
+    }
+    if (showing.current !== startedOn) {
+      toast(`${agent === "proposal-intelligence" ? "Pre-send check" : "Pricing review"} finished`);
+      return;
+    }
+    setProposal(data.proposal);
+    toast("Read and recorded");
   };
 
   const runGenerate = async () => {
@@ -237,6 +290,39 @@ export function ProposalDetail() {
                   reference={reference}
                   actor={actor}
                   onSaved={setProposal}
+                />
+
+                {/* Both agents read the lines above, which is why they sit
+                    under them rather than in the band at the top. Neither can
+                    change anything: `Generate lines` remains the deterministic
+                    survey-to-rate-card join, and these two only say where the
+                    result does not hold up. */}
+                <AssessmentPanel
+                  title="Pre-send check"
+                  assessment={assessmentBy(proposal, "proposal-intelligence")}
+                  running={assessing === "proposal-intelligence"}
+                  onRun={() => runAgent("proposal-intelligence")}
+                  runLabel="Check before sending"
+                  blurb="Reads this proposal against the discovery sheet, the frozen survey and the rate card, and reports what is missing, inconsistent or unsupported."
+                  recordUpdatedAt={proposal.updatedAt}
+                  recordNoun="proposal"
+                  staleAdvice="Run it again before sending."
+                />
+                <AssessmentPanel
+                  title="Pricing review"
+                  assessment={assessmentBy(proposal, "estimation-intelligence")}
+                  running={assessing === "estimation-intelligence"}
+                  onRun={() => runAgent("estimation-intelligence")}
+                  runLabel="Review the pricing"
+                  disabledReason={
+                    proposal.rateCard
+                      ? null
+                      : "No rate card resolved for this proposal, so there is nothing to check the prices against."
+                  }
+                  blurb="Checks the quantities, rates and minimums on these lines back against the survey they came from and the card they were priced off."
+                  recordUpdatedAt={proposal.updatedAt}
+                  recordNoun="proposal"
+                  staleAdvice="The lines have moved since — run it again."
                 />
               </>
             ) : null}

@@ -52,13 +52,21 @@ export const DISPOSITION_REASONS: readonly DispositionReason[] = [
 /**
  * `new -> closed` is intentional: obvious spam should die without an actioner
  * having to claim it first.
+ *
+ * `nurture -> qualified` is intentional too, and it was MISSING. The UI has
+ * always offered Qualify from nurture — twice in comments, and `movesFor` makes
+ * it the RECOMMENDED move — on the reasoning that a parked lead which warms up
+ * should not have to be walked backwards through `contacted` first. The server
+ * did not agree, so the recommended action on a nurtured lead was the one action
+ * guaranteed to fail, and the only move that worked was closing it as lost. That
+ * is what "stuck in nurture" meant.
  */
 const TRANSITIONS: Record<LeadStatus, readonly LeadStatus[]> = {
   new: ["in_review", "closed"],
   in_review: ["contacted", "qualified", "nurture", "closed"],
   contacted: ["qualified", "nurture", "closed"],
   qualified: ["converted", "closed"],
-  nurture: ["in_review", "contacted", "closed"],
+  nurture: ["in_review", "contacted", "qualified", "closed"],
   converted: [],
   closed: [],
 };

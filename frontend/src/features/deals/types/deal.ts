@@ -6,6 +6,8 @@
  * here re-implements which move is legal.
  */
 
+import type { Assessment } from "../../../lib/assess";
+
 export type DealStage =
   | "opportunity"
   | "discovery"
@@ -186,4 +188,7 @@ export interface DealDetailResponse {
   surveys: DealSurvey[];
   proposals: DealProposal[];
   timeline: DealEvent[];
+  /** The newest run of each agent that reads a deal. Advisory only — no
+      assessment has moved the stage. */
+  assessments?: Assessment[];
 }

@@ -39,6 +39,7 @@ import {
   stampColumnFor as visitStampColumnFor,
   type VisitStatus,
 } from "../domain/visit-state";
+import { assessmentSubquery, foldLatest, type Assessment } from "./assessment";
 import { advanceDealTo } from "./deal";
 import {
   reconcile,
@@ -231,6 +232,8 @@ export interface SurveyDetail {
   entryLabels: unknown[];
   /** Frozen revisions, newest first — what a proposal may be priced from. */
   revisions: unknown[];
+  /** The newest run of each agent that reviews a survey. */
+  assessments: Assessment[];
   /** How much of the template the T2 snapshot copied — the walk's size. */
   snapshot: { sections: number; questions: number };
   /** What T5 and T7 would say right now — so the record page can show what is
@@ -260,6 +263,7 @@ export function surveyDetail(id: string): SurveyDetail {
     revisions: unknown[];
     sectionInstanceCount: unknown;
     questionInstanceCount: unknown;
+    assessments: unknown;
   }>(
     `select
        (select row_to_json(x) from (
@@ -358,7 +362,10 @@ export function surveyDetail(id: string): SurveyDetail {
          where survey_id = $1 and is_active = 'true') as section_instance_count,
 
        (select count(*) from fl_survey_question_instance
-         where survey_id = $1 and is_active = 'true') as question_instance_count`,
+         where survey_id = $1 and is_active = 'true') as question_instance_count,
+
+       -- Rides along rather than costing its own ~194ms.
+       ${assessmentSubquery("survey", "$1")} as assessments_arr`,
     [id]
   );
 
@@ -381,6 +388,8 @@ export function surveyDetail(id: string): SurveyDetail {
     photos: row.photos,
     entryLabels: row.entryLabels,
     revisions: row.revisions,
+    // Advisory only — no assessment has moved this survey's status.
+    assessments: foldLatest(row.assessments),
     snapshot: {
       sections: Number(row.sectionInstanceCount ?? 0),
       questions: Number(row.questionInstanceCount ?? 0),
@@ -1129,7 +1138,7 @@ const toSnakeDeep = (value: unknown): unknown => {
   return out;
 };
 
-function handoffPayload(surveyId: string): Record<string, unknown> {
+export function handoffPayload(surveyId: string): Record<string, unknown> {
   const row = one<{
     survey: Record<string, unknown> | null;
     portfolio: unknown[];

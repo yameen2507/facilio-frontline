@@ -77,6 +77,7 @@ import { many, mutate, nowIso, one, type Row } from "../shared/db";
 import { appendEvent, timeline } from "../shared/events";
 import { nextRef } from "../shared/ids";
 import { parseJson, upsertJsonKey } from "../shared/row-map";
+import { assessmentSubquery, foldLatest } from "./assessment";
 import { advanceDealTo } from "./deal";
 import {
   listServices,
@@ -688,7 +689,11 @@ export function getProposal(proposalId: string): { proposal: Row } {
            limit 1
         ) x) as parent_obj,
 
-       (select value_json from fl_setting where key = $2 limit 1) as approval_pct`,
+       (select value_json from fl_setting where key = $2 limit 1) as approval_pct,
+
+       -- Rides along rather than costing its own ~194ms: the pre-send check and
+       -- the pricing review both hang off this page.
+       ${assessmentSubquery("proposal", "$1")} as assessments_arr`,
     [proposalId, DISCOUNT_APPROVAL_PCT_KEY]
   );
 
@@ -706,6 +711,9 @@ export function getProposal(proposalId: string): { proposal: Row } {
 
   proposal.lines = lines;
   proposal.rateCard = row?.rateCard ?? null;
+  // Advisory only. Nothing here has moved the proposal's status or its price —
+  // see modules/assessment.ts.
+  proposal.assessments = foldLatest(row?.assessments);
   // Client-facing labels are v1, v2, v3 sharing one ref (spec §5 R5), so the
   // parent is what tells a reader which of them they are looking at.
   proposal.parent = row?.parent ?? null;

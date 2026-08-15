@@ -22,6 +22,8 @@ const TABLES = [
   "fl_setting",
   "fl_sequence",
   "fl_event",
+  // Every advisory agent verdict, for all four entity types.
+  "fl_assessment",
   "fl_sync_task",
   "fl_photo",
   "fl_service_area",

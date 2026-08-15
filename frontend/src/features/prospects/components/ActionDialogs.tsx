@@ -273,8 +273,30 @@ export function NewLocationDialog({
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [clientLevelLabel, setClientLevelLabel] = useState("");
+  /**
+   * The WHOLE postal address, in the edit form's own order and labels (§3
+   * "Address"). It used to be street and city alone, which split one fact across
+   * two screens: whoever added a site typed half the address they had in front
+   * of them, saved, then reopened the edit dialog to finish it.
+   *
+   * `country` is the one that could not wait. The hint under these boxes already
+   * claimed the address "decides whether the site is inside a service area at
+   * all" — and the field that actually drives that matching was the one missing.
+   *
+   * The rest of §3 stays out on purpose. Area, floors, rooms, restrooms,
+   * occupancy and operating hours are the priced tier: they come from a survey,
+   * and asked here they would be guessed. A guessed area sets the hours, the
+   * crew and the price, so blank is worth more than approximately-right.
+   */
+  const [description, setDescription] = useState("");
+  const [floorLevel, setFloorLevel] = useState("");
+  const [locationName, setLocationName] = useState("");
   const [street, setStreet] = useState("");
   const [city, setCity] = useState("");
+  const [state, setState] = useState("");
+  const [zip, setZip] = useState("");
+  const [country, setCountry] = useState("");
+  const [locationPhone, setLocationPhone] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -318,8 +340,15 @@ export function NewLocationDialog({
     setName("");
     setCode("");
     setClientLevelLabel("");
+    setDescription("");
+    setFloorLevel("");
+    setLocationName("");
     setStreet("");
     setCity("");
+    setState("");
+    setZip("");
+    setCountry("");
+    setLocationPhone("");
     setError(null);
     setOwnerId("");
     // `allowed` is derived from `parent`, which is in the dep list already.
@@ -390,8 +419,20 @@ export function NewLocationDialog({
       provenance: "manual",
       ...(code.trim() ? { code: code.trim() } : {}),
       ...(clientLevelLabel.trim() ? { clientLevelLabel: clientLevelLabel.trim() } : {}),
+      ...(description.trim() ? { description: description.trim() } : {}),
+      // Sent when it parses. "0" is a real floor level, so an emptiness check
+      // has to be the STRING being blank — `Number("") === 0` would file every
+      // unanswered floor as the ground floor.
+      ...(floorLevel.trim() && Number.isFinite(Number(floorLevel))
+        ? { floorLevel: Number(floorLevel) }
+        : {}),
+      ...(locationName.trim() ? { locationName: locationName.trim() } : {}),
       ...(street.trim() ? { street: street.trim() } : {}),
       ...(city.trim() ? { city: city.trim() } : {}),
+      ...(state.trim() ? { state: state.trim() } : {}),
+      ...(zip.trim() ? { zip: zip.trim() } : {}),
+      ...(country.trim() ? { country: country.trim() } : {}),
+      ...(locationPhone.trim() ? { locationPhone: locationPhone.trim() } : {}),
     });
     setBusy(false);
     if (err) return setError(err);
@@ -490,6 +531,11 @@ export function NewLocationDialog({
           </span>
         </div>
         <div className="flex flex-col gap-1.5">
+          {/* §3 Identity, in the edit form's order and labels. Every one is
+              optional — §3's adoption bet is that a phone call gives you "the
+              Bleecker Street store" and nothing else, so the form must never
+              demand. What it must not do is make a fact UNSAYABLE at the moment
+              it is known, which is what it was doing. */}
           <Label htmlFor="nl-level-label">What they call this level</Label>
           <Input
             id="nl-level-label"
@@ -501,6 +547,35 @@ export function NewLocationDialog({
             Absorb their vocabulary rather than imposing ours.
           </span>
         </div>
+        {/* Only where it means something. A site has no floor level, and a box
+            that cannot apply is worse than one that is missing. */}
+        {type === "floor" || type === "space" ? (
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="nl-floor-level">Floor level</Label>
+            <Input
+              id="nl-floor-level"
+              inputMode="numeric"
+              value={floorLevel}
+              onChange={(e) => setFloorLevel(e.target.value)}
+              placeholder="e.g. 3"
+            />
+            <span className="text-muted-foreground text-xs">
+              A number, not a name: -1 basement, 0 ground, 1 first. Call it &ldquo;Mezzanine&rdquo;
+              in the name.
+            </span>
+          </div>
+        ) : null}
+        <div className="flex flex-col gap-1.5 sm:col-span-2">
+          <Label htmlFor="nl-description">Description</Label>
+          <Input
+            id="nl-description"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+          <span className="text-muted-foreground text-xs">
+            Travels to Facilio when this converts.
+          </span>
+        </div>
       </div>
 
       {/* X-21 — offered at EVERY level, not just a site. This was gated on
@@ -509,6 +584,14 @@ export function NewLocationDialog({
           a Location record off every level, and a surveyor dispatched to a
           building needs its address as much as one sent to a site. */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="flex flex-col gap-1.5 sm:col-span-2">
+            <Label htmlFor="nl-location-name">Location name</Label>
+            <Input
+              id="nl-location-name"
+              value={locationName}
+              onChange={(e) => setLocationName(e.target.value)}
+            />
+          </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="nl-address">Address</Label>
             <Input
@@ -521,9 +604,33 @@ export function NewLocationDialog({
             <Label htmlFor="nl-city">City</Label>
             <Input id="nl-city" value={city} onChange={(e) => setCity(e.target.value)} />
           </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="nl-state">State / province</Label>
+            <Input id="nl-state" value={state} onChange={(e) => setState(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="nl-zip">Postcode</Label>
+            <Input id="nl-zip" value={zip} onChange={(e) => setZip(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="nl-country">Country</Label>
+            <Input id="nl-country" value={country} onChange={(e) => setCountry(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="nl-site-phone">Site phone</Label>
+            <Input
+              id="nl-site-phone"
+              type="tel"
+              value={locationPhone}
+              onChange={(e) => setLocationPhone(e.target.value)}
+            />
+            <span className="text-muted-foreground text-xs">
+              The site&rsquo;s own number, not the account&rsquo;s.
+            </span>
+          </div>
           <span className="text-muted-foreground text-xs sm:col-span-2">
-            The first thing an RFP contains and the last thing the surveyor needs. It also decides
-            whether the site is inside a service area at all.
+            The first thing an RFP contains and the last thing the surveyor needs. The country
+            decides whether the site is inside a service area at all.
           </span>
       </div>
     </ActionDialog>

@@ -24,6 +24,8 @@
  *    `pct`, MINOR UNITS when `amount`.
  */
 
+import type { Assessment } from "../../../lib/assess";
+
 // ── Vocabulary ───────────────────────────────────────────────────────────────
 
 /** The nine-state lifecycle. Four of them are terminal. */
@@ -221,6 +223,9 @@ export type Proposal = ProposalCore & {
   approval: Approval;
   /** Warnings, NEVER blocks (C8). The estimator decides; the app tells the truth. */
   warnings: string[];
+  /** The newest run of each agent that reads a proposal — the pre-send check
+      and the pricing review. Advisory: nothing here has moved the status. */
+  assessments: Assessment[];
   /** The frozen snapshot, once something has rendered it. Null until then. */
   document?: RenderedDocument | null;
 };

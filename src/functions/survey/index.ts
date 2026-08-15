@@ -20,6 +20,8 @@
 
 import StudioFunctions from "@facilio/studio-functions";
 import { SURVEY_STATUSES } from "../../domain/survey-state";
+import { buildBrief } from "../../modules/agent-brief";
+import { agentsFor, receiveAssessment } from "../../modules/assessment";
 import { VISIT_STATUSES } from "../../domain/visit-state";
 import {
   handle,
@@ -656,6 +658,59 @@ server.addHandler({
       contractIntents: ["comprehensive", "semi_comprehensive", "non_comprehensive"],
       slotSources: ["ours", "tenderer_granted"],
     })),
+});
+
+// --- AI ---------------------------------------------------------------------
+
+/**
+ * Two handlers, one round trip apart, because a platform function CANNOT make
+ * the model call: it aborts at the ~10s fetch timeout. The server builds the
+ * prompt, the BROWSER calls `vibe.executeAgent`, the server stores the reply —
+ * the same pair the lead analyst has used since it shipped.
+ *
+ * Advisory only. Nothing here changes a status, a stage or a price.
+ */
+server.addHandler({
+  name: "assess-input",
+  description:
+    "The exact labelled-block prompt to send an agent for this survey, plus its logical name. " +
+    "survey-intelligence checks a survey for completeness and consistency before the revision is frozen — the last point at which fixing a measurement is cheap. " +
+    "The caller makes the model call — a function cannot wait for one.",
+  parameters: {
+    ...ENV,
+    surveyId: SURVEY_ID,
+    agent: S(`Which agent: ${agentsFor("survey").join(" | ")}`),
+  },
+  execute: async (args) =>
+    handle(() => {
+      const p = parsePayload(args);
+      return buildBrief(str(p, "agent"), str(p, "surveyId"));
+    }),
+});
+
+server.addHandler({
+  name: "assess-store",
+  description:
+    "Store an agent's verdict on this survey as a new version, and return the refreshed record.",
+  parameters: {
+    ...ENV,
+    surveyId: SURVEY_ID,
+    agent: S("The agent whose reply this is"),
+    replyJson: S("The agent's reply, as returned in response.content"),
+    actorEmail: ACTOR,
+  },
+  execute: async (args) =>
+    handle(() => {
+      const p = parsePayload(args);
+      const surveyId = str(p, "surveyId");
+      const stored = receiveAssessment({
+        agent: str(p, "agent"),
+        entityId: surveyId,
+        reply: p.replyJson,
+        actor: optStr(p, "actorEmail"),
+      });
+      return { stored, detail: surveyDetail(surveyId) };
+    }),
 });
 
 server.execute();

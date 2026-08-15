@@ -5,7 +5,15 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { actionsFor, isTerminal, MOVES, movesFor, PERMISSION_OF, type LeadActionId } from "./actions";
+import {
+  actionsFor,
+  isTerminal,
+  MOVES,
+  movesFor,
+  newLeadBlockers,
+  PERMISSION_OF,
+  type LeadActionId,
+} from "./actions";
 import type { LeadStatus } from "./types/lead";
 
 const lead = (status: LeadStatus, ownerEmail: string | null = null) => ({ status, ownerEmail });
@@ -140,5 +148,72 @@ describe("PERMISSION_OF", () => {
     expect(PERMISSION_OF.claim).toBe("assign");
     expect(PERMISSION_OF.close).toBe("disqualify");
     expect(PERMISSION_OF["log-call"]).toBe("add_note");
+  });
+});
+
+/**
+ * The manual form once asked for a company name and nothing else, while the chat
+ * agent refused to file without a contact, an email and a service. These pin the
+ * manual door to the agent's rules so the queue stops receiving leads nobody can
+ * act on.
+ */
+describe("newLeadBlockers", () => {
+  const filled = {
+    companyName: "Al Manzil",
+    contactName: "Ahmed Khalil",
+    contactEmail: "ahmed@almanzil.ae",
+    serviceType: "Hood cleaning",
+    estimatedValue: "",
+  };
+  const fields = (over: Partial<typeof filled> = {}) => ({ ...filled, ...over });
+  const blocked = (over: Partial<typeof filled> = {}) =>
+    newLeadBlockers(fields(over)).map((b) => b.field);
+
+  it("lets a complete lead through", () => {
+    expect(newLeadBlockers(fields())).toEqual([]);
+  });
+
+  it("requires the contact — a lead with no person on it cannot be worked", () => {
+    expect(blocked({ contactName: "" })).toContain("contactName");
+    expect(blocked({ contactName: "   " })).toContain("contactName");
+  });
+
+  it("leaves the company optional — a household enquiry has no business name", () => {
+    expect(blocked({ companyName: "" })).toEqual([]);
+    expect(blocked({ companyName: "   " })).toEqual([]);
+  });
+
+  it("requires an email, and one shaped like an address", () => {
+    expect(blocked({ contactEmail: "" })).toContain("contactEmail");
+    expect(blocked({ contactEmail: "0501234567" })).toContain("contactEmail");
+    expect(blocked({ contactEmail: "ahmed@almanzil" })).toContain("contactEmail");
+    expect(blocked({ contactEmail: "a@b.co" })).not.toContain("contactEmail");
+  });
+
+  it("requires a service — this is what the assessment scores on", () => {
+    expect(blocked({ serviceType: "" })).toContain("serviceType");
+    expect(blocked({ serviceType: "  " })).toContain("serviceType");
+  });
+
+  it("leaves the value optional, but refuses one that is not a number", () => {
+    expect(blocked({ estimatedValue: "" })).not.toContain("estimatedValue");
+    expect(blocked({ estimatedValue: "12000" })).not.toContain("estimatedValue");
+    expect(blocked({ estimatedValue: "twelve thousand" })).toContain("estimatedValue");
+  });
+
+  it("reports every problem at once, in field order", () => {
+    expect(
+      blocked({ companyName: "", contactName: "", contactEmail: "", serviceType: "" })
+    ).toEqual(["contactName", "contactEmail", "serviceType"]);
+  });
+
+  /** The manual door and the chat agent must demand the same three things, or a
+      lead means something different depending on how it arrived. */
+  it("matches what the intake agent refuses to file without", () => {
+    expect(blocked({ contactName: "", contactEmail: "", serviceType: "" }).sort()).toEqual([
+      "contactEmail",
+      "contactName",
+      "serviceType",
+    ]);
   });
 });

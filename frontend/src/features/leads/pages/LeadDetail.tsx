@@ -57,7 +57,9 @@ import { useAccess } from "../../../app/access";
 import { useUserDirectory } from "../../../app/users";
 import { useActor } from "../../../app/auth";
 import { PageShell } from "../../../app/shell/PageShell";
+import { runAssessment } from "../../../lib/assess";
 import { ago, humanise, onDay, placeLine, plural, typedMoney } from "../../../lib/format";
+import { AssessmentPanel } from "../../../ui/AssessmentPanel";
 import { errMessage } from "../../../lib/request";
 import { vibe } from "../../../lib/vibe";
 import { Button } from "../../../ui/Button";
@@ -113,6 +115,34 @@ const SOURCE_META: Record<string, { Icon: LucideIcon; label: string }> = {
   inapp: { Icon: PenLine, label: "Raised internally" },
 };
 
+/**
+ * Whether the lead has moved on since the analyst last looked at it.
+ *
+ * Measured against the TIMELINE, deliberately, not `lead.updatedAt`: storing an
+ * assessment is itself a write, so `updatedAt` is always a hair newer than
+ * `analysedAt` and every verdict would be born stale. The timeline is the record
+ * of what actually happened to the lead — a call logged, a status moved, an
+ * assignment — which is what "the assessment is out of date" means.
+ *
+ * The analyst's own event is excluded for the same reason — `analysed` is
+ * written by the very run that sets `analysedAt`, so counting it would mark
+ * every verdict stale the instant it landed.
+ */
+const SELF_EVENT = "analysed";
+
+function assessmentIsStale(detail: LeadDetailShape): boolean {
+  const at = detail.lead.analysedAt;
+  if (!at) return false;
+  const assessed = Date.parse(at);
+  if (Number.isNaN(assessed)) return false;
+
+  return (detail.timeline ?? []).some((e) => {
+    if (!e.occurredAt || e.kind === SELF_EVENT) return false;
+    const when = Date.parse(e.occurredAt);
+    return !Number.isNaN(when) && when > assessed;
+  });
+}
+
 export function LeadDetail() {
   const { id = "" } = useParams();
   const actor = useActor();
@@ -124,6 +154,8 @@ export function LeadDetail() {
   const [detail, setDetail] = useState<LeadDetailShape | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [assessing, setAssessing] = useState(false);
+  /** The lead-intelligence read, run separately from the analyst's score. */
+  const [intel, setIntel] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [pending, setPending] = useState<PendingLeadAction>(null);
   const [tab, setTab] = useState<DetailTab>("assessment");
@@ -193,6 +225,32 @@ export function LeadDetail() {
     }
     return res.data;
   };
+
+  /**
+   * The lead-intelligence read. Same three legs as `assess` below and for the
+   * same reason — a function cannot wait for a model — but it is a SEPARATE
+   * run: it stores its own verdict and touches neither the lead's score nor its
+   * status. Never auto-runs; the analyst is the one that has to be there before
+   * anyone looks at the lead, and two automatic model calls per lead is a bill,
+   * not a feature.
+   */
+  async function runIntel() {
+    setIntel(true);
+    const { data, error: err } = await runAssessment<{ detail: LeadDetailShape }>(
+      "lead",
+      "leadId",
+      id,
+      "lead-intelligence",
+      actor
+    );
+    if (!mounted.current) return;
+    setIntel(false);
+    if (err || !data?.detail) {
+      toast(err ?? "The read did not complete", true);
+      return;
+    }
+    setDetail(data.detail);
+  }
 
   async function assess() {
     setAssessing(true);
@@ -605,9 +663,12 @@ export function LeadDetail() {
                 {
                   icon: Building2,
                   label: "Account",
-                  // The account is created FROM this lead's company at
-                  // conversion, so the company name is its honest label —
-                  // "Company page" said where the link went, not who it was.
+                  // Set two ways: named on the new-lead form when the enquiry
+                  // came from a client we already have, or created FROM this
+                  // lead's company at conversion. Either way the company name is
+                  // its honest label — "Company page" said where the link went,
+                  // not who it was. So this row can now be filled long before
+                  // the lead converts.
                   value: lead.accountId ? (
                     <Link to={`/accounts/${lead.accountId}`}>{lead.companyName}</Link>
                   ) : (
@@ -756,7 +817,34 @@ export function LeadDetail() {
                 onAssess={() => void assess()}
                 assessing={assessing}
                 canAssess={can("leads", PERMISSION_OF.assess)}
+                changedSince={assessmentIsStale(detail)}
               />
+
+              {/* BESIDE the analyst's verdict, never instead of it. The analyst
+                  returns the score and verdict the inbox sorts and filters on;
+                  this agent's schema has neither, so it answers the other
+                  questions — fit, gaps, red flags, duplicates, next action.
+                  Neither writes the lead. */}
+              <div className="mt-4">
+                <AssessmentPanel
+                  title="Lead intelligence"
+                  assessment={
+                    detail.assessments?.find((a) => a.agent === "lead-intelligence") ?? null
+                  }
+                  running={intel}
+                  onRun={runIntel}
+                  runLabel="Read this lead"
+                  disabledReason={
+                    can("leads", PERMISSION_OF.assess)
+                      ? null
+                      : "You do not have permission to run an assessment on this lead."
+                  }
+                  blurb="A second read beside the score: service and region fit, what is missing, red flags, whether we already know this company, and the next best action."
+                  recordUpdatedAt={lead.updatedAt}
+                  recordNoun="lead"
+                  staleAdvice="The lead has changed since — run it again."
+                />
+              </div>
             </div>
           {lead.dealId ? (
             <div className={tab === "surveys" ? undefined : "hidden"}>

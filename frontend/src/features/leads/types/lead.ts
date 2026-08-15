@@ -11,6 +11,8 @@
  *    `"true"` / `"false"`.
  */
 
+import type { Assessment } from "../../../lib/assess";
+
 export type LeadStatus =
   | "new"
   | "in_review"
@@ -97,6 +99,9 @@ export type Lead = {
   // Lifecycle stamps. A missing one does not always mean "not yet" — see
   // LifecycleSteps for why a gap can mean the stage was deliberately skipped.
   createdAt: string;
+  /** Last write of any kind. Read to tell whether an agent's verdict predates
+      the state the lead is in now. */
+  updatedAt?: string | null;
   arrivedAt?: string | null;
   reviewedAt?: string | null;
   firstContactAt?: string | null;
@@ -163,6 +168,9 @@ export type LeadDetail = {
   timeline: TimelineEvent[];
   assignments: Assignment[];
   duplicates: MergedDuplicate[];
+  /** The lead-intelligence read. Beside `analysis` above, never instead of it:
+      the analyst owns the score and verdict, this owns everything else. */
+  assessments?: Assessment[];
 };
 
 export type TranscriptMessage = { role: "agent" | "visitor" | "system"; content: string };

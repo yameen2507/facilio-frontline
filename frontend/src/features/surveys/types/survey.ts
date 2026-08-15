@@ -16,6 +16,8 @@
  *    a round trip; never coerce them.
  */
 
+import type { Assessment } from "../../../lib/assess";
+
 /** The seven-state lifecycle. Cancelled is reachable from any pre-completed state. */
 export type SurveyStatus =
   | "draft"
@@ -67,6 +69,9 @@ export type Survey = {
   visitCount?: number;
   assigneeCount?: number;
   createdAt?: string | null;
+  /** Last write of any kind. Read to tell whether an agent's verdict predates
+      the state the survey is in now. */
+  updatedAt?: string | null;
   statusChangedAt?: string | null;
   /** Set at T7 — the revision a proposal prices from. */
   currentRevisionId?: string | null;
@@ -259,6 +264,8 @@ export type SurveyDetailResponse = {
     triggerKind?: string | null;
     isCurrent?: string | null;
   }[];
+  /** The newest run of each agent that reads a survey. Advisory only. */
+  assessments?: Assessment[];
 };
 
 // ── The walk ─────────────────────────────────────────────────────────────────

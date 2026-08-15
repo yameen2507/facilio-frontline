@@ -81,6 +81,8 @@ import {
 } from "../../modules/settings";
 import { catalogueView, PRICING_BASES, saveService, UNITS_BY_BASIS } from "../../modules/service";
 import { LEAD_STATUSES, DISPOSITION_REASONS } from "../../domain/lead-state";
+import { buildBrief } from "../../modules/agent-brief";
+import { agentsFor, receiveAssessment } from "../../modules/assessment";
 
 const S = (description: string) => ({ description, type: "string" as const });
 const N = (description: string) => ({ description, type: "number" as const });
@@ -339,6 +341,7 @@ server.addHandler({
     valueType: S("one_off | recurring | both — what kind of number estimatedValue is"),
     valueFrequency: S("monthly | quarterly | annual — required when the value recurs"),
     origin: S("D-10, where it came from: referral | existing_client | marketing | hubspot | cold_outreach | other"),
+    accountId: S("Existing account this enquiry belongs to, when known. Convert honours it above its own domain/email guess."),
     facilioAssetId: S("Originating Facilio asset id, for defect-sourced leads"),
     actorEmail: ACTOR,
   },
@@ -363,6 +366,7 @@ server.addHandler({
         valueType: optStr(p, "valueType"),
         valueFrequency: optStr(p, "valueFrequency"),
         origin: optStr(p, "origin"),
+        accountId: optStr(p, "accountId"),
         facilioAssetId: optStr(p, "facilioAssetId"),
         actor: optStr(p, "actorEmail"),
         extra: (p.extra as Record<string, unknown>) ?? {},
@@ -900,6 +904,59 @@ server.addHandler({
   // field can carry it too, but the console always sends the envelope so ""
   // can clear (flat blanks are dropped upstream as unresolved templates).
   execute: async (args) => handle(() => ({ config: saveWidgetSettings(parsePayload(args)) })),
+});
+
+// --- AI ---------------------------------------------------------------------
+
+/**
+ * Two handlers, one round trip apart, because a platform function CANNOT make
+ * the model call: it aborts at the ~10s fetch timeout. The server builds the
+ * prompt, the BROWSER calls `vibe.executeAgent`, the server stores the reply —
+ * the same pair the lead analyst has used since it shipped.
+ *
+ * Advisory only. Nothing here changes a status, a stage or a price.
+ */
+server.addHandler({
+  name: "assess-input",
+  description:
+    "The exact labelled-block prompt to send an agent for this lead, plus its logical name. " +
+    "lead-intelligence is a SECOND read beside the analyst's score, never instead of it: service and region fit, completeness, red flags, duplicates and the next action. It never writes the lead. " +
+    "The caller makes the model call — a function cannot wait for one.",
+  parameters: {
+    ...ENV,
+    leadId: LEAD_ID,
+    agent: S(`Which agent: ${agentsFor("lead").join(" | ")}`),
+  },
+  execute: async (args) =>
+    handle(() => {
+      const p = parsePayload(args);
+      return buildBrief(str(p, "agent"), str(p, "leadId"));
+    }),
+});
+
+server.addHandler({
+  name: "assess-store",
+  description:
+    "Store an agent's verdict on this lead as a new version, and return the refreshed record.",
+  parameters: {
+    ...ENV,
+    leadId: LEAD_ID,
+    agent: S("The agent whose reply this is"),
+    replyJson: S("The agent's reply, as returned in response.content"),
+    actorEmail: ACTOR,
+  },
+  execute: async (args) =>
+    handle(() => {
+      const p = parsePayload(args);
+      const leadId = str(p, "leadId");
+      const stored = receiveAssessment({
+        agent: str(p, "agent"),
+        entityId: leadId,
+        reply: p.replyJson,
+        actor: optStr(p, "actorEmail"),
+      });
+      return { stored, detail: leadDetail(leadId) };
+    }),
 });
 
 server.execute();

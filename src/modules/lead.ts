@@ -24,6 +24,7 @@ import {
   validateTransition,
   valueFieldsBlocker,
 } from "../domain/lead-state";
+import { assessmentSubquery, foldLatest, type Assessment } from "./assessment";
 import { slaTargets } from "./settings";
 
 /**
@@ -184,6 +185,18 @@ export interface CreateLeadInput {
   valueFrequency?: string | null;
   /** D-10: where it came from — one of LEAD_ORIGINS. */
   origin?: string | null;
+  /**
+   * The account this enquiry is already known to belong to, when whoever raised
+   * it KNOWS — a repeat client, a new site for an existing one.
+   *
+   * Until this existed, `account_id` was written only by `convert`, which infers
+   * the account from the company domain or the contact email. A repeat client
+   * writing from a personal address, or a new site under a different contact,
+   * matched neither and quietly got a SECOND account. Stated here, the guess is
+   * not needed: `convert`'s findAccount already ranks `a.id = lead.account_id`
+   * above both inferences, so a lead that carries one keeps it.
+   */
+  accountId?: string | null;
   facilioAssetId?: string | null;
   actor?: string | null;
   extra?: Record<string, unknown>;
@@ -215,6 +228,18 @@ export function createLead(input: CreateLeadInput): CreateLeadResult {
     throw new Error(`origin must be one of: ${LEAD_ORIGINS.join(", ")}`);
   }
 
+  // A named account must EXIST. An id that resolves to nothing would leave the
+  // lead pointing at no account while still outranking convert's domain and
+  // email inference — the one case worse than not stating an account at all,
+  // because it would suppress a match that would otherwise have been found.
+  const accountId = input.accountId?.trim() || null;
+  if (accountId) {
+    const account = one<{ id: string }>("select id from fl_account where id = $1 limit 1", [
+      accountId,
+    ]);
+    if (!account) throw new Error(`account ${accountId} not found`);
+  }
+
   const now = nowIso();
   const keys = dedupKeys(input);
   const duplicate = findDuplicate(keys);
@@ -232,7 +257,7 @@ export function createLead(input: CreateLeadInput): CreateLeadResult {
         source, source_detail, service_type, description,
         site_address, site_city, site_region, estimated_value, currency,
         status, disposition_reason, duplicate_of_lead_id,
-        facilio_asset_id,
+        facilio_asset_id, account_id,
         arrived_at, first_response_due_at, qualification_due_at, assignment_due_at,
         closed_at, data_json, created_at, updated_at
      ) values (
@@ -241,9 +266,9 @@ export function createLead(input: CreateLeadInput): CreateLeadResult {
         $10, $11, $12, $13,
         $14, $15, $16, $17, $18,
         $19, $20, $21,
-        $22,
-        $23, $24, $25, $26,
-        $27, $28, $23, $23
+        $22, $23,
+        $24, $25, $26, $27,
+        $28, $29, $24, $24
      ) returning id`,
     [
       refNo,
@@ -268,6 +293,7 @@ export function createLead(input: CreateLeadInput): CreateLeadResult {
       disposition,
       duplicate?.id ?? null,
       input.facilioAssetId ?? null,
+      accountId,
       now,
       due.firstResponseDueAt,
       due.qualificationDueAt,
@@ -408,6 +434,8 @@ export interface LeadDetail {
   timeline: ReturnType<typeof timeline>;
   assignments: Array<Record<string, unknown>>;
   duplicates: Array<{ id: string; refNo: string; createdAt: string; matchedOn: "email" | "phone" | "domain" | null }>;
+  /** The newest run of each agent that reads a lead. */
+  assessments: Assessment[];
 }
 
 /**
@@ -434,6 +462,7 @@ export function leadDetail(id: string): LeadDetail {
     assignments: Array<Record<string, unknown>>;
     duplicates: Array<{ id: string; refNo: string; createdAt: string; matchedOn: "email" | "phone" | "domain" | null }>;
     timeline: ReturnType<typeof timeline>;
+    assessments: unknown;
   }>(
     `select
        (select row_to_json(x) from (
@@ -483,7 +512,10 @@ export function leadDetail(id: string): LeadDetail {
            where entity_type = 'lead' and entity_id = $1
            order by occurred_at desc
            limit 100
-        ) x) as timeline_arr`,
+        ) x) as timeline_arr,
+
+       -- Rides along rather than costing its own ~194ms.
+       ${assessmentSubquery("lead", "$1")} as assessments_arr`,
     [id]
   );
 
@@ -498,6 +530,9 @@ export function leadDetail(id: string): LeadDetail {
     timeline: row.timeline,
     assignments: row.assignments,
     duplicates: row.duplicates,
+    // The lead-intelligence read. Beside the analyst's verdict above, never
+    // instead of it — see modules/agent-brief.ts.
+    assessments: foldLatest(row.assessments),
   };
 }
 
@@ -618,6 +653,13 @@ export function transitionLead(input: TransitionInput, preloaded?: Lead): Lead {
     sets.push(`${stamp} = coalesce(${stamp}, $${params.length})`);
   }
 
+  // Leaving nurture drops the park date. `nurture_until` means "bring this lead
+  // back on this day" — on a lead that has already come back it is an
+  // instruction addressed to nobody, and the first report or job that reads the
+  // column to wake parked leads would wake one that is already qualified.
+  const leftNurture = from === "nurture" && to !== "nurture";
+  if (leftNurture) sets.push("nurture_until = null");
+
   const changed = mutate(`update fl_lead set ${sets.join(", ")} where id = $1`, params);
   // A preloaded lead was read by the caller, possibly a moment ago; if it has
   // since been deleted, say so rather than returning a lead that no longer is.
@@ -640,6 +682,10 @@ export function transitionLead(input: TransitionInput, preloaded?: Lead): Lead {
     status: to,
     dispositionReason: reason,
     updatedAt: now,
+    // Mirrored, like every other write above: callers render from this object
+    // rather than re-reading, so a value cleared in SQL and left standing here
+    // would show the old park date until the next full load.
+    ...(leftNurture ? { nurtureUntil: null } : {}),
   };
 
   if (stamp) {
@@ -745,6 +791,26 @@ export function assignLead(input: AssignInput): Lead {
     next.assignedAt = lead.assignedAt ?? now;
   } else {
     next.ownerEmail = input.toUser;
+  }
+
+  /**
+   * Handing an actioner a NEW lead starts its review, exactly as claiming one
+   * does (`claimLead` below has always done this).
+   *
+   * Without it, assignment produced a lead that was owned and still `new` — and
+   * `movesFor` offers an owned new lead no forward move at all, so the Move-to
+   * menu collapsed to "Close" and the only way on was to close the lead as lost.
+   * That is what "stuck in New with one option" meant. The status is the fact
+   * that was wrong; the menu was reporting it correctly.
+   *
+   * Only for the actioner role: a SALES owner is assigned to a lead that is
+   * usually already qualified, and `new -> in_review` is not their move to make.
+   */
+  if (input.role === "actioner" && lead.status === "new") {
+    return transitionLead(
+      { leadId: input.leadId, toStatus: "in_review", actor: input.actor ?? null, note: `Assigned to ${input.toUser}` },
+      next
+    );
   }
 
   return next;

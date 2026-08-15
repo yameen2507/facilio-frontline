@@ -39,6 +39,9 @@ import { cn } from "@/lib/utils";
 import { useActor } from "../../../app/auth";
 import { PageShell } from "../../../app/shell/PageShell";
 import { ago, humanise, onDay, plural, when } from "../../../lib/format";
+import { runAssessment } from "../../../lib/assess";
+import { AssessmentPanel } from "../../../ui/AssessmentPanel";
+import { useToast } from "../../../ui/Toast";
 import { Card, Split, Stack } from "../../../ui/Card";
 import { Facts } from "../../../ui/Facts";
 import { SkeletonRows } from "../../../ui/Skeleton";
@@ -676,6 +679,64 @@ function Tile({ label, value, sub }: { label: string; value: ReactNode; sub?: Re
   );
 }
 
+/**
+ * `survey-intelligence` — is this survey fit for estimation?
+ *
+ * The model call is made HERE rather than in the handler: a platform function
+ * aborts at the ~10s fetch timeout and this agent takes longer. The server
+ * builds the prompt from the handoff payload — the same §5 contract the
+ * estimator prices from, so the agent reads exactly what estimation will read —
+ * and stores the reply. This component is the leg in between.
+ *
+ * It reports; it never changes the survey's status. Completing a survey stays a
+ * human move through the same guards it always had.
+ */
+function SurveyReviewCard({
+  detail,
+  actor,
+  onChanged,
+}: {
+  detail: SurveyDetailResponse;
+  actor: string;
+  onChanged: () => void;
+}) {
+  const [running, setRunning] = useState(false);
+  const toast = useToast();
+
+  const surveyId = detail.survey.id;
+  const latest = detail.assessments?.find((a) => a.agent === "survey-intelligence") ?? null;
+
+  // A cancelled survey is never priced and never handed off (§5 rule 3), so
+  // there is nothing for a readiness read to be about.
+  const cancelled = detail.survey.status === "cancelled";
+
+  const run = async () => {
+    setRunning(true);
+    const { error } = await runAssessment("survey", "surveyId", surveyId, "survey-intelligence", actor);
+    setRunning(false);
+    if (error) return toast(error, true);
+    toast("Read and recorded");
+    onChanged();
+  };
+
+  return (
+    <AssessmentPanel
+      title="Survey review"
+      assessment={latest}
+      running={running}
+      onRun={run}
+      runLabel="Review this survey"
+      disabledReason={
+        cancelled ? "This survey was cancelled — a cancelled survey is never priced." : null
+      }
+      blurb="Checks the measurements, services, frequencies and conditions captured here for gaps and contradictions, before the revision is frozen."
+      recordUpdatedAt={detail.survey.updatedAt}
+      recordNoun="survey"
+      staleAdvice="More was captured since — run it again before freezing."
+    />
+  );
+}
+
 function OverviewTab({
   detail,
   actor,
@@ -705,6 +766,11 @@ function OverviewTab({
           would make the finished state look like a dead end. */}
       <Stack>
         <HandoffCard detail={detail} actor={actor} />
+
+        {/* Directly under the handoff, and that placement is the point: this is
+            the read that says whether the survey is fit to be frozen, and once
+            it is frozen a bad measurement costs a revision to fix. */}
+        <SurveyReviewCard detail={detail} actor={actor} onChanged={onChanged} />
 
         <Card title="Progress">
           <TrailStepper status={s.status} />

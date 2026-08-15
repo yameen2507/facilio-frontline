@@ -14,6 +14,7 @@
 import { mutate, nowIso, one } from "../shared/db";
 import { appendEvent } from "../shared/events";
 import { executeAction } from "../shared/facilio";
+import { parseAgentContent } from "../domain/agent-reply";
 import { parseAnalystReply, type AnalystResult } from "../domain/scoring";
 import {
   type ConfigData,
@@ -32,6 +33,9 @@ import { getLead } from "./lead";
  * `lead-analyst`. It is held in settings rather than hardcoded so it can be
  * corrected without a rebuild, and so a re-created agent is a config change.
  */
+/** Re-exported: this module was where callers first found it. */
+export { parseAgentContent };
+
 export const ANALYST_AGENT_SETTING = "lead.analyst_agent";
 export const ANALYST_LINK_SETTING = "lead.analyst_agent_link";
 
@@ -88,6 +92,23 @@ export function analystIdentity(data?: ConfigData): AnalystIdentity {
   };
 }
 
+/**
+ * How to read a gap, stated in the input rather than in the agent's own
+ * instructions — those are fixed when the agent is created, so a correctness
+ * rule that lives there cannot be fixed without re-creating it.
+ *
+ * NOT operator-editable, unlike the closing task line. This is not tuning: an
+ * analyst that invents a city produces a verdict about a place the enquiry never
+ * mentioned, and no amount of retuning the task makes that acceptable.
+ */
+const READING_RULES = [
+  "HOW TO READ THIS LEAD:",
+  '- "not stated" means the enquiry did not say. It is not permission to assume.',
+  "- Never infer a city, region or service from the SERVICE SCOPE above. That list is what we sell and where — it is not evidence about where THIS lead is.",
+  "- With the location not stated you cannot conclude outside_region, and you cannot conclude the site is in one of our areas either. Say plainly in the summary that the location is unknown, and let the score carry that doubt instead of resolving it with a guess.",
+  "- The currency is evidence about location. Our areas quote in AED, SAR, OMR, QAR, KWD and BHD; a budget in any other currency is a reason to doubt the site is in our region, not something to pass over.",
+].join("\n");
+
 /** Everything the analyst needs, as plain text. */
 export function buildAnalystInput(lead: {
   companyName: string | null;
@@ -104,8 +125,27 @@ export function buildAnalystInput(lead: {
   currency: string | null;
   source: string;
 }, data: ConfigData = configData()): string {
+  /** Absent, so the line is dropped. Used where silence carries no meaning: a
+      missing phone number tells the analyst nothing about scope. */
   const field = (label: string, value: unknown) =>
     value === null || value === undefined || value === "" ? null : `${label}: ${String(value)}`;
+
+  /**
+   * Absent, and SAID SO.
+   *
+   * Only for the fields the verdict actually turns on. A dropped line is
+   * indistinguishable from a field that does not apply, so a lead with no city
+   * used to reach the analyst as a scope list headed by our areas and nothing
+   * contradicting it — and it answered with the first area on the list. Naming
+   * the gap is what makes "we were not told" an available thought.
+   *
+   * Not applied to the contact fields on purpose: five "not stated" lines that
+   * change no verdict only dilute the two that do.
+   */
+  const scopeField = (label: string, value: unknown) =>
+    value === null || value === undefined || value === ""
+      ? `${label}: not stated`
+      : `${label}: ${String(value)}`;
 
   const lines = [
     coverageBrief(data),
@@ -116,13 +156,18 @@ export function buildAnalystInput(lead: {
     field("Email", lead.contactEmail),
     field("Phone", lead.contactPhone),
     field("Website", lead.websiteDomain),
-    field("Service asked for", lead.serviceType),
+    scopeField("Service asked for", lead.serviceType),
     field("Site address", lead.siteAddress),
-    field("City", lead.siteCity),
-    field("Region", lead.siteRegion),
-    field("Stated budget", lead.estimatedValue ? `${lead.estimatedValue} ${lead.currency ?? ""}` : null),
+    scopeField("City", lead.siteCity),
+    scopeField("Region", lead.siteRegion),
+    scopeField(
+      "Stated budget",
+      lead.estimatedValue ? `${lead.estimatedValue} ${lead.currency ?? ""}`.trim() : null
+    ),
     field("Channel", lead.source),
-    field("Enquiry", lead.description),
+    scopeField("Enquiry", lead.description),
+    "",
+    READING_RULES,
     "",
     // Editable from Settings. The agent's own instructions cannot be changed at
     // runtime, so this closing line is where an operator retunes the task.
@@ -191,39 +236,6 @@ function findContent(node: unknown, depth = 0): string | null {
   }
 
   return null;
-}
-
-/**
- * A structured-output agent returns its JSON as a *string*. Parsing it is the
- * single most common bug on this platform, so it is handled in one place — and
- * tolerantly, since models sometimes wrap JSON in prose or a code fence.
- */
-export function parseAgentContent(content: string): unknown {
-  const direct = tryJson(content);
-  if (direct !== undefined) return direct;
-
-  const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fenced) {
-    const inner = tryJson(fenced[1]);
-    if (inner !== undefined) return inner;
-  }
-
-  const start = content.indexOf("{");
-  const end = content.lastIndexOf("}");
-  if (start !== -1 && end > start) {
-    const slice = tryJson(content.slice(start, end + 1));
-    if (slice !== undefined) return slice;
-  }
-
-  throw new Error(`agent reply was not JSON: ${content.slice(0, 200)}`);
-}
-
-function tryJson(text: string): unknown {
-  try {
-    return JSON.parse(text.trim());
-  } catch {
-    return undefined;
-  }
 }
 
 /** Persist a verdict as a new version and snapshot it onto the lead for the queue. */

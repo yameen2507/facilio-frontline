@@ -2,17 +2,18 @@
  * The filter rules, pinned. These are cheap to get subtly wrong and expensive
  * to notice: a wrong filter shows a plausible list, not an error.
  *
- * D-25 rewrote the model: lifecycle is a tab, ownership and time are toggles
- * that combine with it — so these tests exercise COMBINATIONS, which the old
- * mutually-exclusive tabs could not express at all.
+ * D-25 rewrote the model: lifecycle is a tab and ownership is a toggle that
+ * combines with it — so these tests exercise COMBINATIONS, which the old
+ * mutually-exclusive tabs could not express at all. D-25's third axis, time, was
+ * retired with the SLA it judged against, so `sla` no longer appears here.
  */
 
 import { describe, expect, it } from "vitest";
 import { countBuckets, countToggles, filterLeads, type LeadFilter } from "./filters";
-import type { Lead, LeadStatus, Sla } from "./types/lead";
+import type { Lead, LeadStatus } from "./types/lead";
 
 let n = 0;
-const mk = (status: LeadStatus, opts: { owner?: string | null; sla?: Sla } = {}): Lead => ({
+const mk = (status: LeadStatus, opts: { owner?: string | null } = {}): Lead => ({
   id: `l${++n}`,
   refNo: `L-${n}`,
   companyName: `Co ${n}`,
@@ -20,17 +21,14 @@ const mk = (status: LeadStatus, opts: { owner?: string | null; sla?: Sla } = {})
   status,
   createdAt: "2026-08-01T00:00:00Z",
   ownerEmail: opts.owner ?? null,
-  sla: opts.sla ?? null,
+  sla: null,
 });
 
 const f = (over: Partial<LeadFilter> = {}): LeadFilter => ({
   tab: "open",
   unclaimed: false,
-  overdue: false,
   ...over,
 });
-
-const overdue: Sla = { isOverdue: true, breached: ["first_response"] };
 
 describe("countBuckets", () => {
   it("counts open as everything not converted or closed", () => {
@@ -42,19 +40,19 @@ describe("countBuckets", () => {
   });
 
   it("counts a closed lead under closed, not open, however it got there", () => {
-    const b = countBuckets([mk("closed", { sla: overdue })]);
+    const b = countBuckets([mk("closed")]);
     expect(b.closed).toBe(1);
     expect(b.open).toBe(0);
   });
 });
 
-describe("filterLeads — three independent axes", () => {
+describe("filterLeads — two independent axes", () => {
   const leads = [
     mk("new"),
     mk("in_review", { owner: "rep@x.com" }),
-    mk("qualified", { sla: overdue }),
+    mk("qualified"),
     mk("converted"),
-    mk("closed", { sla: overdue }),
+    mk("closed"),
   ];
 
   it("open excludes converted and closed", () => {
@@ -78,17 +76,9 @@ describe("filterLeads — three independent axes", () => {
     expect(ids.every((l) => !l.ownerEmail)).toBe(true);
   });
 
-  it("the overdue toggle narrows the tab — a closed breach shows under Closed, not Open", () => {
-    expect(filterLeads(leads, f({ overdue: true })).map((l) => l.status)).toEqual(["qualified"]);
-    expect(filterLeads(leads, f({ tab: "closed", overdue: true })).map((l) => l.status)).toEqual([
-      "closed",
-    ]);
-    expect(filterLeads(leads, f({ tab: "all", overdue: true }))).toHaveLength(2);
-  });
-
-  it("the axes combine — open AND unclaimed AND overdue is finally askable", () => {
-    const both = filterLeads(leads, f({ unclaimed: true, overdue: true }));
-    expect(both.map((l) => l.status)).toEqual(["qualified"]);
+  it("the axes combine — open AND unclaimed is finally askable", () => {
+    const both = filterLeads(leads, f({ unclaimed: true }));
+    expect(both.map((l) => l.status)).toEqual(["new", "qualified"]);
   });
 
   it("counts and filters agree on every lifecycle tab", () => {
@@ -109,20 +99,17 @@ describe("countToggles — a chip's number is the list it produces", () => {
   const leads = [
     mk("new"),
     mk("in_review", { owner: "rep@x.com" }),
-    mk("qualified", { sla: overdue }),
+    mk("qualified"),
     mk("converted"),
-    mk("closed", { sla: overdue }),
+    mk("closed"),
   ];
 
   it("agrees with the filter on every tab and toggle combination", () => {
     for (const tab of ["open", "converted", "closed", "all"] as const) {
       for (const unclaimed of [false, true]) {
-        for (const overdueOn of [false, true]) {
-          const base = f({ tab, unclaimed, overdue: overdueOn });
-          const c = countToggles(leads, base);
-          expect(c.unclaimed).toBe(filterLeads(leads, { ...base, unclaimed: true }).length);
-          expect(c.overdue).toBe(filterLeads(leads, { ...base, overdue: true }).length);
-        }
+        const base = f({ tab, unclaimed });
+        const c = countToggles(leads, base);
+        expect(c.unclaimed).toBe(filterLeads(leads, { ...base, unclaimed: true }).length);
       }
     }
   });
@@ -133,9 +120,7 @@ describe("countToggles — a chip's number is the list it produces", () => {
     expect(countToggles(leads, f({ tab: "closed" })).unclaimed).toBe(1);
   });
 
-  it("narrows by the toggle already on, so the pair reads as one question", () => {
-    // Of the two unclaimed open leads, only the qualified one is late.
-    expect(countToggles(leads, f({ overdue: true })).unclaimed).toBe(1);
-    expect(countToggles(leads, f({ unclaimed: true })).overdue).toBe(1);
+  it("stays put when the toggle is already on — a chip describes the list it made", () => {
+    expect(countToggles(leads, f({ unclaimed: true })).unclaimed).toBe(2);
   });
 });

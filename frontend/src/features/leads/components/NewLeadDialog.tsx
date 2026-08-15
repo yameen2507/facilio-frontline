@@ -45,10 +45,13 @@ import { humanise } from "@/lib/format";
 import {
   createLead,
   getCoverageOptions,
+  listAccountOptions,
   type CoverageOptions,
+  type LeadAccount,
   type NewLeadFields,
 } from "../api/leads-util";
 import { Combobox } from "../../../ui/Combobox";
+import { newLeadBlockers, type NewLeadField } from "../actions";
 import type { CreatedLead, LeadSource } from "../types/lead";
 
 /**
@@ -181,6 +184,27 @@ export function NewLeadDialog({
    * than blocking intake on a config lookup.
    */
   const [catalogue, setCatalogue] = useState<CoverageOptions | null>(null);
+
+  /**
+   * Whether this enquiry belongs to a client we already have.
+   *
+   * Stated here rather than inferred later: `convert` resolves the account from
+   * the company domain or the contact email, so a repeat client writing from a
+   * personal address — or a new site under a different contact — used to get a
+   * SECOND account for a company already on file. A lead that names its account
+   * skips the guess entirely.
+   *
+   * Loaded per open alongside the catalogue. A failed read leaves `null` and the
+   * choice hides itself: a picker with nothing in it is worse than not offering
+   * the option, and every lead can still be filed as new.
+   */
+  const [accounts, setAccounts] = useState<LeadAccount[] | null>(null);
+  /** The mode is its OWN state, not `accountId !== ""`. Deriving it would force
+      the toggle to auto-select an account to render as pressed, and whichever
+      client happened to sort first would collect every mis-click. */
+  const [existingClient, setExistingClient] = useState(false);
+  const [accountId, setAccountId] = useState<string>("");
+
   const [areaId, setAreaId] = useState<string>("");
   const [serviceIds, setServiceIds] = useState<string[]>([]);
   const [serviceOther, setServiceOther] = useState("");
@@ -196,13 +220,29 @@ export function NewLeadDialog({
     setAreaId("");
     setServiceIds([]);
     setServiceOther("");
+    setAccounts(null);
+    setExistingClient(false);
+    setAccountId("");
     getCoverageOptions().then(({ data }) => setCatalogue(data));
+    listAccountOptions().then(({ data }) => setAccounts(data?.accounts ?? null));
   }, [open]);
 
   const set = (key: keyof typeof BLANK) => (value: string) =>
     setForm((f) => ({ ...f, [key]: value }));
 
-  const areas = (catalogue?.areas ?? []).filter((a) => a.active === "true");
+  /**
+   * RETIRED means `active === "false"`, and nothing else. The flag is nullable —
+   * rows seeded or imported before saveService/saveArea existed carry none — so
+   * `=== "true"` hid a service that Settings, the rate-card picker and proposals
+   * all show, and this form was the one place it went missing. That is the bug
+   * reported as "the lead form doesn't show the services from settings", and the
+   * counts not matching between the two screens.
+   *
+   * The other two reasons this list is shorter than the Services page are NOT
+   * bugs: a retired service should not be sellable, and the chips are scoped to
+   * what is covered in the chosen city (D-04).
+   */
+  const areas = (catalogue?.areas ?? []).filter((a) => a.active !== "false");
   const area = areas.find((a) => a.id === areaId) ?? null;
   const outside = areaId === OUTSIDE_AREAS;
   // Service lines scoped by the chosen city (D-04); everything active when no
@@ -210,13 +250,14 @@ export function NewLeadDialog({
   const coveredIds = area
     ? new Set(
         (catalogue?.coverage ?? [])
-          .filter((c) => c.active === "true" && c.areaId === area.id)
+          .filter((c) => c.active !== "false" && c.areaId === area.id)
           .map((c) => c.serviceLineId)
       )
     : null;
-  const serviceLines = (catalogue?.serviceLines ?? []).filter(
-    (l) => l.active === "true" && (!coveredIds || coveredIds.has(l.id))
-  );
+  /** Everything sellable, before the city narrows it — the denominator the
+      chips' "n of m" line reports against. */
+  const sellableLines = (catalogue?.serviceLines ?? []).filter((l) => l.active !== "false");
+  const serviceLines = sellableLines.filter((l) => !coveredIds || coveredIds.has(l.id));
 
   const toggleService = (id: string) =>
     setServiceIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
@@ -227,11 +268,47 @@ export function NewLeadDialog({
     SOURCE_OPTIONS.find((o) => o.id === form.sourceOption) ?? SOURCE_OPTIONS[0];
 
   const company = form.companyName.trim();
-  // A value that is not a number would be rejected server-side, so it is caught
-  // here where the field it belongs to is still on screen.
   const value = form.estimatedValue.trim();
-  const valueInvalid = value !== "" && !Number.isFinite(Number(value));
-  const canSubmit = Boolean(company) && !valueInvalid;
+
+  // What the service columns receive: the picked chips by NAME plus the
+  // free-text remainder — controlled vocabulary first, catch-all last (D-04).
+  // Resolved HERE rather than at submit, because it is one of the fields the
+  // form is now validated against and the check runs on every keystroke.
+  // Both free-text boxes are included, not one or the other: the input writes to
+  // `form.serviceType` until the catalogue arrives and to `serviceOther` after,
+  // so anything typed during the fetch would otherwise be dropped the moment the
+  // chips appeared. Outside that race one of the two is always "".
+  const serviceType = [
+    ...serviceLines.filter((l) => serviceIds.includes(l.id)).map((l) => l.name),
+    serviceOther.trim(),
+    form.serviceType.trim(),
+  ]
+    .filter(Boolean)
+    .join(", ");
+
+  const blockers = [
+    // Stated first because it sits at the top of the form. Not part of
+    // newLeadBlockers: that function rules on the typed fields, and this is the
+    // state of a picker — "existing client" with nobody picked is a half-answered
+    // question, and filing it as new would quietly contradict what was said.
+    ...(existingClient && !accountId
+      ? [
+          {
+            field: "companyName" as const,
+            message: "Pick which client this is, or switch back to New.",
+          },
+        ]
+      : []),
+    ...newLeadBlockers({
+      companyName: form.companyName,
+      contactName: form.contactName,
+      contactEmail: form.contactEmail,
+      serviceType,
+      estimatedValue: form.estimatedValue,
+    }),
+  ];
+  const blocking = (field: NewLeadField) => blockers.find((b) => b.field === field);
+  const canSubmit = blockers.length === 0;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -239,26 +316,25 @@ export function NewLeadDialog({
     setBusy(true);
     setError(null);
 
-    // What the columns receive: picked services by NAME plus the free-text
-    // remainder — controlled vocabulary first, catch-all last (D-04).
-    const pickedNames = serviceLines
-      .filter((l) => serviceIds.includes(l.id))
-      .map((l) => l.name);
-    const serviceType = [...pickedNames, serviceOther.trim()].filter(Boolean).join(", ");
-
     const fields: NewLeadFields = {
       // The one pick, unpacked onto the columns it stands for. `sourceDetail`
       // keeps the label so the row still records which of them it was — "Website
       // form" and a phone call both land on the `inapp` channel and would
       // otherwise be indistinguishable in the data. Nothing renders it today.
       source: picked.source,
-      companyName: company,
+      // `fl_lead.company_name` is not nullable and every list column reads it,
+      // so a household lead borrows the contact's name rather than landing blank
+      // in the queue. This is exactly what the chat agent does with a residential
+      // enquiry (src/modules/intake.ts:436) — the two doors agree or the list
+      // shows two different kinds of row.
+      companyName: company || form.contactName.trim(),
+      ...(accountId ? { accountId } : {}),
       sourceDetail: picked.label,
       contactName: form.contactName.trim(),
       contactEmail: form.contactEmail.trim(),
       contactPhone: form.contactPhone.trim(),
       websiteDomain: form.websiteDomain.trim(),
-      serviceType: serviceType || form.serviceType.trim(),
+      serviceType,
       description: form.description.trim(),
       siteAddress: form.siteAddress.trim(),
       // A picked area writes its own name and region; "outside our areas" and
@@ -359,17 +435,81 @@ export function NewLeadDialog({
             </DialogHeader>
 
             <div className="overlay-scroll -mx-1 flex max-h-[55vh] min-w-0 flex-col gap-4 overflow-y-auto px-1">
+              {/* ONE labelled group, not two. The new/existing choice sits inside
+                  the Company field rather than above it as its own control —
+                  otherwise the same idea wears three names on one screen
+                  ("Client", "Company", "Account") and reads as three questions.
+                  The toggle only appears once accounts have arrived and there is
+                  at least one; on a failed read every lead is simply new, which
+                  is the truth for most of them anyway. */}
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="nl-company">
-                  Company <span className="text-destructive">*</span>
-                </Label>
-                <Input
-                  id="nl-company"
-                  value={form.companyName}
-                  onChange={(e) => set("companyName")(e.target.value)}
-                  placeholder="Al Manzil Restaurant"
-                  autoFocus={autoFocusField()}
-                />
+                <Label htmlFor="nl-company">Company</Label>
+                {accounts?.length ? (
+                  <div className="flex gap-1" role="radiogroup" aria-label="New or existing client">
+                    {[
+                      { existing: false, label: "New" },
+                      { existing: true, label: "Existing client" },
+                    ].map((choice) => (
+                      <button
+                        key={choice.label}
+                        type="button"
+                        role="radio"
+                        aria-checked={existingClient === choice.existing}
+                        // Switching drops both the account AND the name it filled
+                        // in, so a half-switched form cannot file a new client
+                        // under an existing client's name. Switching TO existing
+                        // selects nothing — the picker below asks.
+                        onClick={() => {
+                          setExistingClient(choice.existing);
+                          setAccountId("");
+                          set("companyName")("");
+                        }}
+                        className={cn(
+                          "rounded-md border px-2.5 py-1 text-xs transition-colors",
+                          existingClient === choice.existing
+                            ? "border-primary bg-muted font-medium"
+                            : "text-muted-foreground hover:text-foreground"
+                        )}
+                      >
+                        {choice.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                {/* One identity input, never two. The picker REPLACES the text
+                    box rather than sitting beside it — a form carrying both would
+                    ask the same question twice and let the answers disagree. */}
+                {existingClient ? (
+                  <Combobox
+                    id="nl-company"
+                    options={(accounts ?? []).map((a) => ({
+                      id: a.id,
+                      label: a.name ?? "Unnamed account",
+                      meta: a.websiteDomain ?? null,
+                    }))}
+                    value={accountId || null}
+                    onChange={(id) => {
+                      setAccountId(id);
+                      const picked = (accounts ?? []).find((a) => a.id === id);
+                      set("companyName")(picked?.name ?? "");
+                    }}
+                    placeholder="Pick the client"
+                    searchPlaceholder="Search clients…"
+                  />
+                ) : (
+                  <Input
+                    id="nl-company"
+                    value={form.companyName}
+                    onChange={(e) => set("companyName")(e.target.value)}
+                    placeholder="Al Manzil Restaurant"
+                    autoFocus={autoFocusField()}
+                  />
+                )}
+                <span className="text-muted-foreground text-xs">
+                  {existingClient
+                    ? "Converting this lead will use that client's account instead of raising a second one for them."
+                    : "Leave blank for a household — the lead files under the contact's name."}
+                </span>
               </div>
 
               <div className="flex min-w-0 flex-col gap-1.5">
@@ -393,7 +533,9 @@ export function NewLeadDialog({
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="flex min-w-0 flex-col gap-1.5">
-                  <Label htmlFor="nl-contact">Contact</Label>
+                  <Label htmlFor="nl-contact">
+                    Contact <span className="text-destructive">*</span>
+                  </Label>
                   <Input
                     id="nl-contact"
                     value={form.contactName}
@@ -412,14 +554,25 @@ export function NewLeadDialog({
                   />
                 </div>
                 <div className="flex min-w-0 flex-col gap-1.5">
-                  <Label htmlFor="nl-email">Email</Label>
+                  <Label htmlFor="nl-email">
+                    Email <span className="text-destructive">*</span>
+                  </Label>
                   <Input
                     id="nl-email"
                     type="email"
                     value={form.contactEmail}
                     onChange={(e) => set("contactEmail")(e.target.value)}
                     placeholder="ahmed@almanzil.ae"
+                    aria-invalid={Boolean(form.contactEmail.trim() && blocking("contactEmail"))}
                   />
+                  {/* Only once something has been typed: an empty required field
+                      is not yet a mistake, and reddening it on open scolds the
+                      user for not having started. */}
+                  {form.contactEmail.trim() && blocking("contactEmail") ? (
+                    <span className="text-destructive text-xs">
+                      {blocking("contactEmail")?.message}
+                    </span>
+                  ) : null}
                 </div>
                 <div className="flex min-w-0 flex-col gap-1.5">
                   <Label htmlFor="nl-website">Website</Label>
@@ -442,7 +595,9 @@ export function NewLeadDialog({
               <Separator />
 
               <div className="flex flex-col gap-1.5">
-                <Label>Service wanted</Label>
+                <Label>
+                  Service wanted <span className="text-destructive">*</span>
+                </Label>
                 {/* D-04: the catalogue, not a text box — the one input the
                     whole scoring engine depends on stops being unconstrained.
                     Multi-select (an enquiry often wants two services), scoped
@@ -484,6 +639,13 @@ export function NewLeadDialog({
                 {area && serviceLines.length === 0 && catalogue?.serviceLines.length ? (
                   <span className="text-muted-foreground text-xs">
                     {`Nothing in the catalogue covers ${area.name} — describe the service above and it will be scored as out of coverage.`}
+                  </span>
+                ) : serviceLines.length && serviceLines.length < sellableLines.length ? (
+                  // Says WHY this list is shorter than the Services page. Without
+                  // it a scoped list looks like a missing one, which is how the
+                  // count difference got raised as a bug in the first place.
+                  <span className="text-muted-foreground text-xs">
+                    {`Showing ${serviceLines.length} of ${sellableLines.length} services — the rest are not offered in ${area?.name}.`}
                   </span>
                 ) : null}
               </div>
@@ -605,12 +767,12 @@ export function NewLeadDialog({
                       className="min-w-0 flex-1"
                     />
                   </div>
-                  {valueInvalid ? (
+                  {blocking("estimatedValue") ? (
                     <span className="text-destructive text-xs">
-                      The value has to be a number — leave it blank if it is not known yet.
+                      {blocking("estimatedValue")?.message}
                     </span>
                   ) : null}
-                  {value && !valueInvalid ? (
+                  {value && !blocking("estimatedValue") ? (
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="flex gap-1" role="radiogroup" aria-label="Value type">
                         {VALUE_TYPES.map((t) => (
@@ -657,10 +819,13 @@ export function NewLeadDialog({
             {error ? <p className="text-destructive text-sm">{error}</p> : null}
 
             <DialogFooter className="flex-col items-stretch gap-2 sm:flex-row sm:items-center">
-              {/* A disabled primary action says why, next to itself. */}
-              {!company ? (
+              {/* A disabled primary action says why, next to itself. One at a
+                  time, in field order: a stack of four red lines on an untouched
+                  form reads as a telling-off, and the next one appears as each
+                  is dealt with. */}
+              {blockers.length ? (
                 <span className="text-muted-foreground mr-auto text-xs">
-                  A company name is the one thing a lead cannot be filed without.
+                  {blockers[0].message}
                 </span>
               ) : null}
               <DialogClose asChild>

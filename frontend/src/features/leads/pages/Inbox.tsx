@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { cn } from "@/lib/utils";
-import { Building2, Clock3, Gauge, Timer } from "lucide-react";
+import { Building2, Clock3, Gauge } from "lucide-react";
 import { useAccess } from "../../../app/access";
 import { useCounts } from "../../../app/counts";
 import { useUserDirectory } from "../../../app/users";
@@ -34,7 +34,7 @@ import { CompanyLogo } from "../../../ui/CompanyLogo";
 import { Empty, ErrorState } from "../../../ui/States";
 import { Tabs } from "../../../ui/Tabs";
 import { listLeads } from "../api/leads-util";
-import { ScoreCell, SlaChip, StatusChip } from "../components/LeadChips";
+import { ScoreCell, StatusChip } from "../components/LeadChips";
 import { NewLeadDialog } from "../components/NewLeadDialog";
 import { countBuckets, countToggles, filterLeads, type TabId } from "../filters";
 import type { Lead } from "../types/lead";
@@ -46,7 +46,11 @@ const COLS: Col[] = [
   { label: "Company", icon: Building2, skel: "entity" },
   { label: "Status", className: "w-32", skel: "chip" },
   { label: "Score", icon: Gauge, className: "w-24", skel: "num" },
-  { label: "Response", icon: Timer, className: "w-36", skel: "chip" },
+  // Was "Response", carrying an SLA chip. The targets behind it were shipped
+  // defaults with no screen to edit them, so "late" and "on time" were verdicts
+  // against a commitment nobody made. How long a lead has been sitting is a fact
+  // the row already knew — that is what the column reports now.
+  { label: "Waiting", icon: Clock3, className: "w-32", skel: "num" },
 ];
 
 /** How each lifecycle tab reads inside a sentence. `open` and `all` are absent:
@@ -58,14 +62,14 @@ const TAB_PHRASE: Partial<Record<TabId, string>> = {
 };
 
 /**
- * The narrowings currently in force, as one clause — "converted and running
- * late". Built rather than hard-coded because there are eight combinations of
- * the three axes and a filtered-empty state that names the wrong one is worse
- * than one that names none.
+ * The narrowings currently in force, as one clause — "converted and unclaimed".
+ * Built rather than hard-coded because a filtered-empty state that names the
+ * wrong narrowing is worse than one that names none.
  */
-function describeFilter(tab: TabId, unclaimed: boolean, overdue: boolean): string {
-  const parts = [TAB_PHRASE[tab], unclaimed ? "unclaimed" : null, overdue ? "running late" : null]
-    .filter((p): p is string => Boolean(p));
+function describeFilter(tab: TabId, unclaimed: boolean): string {
+  const parts = [TAB_PHRASE[tab], unclaimed ? "unclaimed" : null].filter((p): p is string =>
+    Boolean(p)
+  );
   if (!parts.length) return "in this view";
   if (parts.length === 1) return parts[0];
   return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
@@ -99,22 +103,25 @@ export function Inbox() {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /**
-   * D-25: three independent axes, and all three live in the URL (N-06) so a
-   * filtered view survives a reload and pastes into a chat message.
+   * D-25: two independent axes, and both live in the URL (N-06) so a filtered
+   * view survives a reload and pastes into a chat message. The third axis, time,
+   * was retired with the SLA it judged against — see filters.ts.
    */
   const [params, setParams] = useSearchParams();
   const tab = (["open", "converted", "closed", "all"].includes(params.get("tab") ?? "")
     ? params.get("tab")
     : "open") as TabId;
   const unclaimed = params.get("unclaimed") === "1";
-  const overdue = params.get("overdue") === "1";
-  const setFilter = (patch: { tab?: TabId; unclaimed?: boolean; overdue?: boolean }) => {
+  const setFilter = (patch: { tab?: TabId; unclaimed?: boolean }) => {
     const next = new URLSearchParams(params);
     const put = (key: string, value: string | null) =>
       value === null ? next.delete(key) : next.set(key, value);
     if (patch.tab !== undefined) put("tab", patch.tab === "open" ? null : patch.tab);
     if (patch.unclaimed !== undefined) put("unclaimed", patch.unclaimed ? "1" : null);
-    if (patch.overdue !== undefined) put("overdue", patch.overdue ? "1" : null);
+    // A bookmarked ?overdue=1 from the retired time axis is dropped rather than
+    // carried: the control it belonged to is gone, so keeping it in the URL
+    // would be a filter nothing on screen could turn off.
+    next.delete("overdue");
     setParams(next, { replace: true });
   };
   const [reloadKey, setReloadKey] = useState(0);
@@ -137,7 +144,7 @@ export function Inbox() {
   }, [reloadKey]);
 
   const counts = useMemo(() => countBuckets(leads), [leads]);
-  const filter = useMemo(() => ({ tab, unclaimed, overdue }), [tab, unclaimed, overdue]);
+  const filter = useMemo(() => ({ tab, unclaimed }), [tab, unclaimed]);
   const rows = useMemo(() => filterLeads(leads, filter), [leads, filter]);
   // Scoped to the tab and to whatever else is switched on, so each chip's number
   // is the length of the list clicking it produces.
@@ -146,8 +153,8 @@ export function Inbox() {
   /** Whether an empty result is a FILTERING outcome rather than an empty inbox.
       Both halves matter: with no leads at all, "none match these filters" would
       blame the controls for a queue that has simply never had anything in it. */
-  const filtered = counts.all > 0 && (tab !== "open" || unclaimed || overdue);
-  const clearFilters = () => setFilter({ tab: "open", unclaimed: false, overdue: false });
+  const filtered = counts.all > 0 && (tab !== "open" || unclaimed);
+  const clearFilters = () => setFilter({ tab: "open", unclaimed: false });
 
   // Feeds the sidebar badge. The shell never imports this feature; the number
   // travels up through the app-level counts context.
@@ -201,19 +208,6 @@ export function Inbox() {
             >
               {`Nobody's picked up · ${toggleCounts.unclaimed}`}
             </button>
-            <button
-              type="button"
-              aria-pressed={overdue}
-              onClick={() => setFilter({ overdue: !overdue })}
-              className={cn(
-                "rounded-md border px-2.5 py-1 text-xs whitespace-nowrap transition-colors",
-                overdue
-                  ? "border-primary bg-muted font-medium"
-                  : "text-muted-foreground hover:text-foreground"
-              )}
-            >
-              {`Running late · ${toggleCounts.overdue}`}
-            </button>
           </div>
         </div>
       }
@@ -247,9 +241,8 @@ export function Inbox() {
                   <TableCell className="w-24 px-4 py-3">
                     <ScoreCell lead={l} />
                   </TableCell>
-                  <TableCell className="w-36 px-4 py-3">
-                    <SlaChip sla={l.sla} />
-                    <div className="text-muted-foreground mt-1 text-xs">{ago(l.createdAt)}</div>
+                  <TableCell className="text-muted-foreground w-32 px-4 py-3 text-sm">
+                    {ago(l.createdAt)}
                   </TableCell>
                 </ClickRow>
               ))}
@@ -261,13 +254,21 @@ export function Inbox() {
                   onClick={() => navigate(`/leads/${l.id}`)}
                   leading={<CompanyLogo name={l.companyName} email={l.contactEmail} />}
                   title={l.companyName}
-                  // The response clock takes the title line: this is a triage
-                  // list, and "how late am I" outranks "what state is it in".
-                  trailing={<SlaChip sla={l.sla} />}
+                  // How long it has been waiting takes the title line: this is a
+                  // triage list, and "what has been sitting longest" is the
+                  // question it is read to answer. It used to be the SLA chip,
+                  // retired with the targets nobody had agreed.
+                  trailing={
+                    <span className="text-muted-foreground text-xs whitespace-nowrap">
+                      {ago(l.createdAt)}
+                    </span>
+                  }
                   meta={<LeadMeta lead={l} />}
                   // The facts carry the table columns' own glyphs (Gauge is
-                  // Score's, Clock3 is every list's Created), so a fact is
-                  // findable across the two forms by its icon.
+                  // Score's), so a fact is findable across the two forms by its
+                  // icon. The age is NOT repeated here — it moved to the title
+                  // line above, and a card that states it twice reads as two
+                  // different numbers at a glance.
                   facts={
                     <>
                       <StatusChip status={l.status} />
@@ -278,7 +279,6 @@ export function Inbox() {
                       ) : (
                         <MobileFact icon={Gauge}>not scored</MobileFact>
                       )}
-                      <MobileFact icon={Clock3}>{ago(l.createdAt)}</MobileFact>
                     </>
                   }
                 />
@@ -295,7 +295,7 @@ export function Inbox() {
             title="No leads match these filters"
             body={`${plural(counts.all, "lead is", "leads are")} on file, but ${
               counts.all === 1 ? "it is not" : "none of them are"
-            } ${describeFilter(tab, unclaimed, overdue)}.`}
+            } ${describeFilter(tab, unclaimed)}.`}
             action={
               <Button small onClick={clearFilters}>
                 Clear filters
