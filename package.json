@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.backend.json",
     "bundle": "node scripts/bundle.mjs",
     "push": "node scripts/push.mjs",
+    "push:agents": "node scripts/push-agents.mjs",
     "build:frontend": "node scripts/build-frontend.mjs",
     "typecheck:frontend": "tsc -p frontend/tsconfig.json",
     "typecheck:all": "npm run typecheck && npm run typecheck:frontend"
