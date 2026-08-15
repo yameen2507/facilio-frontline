@@ -764,7 +764,10 @@ export function RateCards() {
         </Card>
       ) : null}
 
-      <Card title="Card header" meta="9 fields — the rest were cut on 14 Aug">
+      {/* Was titled "Card header" with the meta "9 fields — the rest were cut on
+          14 Aug": a note to ourselves about a scoping decision, printed on the
+          screen an operator uses. What was cut is our business, not theirs. */}
+      <Card title="Details">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="flex flex-col gap-1.5 sm:col-span-2">
             <Label htmlFor="rc-name">
