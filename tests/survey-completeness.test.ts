@@ -64,10 +64,13 @@ describe("completeness_pct", () => {
 });
 
 describe("reviewGuard — T5, the guard v3 was missing (F6)", () => {
-  it("blocks while any visit is still open", () => {
+  // OPEN_VISITS_BLOCK is false (15 Aug stopgap): an open visit is said out
+  // loud and the move proceeds. Flip that const back and this flips with it.
+  it("warns about an open visit but no longer blocks on it", () => {
     const g = reviewGuard(counts({ openVisits: 2 }));
-    expect(g.ok).toBe(false);
-    expect(g.blockers[0]).toMatch(/2 visit\(s\) still planned or in progress/);
+    expect(g.ok).toBe(true);
+    expect(g.blockers).toHaveLength(0);
+    expect(g.warnings[0]).toMatch(/2 visit\(s\) still planned or in progress/);
   });
 
   it("passes once every visit is done, no-showed or cancelled", () => {
@@ -89,11 +92,12 @@ describe("submitGuard — T7", () => {
       0
     );
     expect(g.ok).toBe(false);
-    expect(g.blockers).toHaveLength(4);
+    expect(g.blockers).toHaveLength(3);
     expect(g.blockers.join(" ")).toMatch(/3 seeded node\(s\) have no verdict/);
     expect(g.blockers.join(" ")).toMatch(/2 required question\(s\)/);
     expect(g.blockers.join(" ")).toMatch(/2 reconciliation item\(s\) still undecided/);
-    expect(g.blockers.join(" ")).toMatch(/1 visit\(s\) still open/);
+    // The open visit now rides out as a warning — see OPEN_VISITS_BLOCK.
+    expect(g.warnings.join(" ")).toMatch(/1 visit\(s\) still open/);
   });
 
   it("passes a clean survey", () => {

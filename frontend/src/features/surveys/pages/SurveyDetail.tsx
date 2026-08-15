@@ -81,7 +81,7 @@ import {
 } from "../api/surveys-util";
 import { UserPicker } from "../../../ui/UserPicker";
 import { PhotoGallery } from "../components/PhotoGallery";
-import { SurveyStatusChip, VerdictChip, VisitStatusChip } from "../components/SurveyChips";
+import { VerdictChip, VisitStatusChip } from "../components/SurveyChips";
 import { Chip } from "../../../ui/Chip";
 import {
   SURVEY_STATUS_LABEL,
@@ -784,7 +784,16 @@ function OverviewTab({
         <Card title="Progress">
           <TrailStepper status={s.status} />
 
-          <div className="mt-4 grid grid-cols-2 gap-4 border-t pt-4 sm:grid-cols-4">
+          {/* Three tiles, not four, until there is a fourth thing to say. The
+              Revision tile read "v1 · no rework" on every survey that had never
+              been sent back — a quarter of the row spent reporting that nothing
+              had happened. It appears the moment something does. */}
+          <div
+            className={cn(
+              "mt-4 grid grid-cols-2 gap-4 border-t pt-4",
+              (s.revisionNo ?? 1) > 1 || s.reworkCount ? "sm:grid-cols-4" : "sm:grid-cols-3"
+            )}
+          >
             <Tile
               label="Completeness"
               value={
@@ -826,11 +835,17 @@ function OverviewTab({
               value={detail.visits.length}
               sub={plural(detail.assignees.length, "person assigned", "people assigned")}
             />
-            <Tile
-              label="Revision"
-              value={`v${s.revisionNo ?? 1}`}
-              sub={s.reworkCount ? `${plural(s.reworkCount, "rework bounce", "rework bounces")}` : "no rework"}
-            />
+            {(s.revisionNo ?? 1) > 1 || s.reworkCount ? (
+              <Tile
+                label="Revision"
+                value={`v${s.revisionNo ?? 1}`}
+                sub={
+                  s.reworkCount
+                    ? plural(s.reworkCount, "rework bounce", "rework bounces")
+                    : "no rework"
+                }
+              />
+            ) : null}
           </div>
 
           <div className="mt-4 border-t pt-4">
@@ -844,7 +859,9 @@ function OverviewTab({
         <Card title="Details">
           <Facts
             items={[
-              { label: "Status", value: <SurveyStatusChip status={s.status} /> },
+              // Status is NOT here. The stepper at the top of Progress says it
+              // already, and says it better — a second copy as a chip made the
+              // reader check whether the two agreed.
               { label: "Account", value: s.accountName },
               {
                 label: "Template",
@@ -853,13 +870,15 @@ function OverviewTab({
                   : "Started from scratch",
               },
               {
-                label: "Snapshot",
+                // Only when it is WRONG. "2 sections · 3 questions" is plumbing:
+                // true, uninteresting, and printed on every survey forever. A
+                // scheduled survey carrying no questions is the one case worth a
+                // line, because it is the case where the walk opens empty.
+                label: "Form",
                 value:
-                  snapshot && (snapshot.sections || snapshot.questions)
-                    ? `${snapshot.sections} sections · ${snapshot.questions} questions`
-                    : s.status === "draft"
-                      ? "Copied when the first visit is scheduled"
-                      : null,
+                  s.status !== "draft" && !snapshot?.questions
+                    ? "No questions copied — check the template"
+                    : null,
               },
               {
                 // Saveable since the Edit dialog shipped, and displayed

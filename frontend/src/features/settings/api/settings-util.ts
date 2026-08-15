@@ -24,6 +24,18 @@ export type SurveySettings = {
 
 export const getSurveySettings = () => requestFrom<SurveySettings>("survey", "settings-get");
 
+/**
+ * Accounts, for the rate card's client lookup.
+ *
+ * `account-list` is served by the `lead` function, so this reads it there rather
+ * than importing the accounts feature's api-util — features do not import each
+ * other's internals.
+ */
+export const listClientAccounts = () =>
+  requestFrom<{ accounts: { id: string; name?: string | null }[] }>("lead", "account-list", {
+    limit: 200,
+  });
+
 export const putSurveySettings = (fields: {
   conditionScaleDirection?: string;
   requirePhotoBelowCondition?: number;

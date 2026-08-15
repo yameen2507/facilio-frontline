@@ -80,16 +80,28 @@ export interface GuardResult {
 }
 
 /**
+ * STOPGAP, 15 Aug: an open visit no longer STOPS a survey — it is said out
+ * loud and the survey moves anyway (both T5 and T7). The rule itself is sound
+ * — reconciliation against a tree nobody finished walking prices a building
+ * nobody saw — but visits are being left open in ways the product cannot yet
+ * close, and that was blocking every submit. Flip this back to true to restore
+ * the guard; the messages stay where they are either way.
+ */
+const OPEN_VISITS_BLOCK = false;
+
+/**
  * T5 — `in_progress -> pending_review`. One guard, and v3 was missing it (F6):
  * no visit may still be open. The lead must cancel or no-show them first,
  * otherwise reconciliation runs against a tree nobody finished walking and
- * prices a building nobody saw.
+ * prices a building nobody saw. Downgraded to a warning while
+ * OPEN_VISITS_BLOCK is false.
  */
 export function reviewGuard(c: SurveyCounts): GuardResult {
   const blockers: string[] = [];
+  const warnings: string[] = [];
 
   if (c.openVisits > 0) {
-    blockers.push(
+    (OPEN_VISITS_BLOCK ? blockers : warnings).push(
       `${c.openVisits} visit(s) still planned or in progress — cancel, no-show or complete them first`
     );
   }
@@ -101,7 +113,7 @@ export function reviewGuard(c: SurveyCounts): GuardResult {
     blockers.push("nothing has been answered — a survey cannot be submitted empty");
   }
 
-  return { ok: blockers.length === 0, blockers, warnings: [] };
+  return { ok: blockers.length === 0, blockers, warnings };
 }
 
 /**
@@ -134,7 +146,7 @@ export function submitGuard(
   }
 
   if (c.openVisits > 0) {
-    blockers.push(`${c.openVisits} visit(s) still open`);
+    (OPEN_VISITS_BLOCK ? blockers : warnings).push(`${c.openVisits} visit(s) still open`);
   }
 
   // D-22's floor holds at T7 too: the lead's direct-complete path (P-06) must

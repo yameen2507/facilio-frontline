@@ -69,10 +69,15 @@ import {
   type RateCard,
   type RateCardRow,
 } from "../api/ratecards-util";
-import { listServices, type Service } from "../api/settings-util";
+import { listClientAccounts, listServices, type Service } from "../api/settings-util";
+import { Combobox } from "../../../ui/Combobox";
 
 /** Radix Select forbids an empty item value, so "not set" needs a sentinel. */
 const UNSET = "__unset";
+
+/** Same reason, for the client lookup: "" is the stored value for "every
+    client", but a picker cannot carry "" as a choice. */
+const ALL_CLIENTS = "__all_clients";
 
 const STATUS_TONE: Record<string, Tone> = {
   active: "green",
@@ -564,12 +569,21 @@ export function RateCards() {
    * dropdown, which says so itself when the list is empty.
    */
   const [services, setServices] = useState<Service[]>([]);
+  /** Null until the read lands or fails — the client field falls back to the id
+      box while it is null, so a failed read never blocks authoring a card. */
+  const [clientAccounts, setClientAccounts] = useState<{ id: string; name?: string | null }[] | null>(
+    null
+  );
 
   useEffect(() => {
     let live = true;
     listServices().then(({ data }) => {
       if (!live || !data) return;
       setServices(data.services.filter((s) => s.active !== "false"));
+    });
+    listClientAccounts().then(({ data }) => {
+      if (!live) return;
+      setClientAccounts(data?.accounts ?? null);
     });
     return () => {
       live = false;
@@ -835,15 +849,37 @@ export function RateCards() {
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="rc-client">Client account</Label>
-            <Input
-              id="rc-client"
-              className="font-mono"
-              value={draft.clientAccountId}
-              onChange={(e) => set({ clientAccountId: e.target.value })}
-              placeholder="Leave blank for every client"
-            />
+            {/* A LOOKUP, not the raw uuid box this was. Nobody knows an account
+                by its id, so the field could only be filled by pasting one from
+                somewhere else — and a mistyped character produced a card scoped
+                to a client that does not exist, which resolves for nobody and
+                explains itself to no one. Optional, as it always was: blank
+                means the card applies to every client. */}
+            {clientAccounts ? (
+              <Combobox
+                id="rc-client"
+                options={[
+                  { id: ALL_CLIENTS, label: "Every client" },
+                  ...clientAccounts.map((a) => ({ id: a.id, label: a.name ?? "Unnamed account" })),
+                ]}
+                value={draft.clientAccountId || ALL_CLIENTS}
+                onChange={(id) => set({ clientAccountId: id === ALL_CLIENTS ? "" : id })}
+                placeholder="Every client"
+                searchPlaceholder="Search clients…"
+              />
+            ) : (
+              // The catalogue has not arrived, or the read failed. The id box is
+              // the honest fallback rather than an empty picker.
+              <Input
+                id="rc-client"
+                className="font-mono"
+                value={draft.clientAccountId}
+                onChange={(e) => set({ clientAccountId: e.target.value })}
+                placeholder="Leave blank for every client"
+              />
+            )}
             <span className="text-muted-foreground text-xs">
-              The account id this card is negotiated for. A client card beats a regional one.
+              The client this card is negotiated for. A client card beats a regional one.
             </span>
           </div>
 
