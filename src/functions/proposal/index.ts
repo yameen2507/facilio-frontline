@@ -60,6 +60,7 @@ import {
   saveTemplate,
   sendProposal,
   submitForApproval,
+  setRateCard,
   updateProposal,
   withdrawProposal,
   CARD_STATUSES,
@@ -167,6 +168,29 @@ server.addHandler({
     handle(() => {
       const p = parsePayload(args);
       return generateLines(str(p, "proposalId"), str(p, "actorEmail"));
+    }),
+});
+
+server.addHandler({
+  name: "set-rate-card",
+  description:
+    "Choose the rate card by hand, overriding the resolved one. The reason is required and is stored as the proposal's resolved-reason, so the price stays auditable. Line prices are NOT recomputed — the estimator re-prices what they mean to.",
+  parameters: {
+    ...ENV,
+    proposalId: PROPOSAL_ID,
+    rateCardId: S("The card to price against — must be active"),
+    reason: S("Why this card, in the estimator's words — required"),
+    actorEmail: ACTOR,
+  },
+  execute: async (args) =>
+    handle(() => {
+      const p = parsePayload(args);
+      return setRateCard({
+        proposalId: str(p, "proposalId"),
+        rateCardId: str(p, "rateCardId"),
+        reason: str(p, "reason"),
+        actor: str(p, "actorEmail"),
+      });
     }),
 });
 

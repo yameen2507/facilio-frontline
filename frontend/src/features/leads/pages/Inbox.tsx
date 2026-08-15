@@ -32,7 +32,7 @@ import {
 } from "../../../ui/DataTable";
 import { CompanyLogo } from "../../../ui/CompanyLogo";
 import { Empty, ErrorState } from "../../../ui/States";
-import { Tabs } from "../../../ui/Tabs";
+import { TAB_COUNT, TAB_PILL, Tabs } from "../../../ui/Tabs";
 import { listLeads } from "../api/leads-util";
 import { ScoreCell, StatusChip } from "../components/LeadChips";
 import { NewLeadDialog } from "../components/NewLeadDialog";
@@ -178,11 +178,12 @@ export function Inbox() {
         ) : null
       }
       strip={
-        // D-25: lifecycle is the tab row; ownership and time are toggles that
-        // COMBINE with it — "open, nobody's picked up, running late" is one
-        // click of each, where the old strip made them rival tabs. X-04: the
-        // tab says Converted because that is the status its rows show.
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        // D-25: lifecycle is the tab row; ownership is a toggle that COMBINES
+        // with it — "open, and nobody's picked them up" is one click of each,
+        // where the old strip made them rival tabs. (A third axis, time, was
+        // retired on 15 Aug; see filters.ts for why.) X-04: the tab says
+        // Converted because that is the status its rows show.
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <Tabs
             items={[
               { id: "open", label: "Open", count: counts.open },
@@ -193,20 +194,38 @@ export function Inbox() {
             active={tab}
             onChange={(t) => setFilter({ tab: t })}
           />
-          <div className="flex items-center gap-1.5 pb-2">
-            {/* D-26: named after the question a person asks, not the system word. */}
+          {/* The rule and the toggle travel as one group so that IF this row
+              ever wraps, the divider goes with the thing it divides rather than
+              trailing the tabs on the line above. (Near-unreachable in practice
+              — the tab list scrolls sideways instead of forcing a wrap — which
+              is why grouping is cheaper than reasoning about it again later.) */}
+          <div className="flex items-center gap-3">
+            {/* Ownership filters ACROSS the lifecycle row rather than within it
+                (D-25). The toggle wears the tab pill so the two sit flush, which
+                is exactly why this rule has to be here: without it, an active
+                toggle beside an active tab reads as two selected tabs. */}
+            <span aria-hidden="true" className="bg-border h-4 w-px shrink-0" />
+            {/* D-26: named after the question a person asks, not the system word.
+                `data-state` is the styling hook the pill shares with a real tab;
+                `aria-pressed` is what says this is a toggle, not a tab. */}
             <button
               type="button"
               aria-pressed={unclaimed}
+              data-state={unclaimed ? "active" : "inactive"}
               onClick={() => setFilter({ unclaimed: !unclaimed })}
               className={cn(
-                "rounded-md border px-2.5 py-1 text-xs whitespace-nowrap transition-colors",
-                unclaimed
-                  ? "border-primary bg-muted font-medium"
-                  : "text-muted-foreground hover:text-foreground"
+                TAB_PILL,
+                // The one deviation from a tab: a primary-toned hairline where a
+                // tab draws a neutral one, so "a filter is on" doesn't look like
+                // a second lit tab. Same inset trick, so it costs no box either.
+                "data-[state=active]:shadow-[inset_0_0_0_1px_var(--primary)]!"
               )}
             >
-              {`Nobody's picked up · ${toggleCounts.unclaimed}`}
+              {"Nobody's picked up"}
+              {/* The count is data, so it takes the same muted tabular treatment
+                  the tabs give theirs. It used to be welded to the label after a
+                  "·", which made the number read as part of the sentence. */}
+              <span className={TAB_COUNT}>{toggleCounts.unclaimed}</span>
             </button>
           </div>
         </div>

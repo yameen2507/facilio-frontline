@@ -68,6 +68,7 @@ import { DiffPane } from "../components/DiffPane";
 import { LinesPane } from "../components/LinesPane";
 import { NegotiationThread } from "../components/NegotiationThread";
 import { ExpiryChip, ProposalStatusChip } from "../components/ProposalChips";
+import { ChangeRateCardDialog } from "../components/ChangeRateCardDialog";
 import { RateCardCard } from "../components/RateCardCard";
 import { TermsCard } from "../components/TermsCard";
 import {
@@ -111,6 +112,7 @@ export function ProposalDetail() {
 
   const [tab, setTab] = useState<TabId>("pricing");
   const [proposal, setProposal] = useState<Proposal | null>(null);
+  const [changingCard, setChangingCard] = useState(false);
   const [reference, setReference] = useState<ProposalReference | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -289,6 +291,15 @@ export function ProposalDetail() {
                   rateCard={proposal.rateCard}
                   resolvedReason={proposal.rateCardResolvedReason}
                   currency={proposal.currency}
+                  // Offered only while the proposal can still be edited. Past
+                  // `sent`, the card is part of what the client was given, and
+                  // changing it would rewrite the basis of a price they have
+                  // already seen.
+                  onChange={
+                    proposal.status === "draft" || proposal.status === "pending_approval"
+                      ? () => setChangingCard(true)
+                      : undefined
+                  }
                 />
                 <ApprovalPanel approval={proposal.approval} />
                 <LinesPane
@@ -438,6 +449,19 @@ export function ProposalDetail() {
               toast(`Revision v${data.proposal.revisionNo ?? "next"} created`);
               navigate(`/proposals/${data.proposal.id}`);
               return null;
+            }}
+          />
+          {/* Stays mounted with the rest of the dialogs so the exit animation
+              plays; it renders nothing until opened. */}
+          <ChangeRateCardDialog
+            open={changingCard}
+            onOpenChange={setChangingCard}
+            proposalId={proposal.id}
+            currentCardId={proposal.rateCard?.id}
+            actor={actor}
+            onSaved={(next) => {
+              setProposal(next as Proposal);
+              toast("Rate card changed");
             }}
           />
         </>

@@ -126,6 +126,35 @@ export const updateProposal = (
   fields: Record<string, unknown>
 ) => call<ProposalDetailResponse>("update", { ...payload({ proposalId, actorEmail, ...fields }) });
 
+/** The cards an estimator may pick from. Every card, so a draft or expired one
+    can be SEEN and explained rather than silently absent — the handler is what
+    refuses anything but an active card. */
+export type SelectableCard = {
+  id: string;
+  name: string | null;
+  status: string | null;
+  currency: string | null;
+  region: string | null;
+};
+
+export const listSelectableCards = () =>
+  call<{ cards: SelectableCard[] }>("card-list", {});
+
+/**
+ * `proposal.set-rate-card` — override the resolved card.
+ *
+ * The reason is not optional and not decoration: it becomes the proposal's
+ * resolved-reason, which is the sentence the pricing surface prints. Resolution
+ * explains itself; a manual choice has to as well, or the price becomes the one
+ * number on the document nobody can account for.
+ */
+export const setRateCard = (
+  proposalId: string,
+  rateCardId: string,
+  reason: string,
+  actorEmail: string
+) => call<ProposalDetailResponse>("set-rate-card", { proposalId, rateCardId, reason, actorEmail });
+
 // ── Lines ────────────────────────────────────────────────────────────────────
 
 /** What `line-generate` could not price. Never dropped — an unpriced item the

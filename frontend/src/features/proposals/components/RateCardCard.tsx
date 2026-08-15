@@ -15,6 +15,7 @@
  */
 
 import { CreditCard, TriangleAlert } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Card } from "../../../ui/Card";
 import { Facts } from "../../../ui/Facts";
 import { Chip } from "../../../ui/Chip";
@@ -25,9 +26,13 @@ export function RateCardCard({
   rateCard,
   resolvedReason,
   currency,
+  onChange,
 }: {
   rateCard: RateCard | null;
   resolvedReason: string | null | undefined;
+  /** Opens the picker. Absent once the proposal is past editing, where the card
+      is part of what was sent and changing it would rewrite history. */
+  onChange?: () => void;
   /** The proposal's own currency — stamped at creation from the card, and the
       one both must agree on. */
   currency: string | null | undefined;
@@ -46,6 +51,13 @@ export function RateCardCard({
               {resolvedReason ??
                 "Nothing matched this deal's region and client inside an effective window, so there is no card price to generate from. Every line has to be priced by hand, and each one will reach an approver."}
             </p>
+            {/* The case a picker is most needed in: resolution found nothing, and
+                before this there was no way to say "use that one". */}
+            {onChange ? (
+              <Button variant="outline" size="sm" className="mt-3" onClick={onChange}>
+                Choose a card
+              </Button>
+            ) : null}
           </div>
         </div>
       </Card>
@@ -65,6 +77,13 @@ export function RateCardCard({
         <Chip tone="neutral" small>
           {currency ?? rateCard.currency ?? "—"}
         </Chip>
+        {/* Quiet on purpose: resolution is right nearly always, and a prominent
+            Change invites second-guessing a rule that explains itself. */}
+        {onChange ? (
+          <Button variant="ghost" size="sm" onClick={onChange}>
+            Change
+          </Button>
+        ) : null}
       </div>
 
       {/* The resolution, in the server's words. This is the line spec §3 asks

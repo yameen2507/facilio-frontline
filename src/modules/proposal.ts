@@ -1167,6 +1167,112 @@ export interface UpdateProposalInput {
 }
 
 /** Status is deliberately absent — status changes are their own operation. */
+/**
+ * Choose the rate card by hand, overriding the one resolution picked.
+ *
+ * Resolution stays the default and stays explained — six rules, and the reason
+ * is printed on the proposal. What it could not do was be WRONG in a way anyone
+ * could correct: a card resolved from a stale region, or none resolved at all,
+ * left the estimator with a price list they could not change.
+ *
+ * The audit survives because the override is recorded IN THE SAME SENTENCE the
+ * resolved reason occupies. A stated human choice is more auditable than an
+ * inferred one; an unexplained one is less. So a reason is required, and the
+ * reason names the person.
+ *
+ * Line prices are NOT recomputed, and that is deliberate rather than lazy: a
+ * line's `card_price` is what the estimator entered, and `deviation_pct` is
+ * computed on the line from its own two numbers. Silently repricing lines to a
+ * new card would overwrite hand-set prices under the guise of a card change.
+ * The estimator re-prices what they want re-priced, line by line, seeing each.
+ *
+ * Currency is the one thing that cannot be waved through: a card quoting USD
+ * against lines priced in AED produces a total that means nothing. Switching to
+ * a differently-denominated card is refused while any line exists.
+ */
+export function setRateCard(input: {
+  proposalId: string;
+  rateCardId: string;
+  reason: string;
+  actor: string;
+}): { proposal: Row } {
+  assertDraft(input.proposalId);
+
+  const reason = input.reason.trim();
+  if (!reason) {
+    throw new Error("say why this card was chosen — the reason is what keeps the price auditable");
+  }
+
+  const card = one<{
+    id: string;
+    name: string | null;
+    status: string | null;
+    currency: string | null;
+    conditionScaleDirection: string | null;
+  }>(
+    `select id, name, status, currency, condition_scale_direction
+       from fl_rate_card where id = $1 and is_active = 'true' limit 1`,
+    [input.rateCardId]
+  );
+  if (!card) throw new Error(`rate card ${input.rateCardId} not found`);
+  if (card.status !== "active") {
+    throw new Error(
+      `"${card.name ?? card.id}" is ${card.status ?? "not active"} — only an active card can price a proposal`
+    );
+  }
+
+  const proposal = one<{ currency: string | null }>(
+    `select currency from fl_proposal where id = $1 limit 1`,
+    [input.proposalId]
+  );
+  const lineCount = one<{ n: number }>(
+    `select count(*)::int as n from fl_proposal_line
+      where proposal_id = $1 and is_active = 'true'`,
+    [input.proposalId]
+  );
+
+  if (
+    lineCount?.n &&
+    card.currency &&
+    proposal?.currency &&
+    card.currency !== proposal.currency
+  ) {
+    throw new Error(
+      `this proposal is priced in ${proposal.currency} and that card quotes ${card.currency} — clear the lines first, or pick a ${proposal.currency} card`
+    );
+  }
+
+  const now = nowIso();
+  mutate(
+    `update fl_proposal
+        set rate_card_id = $2, rate_card_resolved_reason = $3,
+            currency = coalesce($4, currency),
+            condition_scale_direction = coalesce($5, condition_scale_direction),
+            updated_at = $6, updated_by = $7
+      where id = $1`,
+    [
+      input.proposalId,
+      card.id,
+      `chosen by ${input.actor}: ${reason}`,
+      lineCount?.n ? null : card.currency,
+      card.conditionScaleDirection,
+      now,
+      input.actor,
+    ]
+  );
+
+  appendEvent({
+    entityType: "proposal",
+    entityId: input.proposalId,
+    kind: "rate_card.chosen",
+    actor: input.actor,
+    body: `${card.name ?? card.id} — ${reason}`,
+    meta: { rateCardId: card.id, reason },
+  });
+
+  return getProposal(input.proposalId);
+}
+
 export function updateProposal(input: UpdateProposalInput): { proposal: Row } {
   assertDraft(input.proposalId);
 

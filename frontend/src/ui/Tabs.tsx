@@ -43,6 +43,36 @@ const TRIGGER =
   // is what made the strip drag vertically and clip its own pills.
   "after:hidden";
 
+/**
+ * What shadcn's TabsTrigger contributes BEFORE `TRIGGER` restyles it — box,
+ * transition and focus ring. A real trigger gets this for free from
+ * `@/components/ui/tabs`; a plain `<button>` that has to sit in the same row
+ * does not, and hand-copying `h-7 px-2.5 text-[13px]` lands close but never
+ * flush, because the base contributes to the box too.
+ *
+ * Only the rules that survive outside a TabsList are here. The rest of the base
+ * is scoped to `group/tabs-list` or `group/tabs`, so on a lone button it simply
+ * doesn't apply.
+ */
+const BOX =
+  "inline-flex items-center justify-center rounded-md whitespace-nowrap transition-all " +
+  "focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1 focus-visible:outline-ring";
+
+/**
+ * A tab pill for something that is NOT a tab — the leads strip's ownership
+ * toggle, which filters across the tab row rather than within it. Drive it with
+ * `data-state="active" | "inactive"`, the same attribute Radix sets, so every
+ * state rule in `TRIGGER` applies unchanged and a retune here reaches both.
+ *
+ * Anything wearing this must ALSO be told apart from a real tab — a lit pill
+ * beside a lit tab otherwise reads as two selected tabs. See the leads inbox.
+ */
+export const TAB_PILL = `${BOX} ${TRIGGER}`;
+
+/** The count beside a label. Reads its pill's state through `TRIGGER`'s `group`. */
+export const TAB_COUNT =
+  "text-muted-foreground group-data-[state=active]:text-foreground/60 text-[11px] font-normal tabular-nums";
+
 export function Tabs<Id extends string>({
   items,
   active,
@@ -79,9 +109,7 @@ export function Tabs<Id extends string>({
                 filter tab ("Completed 0"), but a tab with no count concept —
                 Overview, Activity while loading — must not invent one. */}
             {typeof t.count === "number" ? (
-              <span className="text-muted-foreground group-data-[state=active]:text-foreground/60 text-[11px] font-normal tabular-nums">
-                {t.count}
-              </span>
+              <span className={TAB_COUNT}>{t.count}</span>
             ) : null}
           </TabsTrigger>
         ))}

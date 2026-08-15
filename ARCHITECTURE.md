@@ -2,18 +2,38 @@
 
 > Facilio Vibe app owning everything **before** the contract or work order.
 > Built by **Sudharsan** and **Mithun**. This file is the contract — if code and this file disagree, fix one of them deliberately.
+>
+> **Last reconciled with the code: 15 Aug 2026.**
+
+**Three documents, three jobs. Do not merge them.**
+
+| File | Answers |
+|---|---|
+| **`ARCHITECTURE.md`** (this) | What the app *is meant to be* — boundaries, invariants, platform limits, seams |
+| **`WHAT-WE-BUILT.md`** | What exists on disk and what has been proven to run |
+| **`API.md`** | The per-handler request/response contract |
+
+So this file names functions and handler *groups* with the rule attached to each; it does not list every handler's fields. Adding a third inventory here is how all three go stale.
 
 ---
 
 ## 1. Scope
 
-**In scope now: the Lead module only.**
+**In scope now: the whole pre-contract funnel, backend and console.**
 
 ```
 capture → AI analysis → dedup → queue → qualify → convert
-                                                     │
-                          Account + Contact + Deal ──┘ → Sales
+                                          │
+                       Account + Contact + Deal
+                                          │
+                    survey → walk → frozen revision
+                                          │
+                    proposal → approve → send → accepted
+                                          │
+                        deal Won → Facilio FSM client + contact
 ```
+
+The lead lane, the survey lane and the proposal lane are all built and walked end to end (`docs/e2e-findings-2026-08-15.md`). Alongside them sit three supporting modules the funnel needs: the **prospect portfolio** (the site/space tree a survey discovers, promoted to Facilio on Won), the **service catalogue + rate cards** (§2), and **access** (users, roles, the permission matrix).
 
 ### Channels — three, and only three
 
@@ -29,11 +49,13 @@ capture → AI analysis → dedup → queue → qualify → convert
 
 Not channels: **email-to-lead** (feasible — `gmail.list-messages` exists — but it adds an OAuth dependency and production-only polling) and **inbound webhook/API** (impossible; nothing can POST into a Vibe app).
 
-**Backend only. No UI.** The deliverable is a working API: every handler in §7 returning real data via `facilio vibe function run`. No pages, no components, no widget markup. The frontend is a separate later stage against the frozen contract.
+**Backend AND console.** The original build was backend-only, and that stage is finished: nine platform functions answer real calls. On top of them sits a React console — nine feature modules on shadcn + Tailwind, mounted on `HashRouter` because the static host has no rewrite rules (§12). The console is not a mock; the modules listed in §7 call the live handlers. Where a surface ships ahead of its handler it is marked `[SEAM]` in the feature's api-util and renders a real empty state — never fake data.
 
-**Designed but NOT built yet:** survey, quote, approval, customer signing portal, work-order handoff, tender ingestion, email-to-lead, analytics, automation engine — **and the entire UI**.
+**Designed but NOT built yet:** approval routing beyond auto-approve, the customer signing portal, work-order handoff, tender ingestion, email-to-lead, analytics, the automation engine — and the promotion tail below.
 
-Those are not future guesswork — §9 defines the exact seam each one plugs into, so none of them requires reworking what we build now. **Do not build them. Do not stub them. Just do not block them.**
+**The promotion tail is the live gap, not a future one.** Winning a deal today enqueues the Facilio client and its contact, and nothing else. `prospect.convert-to-facilio` exists only as a preflight, so surveyed sites and spaces never reach FSM; and because the contract task defers until a site is promoted, `create_client_contract` and `create_contract_service_line` are deployed and dispatchable but **nothing enqueues them**. Order is fixed: **convert run → contract → service lines.** See §10.
+
+The rest are not future guesswork — §9 defines the exact seam each one plugs into, so none of them requires reworking what is built now. **Do not build them. Do not stub them. Just do not block them.**
 
 ---
 
@@ -45,12 +67,23 @@ The Vibe app is the system of engagement. Facilio FSM is the system of record fo
 |---|---|
 | Lead, analysis, dedup, queue, SLA, qualification | **Vibe app** |
 | Deal (the opportunity) | **Vibe app** |
-| Service areas + service lines | **Vibe app** |
+| Survey, its visits, answers, observations and frozen revisions | **Vibe app** |
+| Proposal, its lines, templates and rate cards | **Vibe app** |
+| **Service catalogue** — services, their pricing basis and unit | **Vibe app** *(reversed 15 Aug 2026 — see below)* |
+| Service areas + coverage | **Vibe app** |
+| Prospect portfolio — the site/space tree before it is promoted | **Vibe app** |
+| Users, roles, permission matrix | **Vibe app** |
 | Account as a client record | **Facilio FSM** — `create-client` |
 | Contact | **Facilio FSM** — `create-client-contact` |
-| Sites / buildings / floors / spaces | Facilio FSM *(later)* |
+| Sites / buildings / floors / spaces | **Facilio FSM on Won** — promoted from the prospect tree *(run not built — §10)* |
+| Client contract + its service lines | **Facilio FSM on Won** — dispatch built, nothing enqueues it yet *(§10)* |
 | Assets, work orders | Facilio FSM *(later)* |
-| Contract | Facilio FSM — **manual, no API exists** |
+
+### The service catalogue is ours now. This overturns a standing ruling.
+
+**Until 15 Aug 2026 a "service line" was a label for a Facilio Services record id, and that id was what every rate-card row and proposal line referenced.** As of 15 Aug the app owns its own service definitions — a service is this app's record of something it sells, with its own code, pricing basis and unit (`src/domain/service-catalogue.ts`, `fl_service_line`, edited under Settings → Services). **The code is the key**: `fl_rate_card_row.service_code` and `fl_proposal_line.service_code` name a service by code, and this database has no foreign keys to notice when one stops matching, so codes are normalised where they are minted.
+
+**This reverses C23**, which had ruled the Facilio Services id the source of truth. The reversal is recorded here because this file is the contract — but note the consequence the E2E run found: with no mapping from a local service code to a Facilio Services id, `create_contract_service_line` has no `facilioServiceId` to send. **The mapping C23 always wanted is now a prerequisite for contract lines**, not an alternative to the local catalogue.
 
 ---
 
@@ -120,6 +153,8 @@ StudioDatabase · VibeEvents · VibeFiles · default
 
 **Public access:** an auth-gated app 302s to `id.facilio.com`, which sends `X-Frame-Options: SAMEORIGIN` — so **a widget cannot be iframed until the app is set to public**, a platform UI setting, not a CLI flag. Platform cookies also carry no `SameSite`, which likely blocks them in a cross-site iframe. Fallback: open the intake page in a **tab** (first-party cookies, no framing) — the channel works either way.
 
+**The embed exists and the host side is settled; the public-access grant is not.** `#/embed` is answered above the router so the widget renders without the sign-in gate (`frontend/src/app/App.tsx`), and a separate demo app frames it. A host page **cannot** call the SDK cross-origin — CORS closes that path — so an iframe is the only embedding shape, which is why the widget is a page rather than a script. Whether that frame renders for an anonymous visitor still depends on the app being set public, and **that grant has not been confirmed in this repo's records** — treat it as ungranted until someone checks the platform UI.
+
 ---
 
 ## 4. Layers
@@ -148,31 +183,43 @@ Facilio is **never** written to inline on the request path. With serialised ~10s
 
 ```
 frontline/
-├── ARCHITECTURE.md          ← this file
+├── ARCHITECTURE.md          ← this file (the rules)
+├── WHAT-WE-BUILT.md         the inventory · API.md  the handler contract
 ├── vibe.json
+├── db/tables/               ONE CSV PER TABLE — this is the schema (§3a.1)
+├── docs/                    connections.md · enums.md · e2e findings
+├── agent-schemas/           each agent's output schema + instructions, as pushed
 ├── scripts/
 │   ├── bundle.mjs           esbuild src/functions/*/index.ts → build/functions/<name>.js
-│   └── push.mjs             facilio vibe function create-or-update + build
-├── src/
-│   ├── domain/              PURE — no platform imports
-│   │   ├── lead-state.ts    status transitions
-│   │   ├── scoring.ts       score banding, SLA due-date maths
-│   │   └── money.ts         integer minor units
-│   ├── shared/
-│   │   ├── db.ts            StudioDatabase, numeric coercion, case conversion
-│   │   ├── envelope.ts      payload parse + validation + { ok, data, error }
-│   │   ├── ids.ts           ref numbers (single-statement sequence bump)
-│   │   ├── events.ts        fl_event append + VibeEvents publish
-│   │   ├── outbox.ts        enqueue / claim / settle
-│   │   ├── facilio.ts       connection-action client
-│   │   └── errors.ts
-│   ├── modules/
-│   │   ├── lead.ts  ├── analysis.ts  ├── dedup.ts
-│   │   ├── queue.ts ├── deal.ts      └── settings.ts
-│   └── functions/
-│       ├── migrate/  └── lead/
-└── tests/                   vitest over src/domain only
+│   ├── push.mjs             facilio vibe function create-or-update + build
+│   ├── push-agents.mjs      agent create/update from agent-schemas/
+│   ├── db-import.mjs        header row + one seed row per table
+│   ├── build-frontend.mjs   → dist/
+│   └── walk.mjs             the end-to-end lead-lane proof
+├── src/                     ← the backend
+│   ├── domain/              PURE — no platform imports (21 files)
+│   │   ├── lead-state.ts · deal-state.ts · survey-state.ts · visit-state.ts
+│   │   ├── proposal-state.ts · prospect-state.ts · observation-state.ts
+│   │   ├── scoring.ts · sla.ts · pricing.ts · proposal-pricing.ts
+│   │   ├── service-catalogue.ts · form-template.ts · survey-completeness.ts
+│   │   └── reconcile.ts · ancestry.ts · normalize.ts · agent-reply.ts …
+│   ├── shared/              db · envelope · ids · events · outbox · facilio · errors
+│   ├── modules/             lead · analysis · convert · deal · survey · snapshot
+│   │                        proposal · prospect · form · service · settings
+│   │                        assessment · agent-brief · intake · access · sync · walk
+│   └── functions/           one directory per platform function — see §7
+├── frontend/src/            ← the console
+│   ├── app/                 App.tsx (routes) · auth · access · counts · shell
+│   ├── layout/              sidebar, nav config, mobile tab bar
+│   ├── components/ui/       shadcn primitives
+│   ├── ui/                  the app kit — thin adapters over the primitives
+│   ├── lib/                 vibe.ts · request.ts (requestFrom(fn, handler, args))
+│   └── features/            one folder per module: api/ components/ pages/ types/
+├── demo-site/               a host page that iframes #/embed
+└── tests/                   vitest over src/domain (21 files), plus units under frontend/
 ```
+
+Each feature folder owns its own `api/*-util.ts`, and that util names the function it calls — `requestFrom("survey", …)`, `requestFrom("form", …)`. `FUNCTION = "lead"` in `vibe.ts` is only the default. **A page never calls a handler directly**; the util is the one place a seam can be declared.
 
 ---
 
